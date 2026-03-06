@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This document defines the public contract of the `Datastore` class.
 It is the only user-facing entry point in the current baseline.
@@ -141,15 +141,30 @@ export type DatastoreErrorListener = (
 
 Notes:
 
-- M1 implementation supports `location: "memory"` only.
+- Current implementation baseline supports `location: "memory"` and incremental `location: "file"` durability slice.
 - `autoCommit` is allowed only when `location !== "memory"` (durable backend configuration).
 - Setting `autoCommit` for `location: "memory"` MUST throw `ConfigurationError`.
 - `capacity` applies to all backends and follows `docs/specs/09_CapacityAndRetention.md`.
 - `autoCommit.maxPendingBytes` is valid only for durable backends and follows `docs/specs/10_FlushAndDurability.md`.
-- Passing `location: "file"` before M2 MUST throw `UnsupportedBackendError`.
-- Passing `location: "browser"` before M3 MUST throw `UnsupportedBackendError`.
+- `location: "browser"` remains out of current runtime slice and MUST throw `UnsupportedBackendError`.
 - `filePath` is a backward-compatible shorthand for `target: { kind: "path", filePath }`.
 - `filePath` and `target` MUST NOT be specified together.
+- Delivery artifact/profile obligations are defined separately in `docs/specs/13_DistributionDeliveryTracks.md`.
+
+### 2.1 Runtime Slice Status (Normative, 2026-03-07)
+
+- Active implementation kickoff targets:
+  - `Phase 2: File Durability Slice`
+  - `Phase 3: Query and Capacity Hardening`
+- Baseline runtime surface MUST include:
+  `insert`, `select`, `commit`, `on("error", ...)`, `off("error", ...)`, `close`,
+  `registerQueryEngine`, `unregisterQueryEngine`, `query`, `queryNative`.
+- `location: "memory"` MUST remain fully supported.
+- `location: "file"` MUST support at least:
+  - exclusive open lock behavior
+  - commit/reopen durable baseline
+  - sidecar-driven active generation selection and consistency checks
+- `location: "browser"` remains future scope and MUST fail fast with `UnsupportedBackendError`.
 
 ## 3. `Datastore` Class
 
@@ -177,6 +192,7 @@ export class Datastore {
 - payload object max nesting depth is `64` (root depth `0`, +1 per nested object).
 - payload key UTF-8 byte length max is `1024` at every nested object level.
 - payload string UTF-8 byte length max is `65535` at every nested object level.
+- user input record MUST NOT provide `insertionOrder`; if present, `insert` MUST reject with `ValidationError`.
 - datastore MUST assign one immutable internal `insertionOrder` key on first insert and
   persist it as `INSERTION_ORDER_U64` per `docs/specs/02_BinaryEncoding.md`.
 - For paged storage, implementation MUST check encoded record byte length against
@@ -228,6 +244,7 @@ export class Datastore {
 
 - Auto-commit applies only to non-memory backends.
 - For durable backends, default auto-commit behavior is enabled with `frequency: "immediate"`.
+- For durable backends, omitted `autoCommit` and `autoCommit: {}` are both valid and MUST use effective `frequency: "immediate"`.
 - If `autoCommit` is specified without `frequency`, effective frequency MUST be `"immediate"`.
 - `frequency` accepts:
   - `"immediate"` (commit after each successful write operation)
@@ -253,6 +270,7 @@ export class Datastore {
 
 - Datastore MUST expose an event channel for asynchronous failures that are not tied to a caller-visible Promise.
 - Initial supported event is `"error"` only.
+- Calling `on(...)` or `off(...)` with an unsupported event name MUST throw `ValidationError`.
 - `on("error", listener)` MUST register listener and return an unsubscribe function equivalent to `off("error", listener)`.
 - `off("error", listener)` MUST remove only the matching listener and MUST be idempotent.
 - One background auto-commit failure MUST emit one `"error"` event.

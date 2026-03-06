@@ -1,7 +1,7 @@
 # 使い方: 段階的コラボレーションワークフロー
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 このガイドは、機能開発を共通のフェーズゲートで進めるための実践手順を説明します。
 基準仕様は `docs/specs/12_DevelopmentWorkflow.md` です。
@@ -63,3 +63,15 @@ Last Updated: 2026-03-06
 - 実装スタイルより spec とテストの整合性
 - 境界条件での決定性（時間範囲、容量、耐久性）
 - エラー型と失敗条件の明示性
+
+## 5. TypeScript コード構成ポリシー
+
+TypeScript 実装では次の実務ポリシーを適用します。
+
+- ドメイン境界の `index.ts` は薄く、副作用のない barrel として維持する
+- 複数責務が混在した時点、または 300 行超（空行・コメント除く）で分割する
+- 220 行超（空行・コメント除く）の時点で機能追加前の先行分割を推奨する
+- barrel は明示 re-export（`export { X } from './x'`）を使い、runtime 値での `export *` は避ける
+- ドメイン間 import は公開 barrel 経由、同一ドメイン内は直接 import を基本とする
+- validation / normalization は可能な限り pure function として実装する
+- 同一領域で機能追加する前に、まず振る舞い不変の分割リファクタを分離する

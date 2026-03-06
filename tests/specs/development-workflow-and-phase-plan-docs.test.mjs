@@ -15,6 +15,11 @@ test('development workflow spec defines mandatory phase gates and task disciplin
   assert.match(workflowSpec, /Each phase MUST define entry criteria, execution tasks, and exit criteria/i);
   assert.match(workflowSpec, /A phase MUST NOT start implementation tasks before its failing tests are committed/i);
   assert.match(workflowSpec, /Any behavior change MUST update user docs in both English and Japanese/i);
+  assert.match(workflowSpec, /TypeScript Source Organization Policy/i);
+  assert.match(
+    workflowSpec,
+    /`src\/core\/index\.ts`[\s\S]*MUST stay thin barrel entries with exports only/i,
+  );
 });
 
 test('usage docs provide bilingual workflow guide with checklist and done criteria', async () => {
@@ -24,10 +29,14 @@ test('usage docs provide bilingual workflow guide with checklist and done criter
   assert.match(usageEn, /Phased Collaboration Workflow/i);
   assert.match(usageEn, /Session Checklist/i);
   assert.match(usageEn, /Definition of Done \(PR Ready\)/i);
+  assert.match(usageEn, /TypeScript Code Organization Policy/i);
+  assert.match(usageEn, /thin, side-effect-free barrels/i);
 
   assert.match(usageJa, /段階的コラボレーションワークフロー/);
   assert.match(usageJa, /セッションチェックリスト/);
   assert.match(usageJa, /完了の定義（PR Ready）/);
+  assert.match(usageJa, /TypeScript コード構成ポリシー/);
+  assert.match(usageJa, /副作用のない barrel/);
 });
 
 test('usage template docs provide spec and ADR templates in English and Japanese', async () => {
@@ -51,8 +60,11 @@ test('architecture roadmap and indexes include phased development plan artifacts
   const usageIndex = await readDoc('docs/usage/INDEX.md');
   const adrIndex = await readDoc('docs/adr/INDEX.md');
   const adr31 = await readDoc('docs/adr/31_DevelopmentWorkflow_and_PhasedExecutionPlaybook.md');
+  const adr34 = await readDoc(
+    'docs/adr/34_CoreModuleSplit_and_TypeScriptSourceOrganizationPolicy.md',
+  );
 
-  assert.match(roadmap, /Current Development Phases and Task Breakdown/i);
+  assert.match(roadmap, /Development Phase Model and Governance/i);
   assert.match(roadmap, /Phase 0: Foundation Sync/i);
   assert.match(roadmap, /Phase 1: Memory Vertical Slice/i);
   assert.match(roadmap, /Phase 2: File Durability Slice/i);
@@ -65,6 +77,11 @@ test('architecture roadmap and indexes include phased development plan artifacts
   assert.match(usageIndex, /04_DevelopmentTemplates\.md/);
 
   assert.match(adrIndex, /31_DevelopmentWorkflow_and_PhasedExecutionPlaybook\.md/);
+  assert.match(
+    adrIndex,
+    /34_CoreModuleSplit_and_TypeScriptSourceOrganizationPolicy\.md/,
+  );
   assert.match(adr31, /Adopt a shared phased execution playbook/i);
   assert.match(adr31, /spec-first and TDD-first/i);
+  assert.match(adr34, /Keep `src\/core\/index\.ts` as a thin barrel export entry/i);
 });

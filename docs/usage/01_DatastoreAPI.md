@@ -5,6 +5,12 @@ Last Updated: 2026-03-06
 
 This guide explains the user-facing API described in `docs/specs/04_DatastoreAPI.md`.
 
+Implementation status note (2026-03-07):
+
+- `location: "memory"` is supported as the baseline backend.
+- `location: "file"` is available in incremental durability-slice rollout.
+- `location: "browser"` remains forward-looking and currently throws `UnsupportedBackendError`.
+
 ## 1. Basic Setup (Memory Backend)
 
 ```typescript
@@ -39,6 +45,7 @@ Validation reminders:
 - leaf values must be `string | number | boolean | null` (arrays are not supported).
 - payload `number` values must be finite (`Number.isFinite`); `NaN`, `Infinity`, and `-Infinity` are rejected.
 - payload `bigint` values are not supported in v0.2.
+- `insertionOrder` is datastore-internal metadata and must not be provided by application input.
 - if exact 64-bit integer precision is required in payload, store the value as a decimal string and parse it in application code.
 
 Additional valid example:
@@ -87,7 +94,7 @@ Timestamp precision note:
 ## 4. Commit and Close
 
 ```typescript
-await db.commit(); // no-op on memory backend in M1
+await db.commit(); // no-op on memory backend
 await db.close();
 ```
 
@@ -136,6 +143,7 @@ Notes:
 - this channel is for asynchronous/background failures without direct Promise rejection
 - explicit foreground calls (`insert`, `commit`) still reject their own Promises on failure
 - `close()` stops background auto-commit scheduling and further auto-commit error events
+- only `"error"` event is supported; unsupported event names throw `ValidationError`
 
 ## 4.1 Capacity and Retention Policy
 
@@ -221,6 +229,19 @@ Single-writer behavior (multi-process safety):
   (a subtype of `StorageEngineError`)
 - Frostpillar does not auto-steal a lock in default open flow
 
+### 5.1 File Backend Troubleshooting (Phase 2 baseline)
+
+- `DatabaseLockedError` on open:
+  - another process currently holds `<resolvedDataFilePath>.lock`
+  - close the active owner process and retry open
+- `PageCorruptionError` on open:
+  - validate that sidecar `activeDataFile` exists and is readable
+  - validate sidecar mirrored metadata (`rootPageId`, `nextPageId`, `freePageHeadId`)
+    matches active generation snapshot
+- interrupted commit leftovers:
+  - `*.tmp` artifacts are not committed state and are cleaned/ignored on next open
+  - committed state is selected by sidecar `activeDataFile` only
+
 ## 6. Browser Storage: Backend Choice and Fallback
 
 `location: "browser"` supports async-native backends first, with a compatibility fallback.
@@ -292,7 +313,7 @@ When `browserStorage: "localStorage"`:
 - `TimestampParseError`
 - `InvalidQueryRangeError`
 - `ConfigurationError`
-- `UnsupportedBackendError` (for durable backends before their milestone)
+- `UnsupportedBackendError` (for backends outside current runtime slice)
 - `ClosedDatastoreError`
 - `StorageEngineError`
 - `BinaryFormatError` (binary decode/encode format violation)

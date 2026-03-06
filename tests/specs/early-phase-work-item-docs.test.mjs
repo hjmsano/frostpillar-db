@@ -8,12 +8,12 @@ const readDoc = async (relativePath) => {
   return await readFile(absolutePath, 'utf8');
 };
 
-test('early-phase work item spec defines v0.1 scope and red-test plan', async () => {
+test('phase work-item plan defines v0.1 scope and red-test plan', async () => {
   const source = await readDoc(
-    'docs/specs/13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice.md',
+    'docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md',
   );
 
-  assert.match(source, /Specification: Early-Phase Work Item \(M1 Memory Vertical Slice\)/i);
+  assert.match(source, /Plan: Phase Work Item \(M1 Memory Vertical Slice\)/i);
   assert.match(source, /version target MUST remain aligned to `v0\.1` short-term scope/i);
   assert.match(source, /MUST NOT implement `v0\.2`-planned APIs in this work item/i);
   assert.match(source, /Acceptance Criteria/i);
@@ -23,8 +23,14 @@ test('early-phase work item spec defines v0.1 scope and red-test plan', async ()
 
 test('active-phase ADR records the phase and scope-lock decision and is indexed', async () => {
   const adr = await readDoc('docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md');
+  const adr37 = await readDoc(
+    'docs/adr/37_Phase2_Phase3_Kickoff_and_IncrementalScope.md',
+  );
+  const adr39 = await readDoc(
+    'docs/adr/39_Dedicated_M2_FileDurability_CompletionPlan.md',
+  );
   const adrIndex = await readDoc('docs/adr/INDEX.md');
-  const specsIndex = await readDoc('docs/specs/INDEX.md');
+  const plansIndex = await readDoc('docs/plans/INDEX.md');
   const roadmap = await readDoc('docs/architecture/development-roadmap.md');
 
   assert.match(adr, /ADR-32: Active Phase M1 and v0\.1 Scope Lock/i);
@@ -33,8 +39,40 @@ test('active-phase ADR records the phase and scope-lock decision and is indexed'
 
   assert.match(adrIndex, /32_ActivePhase_M1_and_v0\.1_ScopeLock\.md/);
   assert.match(
-    specsIndex,
-    /13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice\.md/,
+    plansIndex,
+    /02_PhaseWorkItem_M1_MemoryVerticalSlice\.md/,
   );
-  assert.match(roadmap, /Current Focus \(2026-03-06\)/i);
+  assert.match(
+    plansIndex,
+    /03_PhaseWorkItem_P2P3_FileDurability_and_QueryCapacityKickoff\.md/,
+  );
+  assert.match(
+    adrIndex,
+    /37_Phase2_Phase3_Kickoff_and_IncrementalScope\.md/,
+  );
+  assert.match(
+    adrIndex,
+    /39_Dedicated_M2_FileDurability_CompletionPlan\.md/,
+  );
+  assert.match(adr37, /Start a combined kickoff work item/i);
+  assert.match(adr39, /Introduce a dedicated M2 completion work item/i);
+  assert.match(roadmap, /Development Phase Model and Governance/i);
+  assert.match(roadmap, /Live status, active phase snapshot, and checkbox tracking/i);
+});
+
+test('M2 file-durability work-item plan captures remaining ADR-01 durability obligations', async () => {
+  const m2Plan = await readDoc(
+    'docs/plans/04_PhaseWorkItem_M2_FileDurabilitySlice.md',
+  );
+  const plansIndex = await readDoc('docs/plans/INDEX.md');
+
+  assert.match(m2Plan, /Plan: Phase Work Item \(M2 File Durability Slice\)/i);
+  assert.match(m2Plan, /corrupt-header and unsupported-version/i);
+  assert.match(m2Plan, /lock release.*reopen success/i);
+  assert.match(m2Plan, /default auto-commit behavior.*immediate/i);
+  assert.match(m2Plan, /Failing Tests \(TDD Red\)/i);
+  assert.match(
+    plansIndex,
+    /04_PhaseWorkItem_M2_FileDurabilitySlice\.md/,
+  );
 });

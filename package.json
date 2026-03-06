@@ -7,6 +7,7 @@
   "types": "./dist/core/index.d.ts",
   "scripts": {
     "build": "tsc --build",
+    "build:bundle": "node ./scripts/build-bundles.mjs",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
     "textlint": "textlint \"**/*.md\"",

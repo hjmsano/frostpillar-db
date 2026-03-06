@@ -54,6 +54,7 @@ The ultra-lightweight, purely TypeScript timeseries database for ephemeral data.
 
 Also, create and update documents under ./docs as needed when you update any specs or add new features.
 
+- ./docs/adr/ -> for recording architectural decisions and rationale.
 - ./docs/specs/ -> for detailed specs of each feature.
 - ./docs/usage/ -> for user-facing documentation and examples.
-- ./docs/adr/ -> for recording architectural decisions and rationale.
+- ./docs/plans/ -> for development plans and roadmaps.

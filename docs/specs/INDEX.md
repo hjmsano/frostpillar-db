@@ -16,4 +16,6 @@ This directory contains the detailed technical specifications for each feature a
 | [**10_FlushAndDurability.md**](./10_FlushAndDurability.md)     | Defines flush triggers, auto-commit scheduling, and crash-safe durability protocols.                        |
 | [**11_BTreeIndexInvariants.md**](./11_BTreeIndexInvariants.md) | Defines structural invariants and split/merge rules for the B+ Tree index.                                  |
 | [**12_DevelopmentWorkflow.md**](./12_DevelopmentWorkflow.md)   | Defines mandatory phase-gate collaboration workflow (intent, spec, tests, implementation, verification).   |
-| [**13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice.md**](./13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice.md) | Defines the initial implementation work item for Phase 1 with explicit acceptance criteria and TDD red-test plan. |
+| [**13_DistributionDeliveryTracks.md**](./13_DistributionDeliveryTracks.md) | Defines dual delivery track requirements for NPM module and browser bundle profile distribution. |
+
+For phased/tasked execution plans, see [../plans/INDEX.md](../plans/INDEX.md).
