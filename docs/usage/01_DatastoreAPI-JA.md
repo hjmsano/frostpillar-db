@@ -1,0 +1,331 @@
+# 使い方: Datastore API (v0.2 draft)
+
+Status: Draft  
+Last Updated: 2026-03-06
+
+このドキュメントは `docs/specs/04_DatastoreAPI.md` で定義した公開 API の利用方法を説明します。
+
+## 1. 基本セットアップ (Memory Backend)
+
+```typescript
+import { Datastore } from "frostpillar";
+
+const db = new Datastore({ location: "memory" });
+```
+
+`location: "memory"` では `autoCommit` は利用できません。
+
+## 2. レコード挿入
+
+```typescript
+await db.insert({
+  timestamp: "2025-01-01T00:00:00.000Z",
+  payload: {
+    event: "login",
+    success: true,
+  },
+});
+```
+
+バリデーション注意点:
+
+- `timestamp` は `number | string | Date` を受け付けます。
+- `string` はタイムゾーン付き ISO 8601 日時である必要があります（例: `Z`, `+09:00`）。
+- canonical timestamp は Unix epoch ミリ秒の JavaScript safe integer（`Number.isSafeInteger`）です。
+- `payload` はネストしたオブジェクトをサポートします。
+- 末端の値は `string | number | boolean | null` である必要があります（配列は未対応）。
+
+追加の有効例:
+
+```typescript
+await db.insert({
+  timestamp: new Date("2025-01-01T00:00:00.000Z"),
+  payload: {
+    event: "logout",
+    user: {
+      profile: {
+        country: "JP",
+      },
+    },
+  },
+});
+```
+
+## 3. 時間範囲クエリ
+
+```typescript
+const records = await db.select({
+  start: "2025-01-01T00:00:00.000Z",
+  end: "2025-01-01T00:01:39.999Z",
+});
+```
+
+挙動:
+
+- 範囲は両端を含みます (`start <= timestamp <= end`)
+- `start`/`end` も `insert` と同じ timestamp ルール（`number | string | Date`）です
+- 結果は `timestamp` 昇順で返ります
+- 同一 `timestamp` は挿入順で返ります
+- 挿入順は内部で永続化される `insertionOrder` キー（`Uint64`）で管理されるため、
+  再起動・ページ分割・compaction・rewrite 後も順序は安定します
+- 既存レコードの更新時は、同一 `timestamp` 内での元の順序位置を維持します
+- 将来の upsert でも、既存レコードに対する更新経路では元の順序位置を維持します
+- 返却される `timestamp` は Unix epoch ミリ秒 (`number`) です
+
+Timestamp 精度に関する注意:
+
+- バイナリ保存は signed `Int64` を使いますが、API で扱う `timestamp` は JavaScript `number` の safe integer のままです。
+- 書き込み時は `number -> bigint -> Int64`、読み込み時は `Int64 -> bigint -> number` の境界検証を行います。
+- 保存済み `Int64` が JavaScript safe integer 範囲外の場合、デコードは明示的に失敗します（切り捨て・丸めはしません）。
+
+## 4. Commit と Close
+
+```typescript
+await db.commit(); // M1 の memory backend では no-op
+await db.close();
+```
+
+`close()` 後はすべての操作が `ClosedDatastoreError` で失敗します。
+
+永続系バックエンド（`location !== "memory"`）での自動コミット:
+
+```typescript
+const db = new Datastore({
+  location: "file",
+  filePath: "./tmp/events.fpdb",
+  autoCommit: {
+    frequency: "5s", // "immediate", 5000, "1m", "2h" なども指定可能
+    maxPendingBytes: 2 * 1024 * 1024, // サイズ閾値トリガー (2 MiB)
+  },
+});
+```
+
+- `frequency` 省略時のデフォルトは `"immediate"` です
+- 即時コミット: `"immediate"`（書き込み成功ごとにコミット）
+- 5秒ごと: `5000` または `"5s"`
+- 1分ごと: `"1m"`
+- サイズ閾値コミット: 未コミットの保留バイト数が `maxPendingBytes` に達した時点でコミット
+- 間隔トリガーとサイズ閾値を同時指定した場合は、先に満たした条件でコミット
+
+バックグラウンド自動コミット（`"immediate"` 以外）で発生した失敗は、Datastore の error channel で受け取ります:
+
+```typescript
+import type { DatastoreErrorEvent } from "frostpillar";
+
+const onDatastoreError = (event: DatastoreErrorEvent): void => {
+  // event.source === "autoCommit"
+  // event.error は StorageEngineError
+  // event.occurredAt は epoch milliseconds
+  console.error("Datastore background error:", event);
+};
+
+const unsubscribe = db.on("error", onDatastoreError);
+
+// 不要になったら解除:
+unsubscribe(); // db.off("error", onDatastoreError) と同等
+```
+
+補足:
+
+- このチャネルは Promise 返却元が存在しない非同期/バックグラウンド失敗のためのものです
+- `insert` / `commit` など明示呼び出しの失敗は、これまで通り各 Promise が reject します
+- `close()` はバックグラウンド自動コミットを停止し、以後は auto-commit 由来の error event を発火しません
+
+## 4.1 容量制限と保持ポリシー
+
+`capacity.maxSize` とポリシーで保存量を上限管理できます。
+
+```typescript
+const db = new Datastore({
+  location: "memory",
+  capacity: {
+    maxSize: "256MB",
+    policy: "turnover", // "strict" | "turnover"
+  },
+});
+```
+
+挙動:
+
+- `strict`: 上限超過時は `QuotaExceededError` で失敗（状態変更なし）
+- `turnover`: 最も古いレコードから決定的順序で削除し、新規レコードを挿入
+- `turnover` の退避削除は内部 delete 経路で実装され、v0.2 では公開 delete API は提供されません
+- 単一レコードが `maxSize` を超える場合は `QuotaExceededError` で失敗
+- `policy` 省略時のデフォルトは `"strict"`
+
+## 5. File Backend: パス / ディレクトリ / ファイル名 / プレフィックス
+
+`location: "file"` はファイル配置を 2 通りで指定できます。
+
+パス指定（後方互換の簡易指定）:
+
+```typescript
+const db = new Datastore({
+  location: "file",
+  filePath: "./data/events.fpdb",
+});
+```
+
+同等の明示指定:
+
+```typescript
+const db = new Datastore({
+  location: "file",
+  target: {
+    kind: "path",
+    filePath: "./data/events.fpdb",
+  },
+});
+```
+
+ディレクトリ指定 + 命名オプション:
+
+```typescript
+const db = new Datastore({
+  location: "file",
+  target: {
+    kind: "directory",
+    directory: "./data/frostpillar",
+    filePrefix: "prod_",
+    fileName: "events",
+  },
+});
+```
+
+この例で解決されるファイル:
+
+- メタデータファイル: `./data/frostpillar/prod_events.fpdb.meta.json`
+- 世代データファイル: `./data/frostpillar/prod_events.fpdb.g.<commitId>`
+- 有効世代は sidecar の `activeDataFile` で選択されます
+
+## 6. Browser Storage: バックエンド選択とフォールバック
+
+`location: "browser"` は、まず async-native なバックエンドを優先し、互換性のためのフォールバックを持ちます。
+
+クロスブラウザ向け推奨設定:
+
+```typescript
+const db = new Datastore({
+  location: "browser",
+  browserStorage: "auto", // デフォルト
+});
+```
+
+`"auto"` の解決順:
+
+1. `opfs`
+2. `indexedDB`
+3. `localStorage`
+
+明示指定の例:
+
+```typescript
+const dbIndexed = new Datastore({
+  location: "browser",
+  browserStorage: "indexedDB",
+  indexedDB: {
+    databaseName: "frostpillar",
+    objectStoreName: "pages",
+    version: 1,
+  },
+});
+```
+
+```typescript
+const dbLocal = new Datastore({
+  location: "browser",
+  browserStorage: "localStorage",
+  localStorage: {
+    keyPrefix: "fp",
+    databaseKey: "analytics",
+    maxChunkChars: 32768,
+    maxChunks: 64,
+  },
+});
+```
+
+補足:
+
+- `opfs` と `indexedDB` は async-native で、async-only アーキテクチャと整合します。
+- `localStorage` API は同期APIのため、互換フォールバックとして利用してください。
+- 明示指定したバックエンドが利用不可の場合、Datastore は `UnsupportedBackendError` で失敗します。
+
+`browserStorage: "localStorage"` を使う場合:
+
+- キー形式:
+  - マニフェスト: `fp:analytics:manifest`
+  - チャンク: `fp:analytics:g:<generation>:chunk:<index>`
+- 1つのスナップショットは必要に応じて複数キーへ自動分割されます
+- 必要チャンク数が `maxChunks` を超える場合は `QuotaExceededError` で失敗します
+- ブラウザのクォータ超過も `QuotaExceededError` で通知されます
+- 新しい世代の書き込み失敗時でも、直前にコミット済みの世代は読み出し可能である必要があります
+
+## 7. 主なエラー
+
+- `ValidationError`
+- `TimestampParseError`
+- `InvalidQueryRangeError`
+- `ConfigurationError`
+- `UnsupportedBackendError`（各バックエンドの対応マイルストーン前）
+- `ClosedDatastoreError`
+- `StorageEngineError`
+- `BinaryFormatError`（バイナリのデコード/エンコード形式違反）
+- `PageCorruptionError`（ページ構造の不変条件違反）
+- `IndexCorruptionError`（B+ Tree 不変条件違反）
+- `QuotaExceededError`
+- `DatastoreErrorEvent`（`on("error", ...)` のイベント payload）
+
+## 8. v0.1以降のネイティブレコード操作（予定）
+
+```typescript
+const one = await db.getById("rec_001");
+await db.updateById("rec_001", { success: false });
+await db.deleteById("rec_001");
+```
+
+目的:
+
+- 特定レコードの更新・削除には内部IDが必要
+- 時系列走査向けの `select` は引き続き利用可能
+- 同一 `timestamp` の tie-break は、更新時に元の挿入順を保持することで決定的に維持します
+
+## 9. オプショナルQuery Engine（SQL/Lucene, 予定）
+
+クエリ言語は初期化設定で固定せず、利用側コードで必要なモジュールをimportして使います。
+
+```typescript
+import { Datastore } from "frostpillar";
+import { sqlEngine } from "frostpillar/query-sql";
+import { luceneEngine } from "frostpillar/query-lucene";
+
+const db = new Datastore({ location: "memory" });
+
+const sqlReq = sqlEngine.toNativeQuery(
+  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
+);
+const sqlResult = await db.queryNative(sqlReq);
+
+const luceneReq = luceneEngine.toNativeQuery(
+  "status:[400 TO 499] AND service:api",
+  {
+    groupBy: ["service"],
+    aggregates: [{ fn: "count", as: "c" }],
+    orderBy: [{ field: "c", direction: "desc" }],
+    limit: 10,
+  },
+);
+const luceneResult = await db.queryNative(luceneReq);
+```
+
+Canonical field path のエスケープ規則:
+
+- キーセグメント `service.name` -> `service\\.name`
+- キーセグメント `region\\zone` -> `region\\\\zone`
+
+補足:
+
+- SQL/LuceneモジュールはCore本体とは分離された任意機能です。
+- Frostpillar CoreはTypeScriptネイティブなリクエストを実行します。
+- 述語評価では暗黙の型変換（文字列→数値など）を行いません。
+- `field:*` は native `exists`、`NOT field:*` は native `not_exists` に対応します。
+- `IS NULL` は明示的な `null` のみを対象とし、欠損フィールド判定は `EXISTS(...)` / `NOT EXISTS(...)` を使用します。

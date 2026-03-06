@@ -1,0 +1,23 @@
+# ADR Directory Index
+
+This directory contains Architectural Decision Records (ADRs) that document key decisions, their context, and their consequences for the project.
+
+| File                                                       | Description                                                                                             |
+| :--------------------------------------------------------- | :------------------------------------------------------------------------------------------------------ |
+| [**01_DevelopmentPlan.md**](./01_DevelopmentPlan.md)       | Defines the milestone-driven execution plan, from the initial vertical slice (M1) to release hardening. |
+| [**02_SpecAlignment_v0.1.md**](./02_SpecAlignment_v0.1.md) | Establishes a strict v0.1 baseline for core specifications to ensure implementation consistency.        |
+| [**03_TimestampInputNormalization.md**](./03_TimestampInputNormalization.md) | Standardizes timestamp input handling at API boundaries for predictable behavior. |
+| [**04_NativeQueryCore_and_OptionalLanguageEngines.md**](./04_NativeQueryCore_and_OptionalLanguageEngines.md) | Defines query-core boundaries and pluggable language engine strategy. |
+| [**05_NestedPayload_and_AutoCommitFrequency.md**](./05_NestedPayload_and_AutoCommitFrequency.md) | Specifies nested payload support and auto-commit durability cadence. |
+| [**06_StorageTargets_and_LocalStorageChunking.md**](./06_StorageTargets_and_LocalStorageChunking.md) | Defines storage target policy and localStorage chunking approach for browser durability. |
+| [**07_TimestampSafeInteger_and_Int64Boundary.md**](./07_TimestampSafeInteger_and_Int64Boundary.md) | Clarifies safe integer timestamp canonical type and Int64 conversion boundaries. |
+| [**08_TieBreakOrdering_on_Update_and_Upsert.md**](./08_TieBreakOrdering_on_Update_and_Upsert.md) | Establishes deterministic tie-break ordering for update/upsert operations. |
+| [**09_Datastore_Error_Channel_for_Background_AutoCommit.md**](./09_Datastore_Error_Channel_for_Background_AutoCommit.md) | Introduces a dedicated error channel for background auto-commit failures. |
+| [**10_Browser_AsyncStorage_Priority_and_LocalStorageFallback.md**](./10_Browser_AsyncStorage_Priority_and_LocalStorageFallback.md) | Prioritizes async browser storage with localStorage fallback. |
+| [**11_Textlint_for_Markdown_Documentation.md**](./11_Textlint_for_Markdown_Documentation.md) | Adopts textlint as the Markdown documentation quality gate. |
+| [**12_ArchitectureVisionDocumentNaming.md**](./12_ArchitectureVisionDocumentNaming.md) | Renames the core vision document to a clearer, role-based filename while preserving document separation. |
+| [**13_MissingSpecCoverage_for_Capacity_Flush_Index_QueryParity.md**](./13_MissingSpecCoverage_for_Capacity_Flush_Index_QueryParity.md) | Fills remaining spec gaps for retention, flush durability, index invariants, and SQL/Lucene parity details. |
+| [**14_IndexSeparator_FileGenerationSwap_and_QueryPredicateSemantics.md**](./14_IndexSeparator_FileGenerationSwap_and_QueryPredicateSemantics.md) | Clarifies separator-key encoding, crash-safe file generation activation, typed corruption mapping, and SQL/Lucene predicate parity semantics. |
+| [**15_PersistedInsertionOrder_for_LeafRecordDeterminism.md**](./15_PersistedInsertionOrder_for_LeafRecordDeterminism.md) | Requires persisting insertion-order key in leaf record encoding for deterministic duplicate-timestamp ordering across restart and maintenance flows. |
+| [**16_CRC32_Standardization_and_InternalEvictionDelete.md**](./16_CRC32_Standardization_and_InternalEvictionDelete.md) | Standardizes page-header CRC32 parameters and clarifies that turnover eviction uses an internal delete path while v0.2 keeps no public delete API. |
+| [**17_CRC32C_for_PageHeaderChecksum.md**](./17_CRC32C_for_PageHeaderChecksum.md) | Replaces page-header checksum algorithm choice with CRC-32C while keeping checksum coverage and turnover internal-delete boundary semantics. |

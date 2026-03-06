@@ -1,0 +1,43 @@
+{
+  "name": "frostpillar",
+  "version": "0.0.1",
+  "description": "The ultra-lightweight, purely TypeScript timeseries database for ephemeral data.",
+  "type": "module",
+  "main": "./dist/core/index.js",
+  "types": "./dist/core/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write .",
+    "textlint": "textlint \"**/*.md\"",
+    "textlint:fix": "textlint \"**/*.md\" --fix",
+    "format:md": "pnpm textlint:fix",
+    "check": "pnpm typecheck && pnpm lint && pnpm textlint",
+    "test": "echo \"Dummy test runner: no test suite is wired yet.\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "database",
+    "timeseries",
+    "typescript",
+    "lightweight"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.9.0",
+    "@typescript-eslint/parser": "^7.9.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.2.5",
+    "textlint": "^15.5.2",
+    "textlint-rule-preset-ja-technical-writing": "^12.0.2",
+    "typescript": "^5.9.3"
+  },
+  "packageManager": "pnpm@10.30.3"
+}
