@@ -522,7 +522,20 @@ export type NativeQueryRequest = {
   distinct?: boolean;
 };
 
+import type {
+  QueryEngineModule,
+  QueryExecutionOptions,
+  QueryLanguage,
+} from './05_QueryEngineContract';
+
 export class Datastore {
+  registerQueryEngine(engine: QueryEngineModule): void;
+  unregisterQueryEngine(language: QueryLanguage): void;
+  query(
+    language: QueryLanguage,
+    queryText: string,
+    options?: QueryExecutionOptions,
+  ): Promise<NativeQueryResultRow[]>;
   queryNative(request: NativeQueryRequest): Promise<NativeQueryResultRow[]>;
 }
 ```
@@ -536,12 +549,32 @@ Field reference rules for `NativeQueryRequest`:
 - canonical path escaping follows `docs/specs/05_QueryEngineContract.md`.
 - predicate type/null/missing semantics MUST follow `docs/specs/05_QueryEngineContract.md`.
 
+Integrated query-engine usage rules:
+
+- `registerQueryEngine(engine)` MUST register one active module per `engine.language`.
+- registering the same `language` again MUST replace previous module deterministically.
+- `query(language, queryText, options)` MUST resolve the registered module by `language`.
+- if module is missing, `query(...)` MUST fail with `QueryEngineNotRegisteredError`.
+- `query(...)` MUST delegate translation/execution only through:
+  `engine.toNativeQuery(queryText, options)` -> `queryNative(request)`.
+- `query(...)` MUST NOT mutate translated `NativeQueryRequest` before `queryNative(...)`.
+- `query(...)` MUST resolve target engine once at query invocation boundary.
+- `registerQueryEngine(...)` / `unregisterQueryEngine(...)` calls that happen after this resolution
+  MUST NOT alter engine instance used by that in-flight `query(...)` call.
+- engine registration changes MUST apply only to subsequent `query(...)` calls.
+- `unregisterQueryEngine(language)` MUST remove module mapping and MUST be idempotent.
+- `query(...)` MUST fail with `ClosedDatastoreError` if datastore has been closed.
+- `registerQueryEngine(...)` and `unregisterQueryEngine(...)` MUST throw `ClosedDatastoreError`
+  if datastore has been closed.
+
 ## 9. External Query Language Integration Requirements
 
 - SQL subset and Lucene subset support MUST be implemented as optional query-engine modules.
 - Users choose query engine by importing modules in application code.
 - Datastore initialization config MUST NOT require query-language selection.
 - Query-engine modules MUST translate language text into `queryNative(...)` requests.
+- Datastore SHOULD provide integrated language-based query path (`query(...)`) so users are not
+  required to manually handle `NativeQueryRequest` in common flows.
 
 ## 10. Additional Error Taxonomy (Post-Baseline)
 
@@ -549,3 +582,4 @@ Field reference rules for `NativeQueryRequest`:
 - `QueryParseError`: invalid SQL/Lucene syntax in external query-engine modules.
 - `QueryValidationError`: syntactically valid query that violates Frostpillar subset constraints.
 - `UnsupportedQueryFeatureError`: query uses valid language feature outside supported subset.
+- `QueryEngineNotRegisteredError`: requested query language has no registered query-engine module.

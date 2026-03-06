@@ -13,7 +13,7 @@
     "textlint:fix": "textlint \"**/*.md\" --fix",
     "format:md": "pnpm textlint:fix",
     "check": "pnpm typecheck && pnpm lint && pnpm textlint",
-    "test": "echo \"Dummy test runner: no test suite is wired yet.\"",
+    "test": "node ./scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

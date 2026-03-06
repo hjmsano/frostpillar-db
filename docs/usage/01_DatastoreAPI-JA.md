@@ -319,6 +319,7 @@ await db.deleteById("1735689600000:42");
 ## 9. オプショナルQuery Engine（SQL/Lucene, 予定）
 
 クエリ言語は初期化設定で固定せず、利用側コードで必要なモジュールをimportして使います。
+通常は Query Engine を登録して、Datastore 統合の `query(...)` を使います。
 
 ```typescript
 import { Datastore } from "frostpillar";
@@ -327,12 +328,13 @@ import { luceneEngine } from "frostpillar/query-lucene";
 
 const db = new Datastore({ location: "memory" });
 
-const sqlReq = sqlEngine.toNativeQuery(
-  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
-);
-const sqlResult = await db.queryNative(sqlReq);
+db.registerQueryEngine(sqlEngine);
+db.registerQueryEngine(luceneEngine);
 
-const luceneReq = luceneEngine.toNativeQuery(
+const sqlResult = await db.query("sql", "SELECT COUNT(*) AS c FROM records WHERE status = 404");
+
+const luceneResult = await db.query(
+  "lucene",
   "status:[400 TO 499] AND service:api",
   {
     groupBy: ["service"],
@@ -341,7 +343,15 @@ const luceneReq = luceneEngine.toNativeQuery(
     limit: 10,
   },
 );
-const luceneResult = await db.queryNative(luceneReq);
+```
+
+ネイティブリクエストを明示的に確認したい場合は、従来どおり手動フローも使えます:
+
+```typescript
+const sqlReq = sqlEngine.toNativeQuery(
+  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
+);
+const sqlResultViaNative = await db.queryNative(sqlReq);
 ```
 
 Canonical field path のエスケープ規則:
@@ -353,6 +363,12 @@ Canonical field path のエスケープ規則:
 
 - SQL/LuceneモジュールはCore本体とは分離された任意機能です。
 - Frostpillar CoreはTypeScriptネイティブなリクエストを実行します。
+- `registerQueryEngine(...)` 前に `db.query(language, ...)` を呼ぶと `QueryEngineNotRegisteredError` で失敗します。
+- `db.close()` 後の `db.query(...)` は `ClosedDatastoreError` で失敗します。
+- `db.close()` 後の `registerQueryEngine(...)` / `unregisterQueryEngine(...)` は
+  `ClosedDatastoreError` で失敗します。
+- Query Engine の登録変更は「次に開始される `db.query(...)`」から適用され、
+  既に開始済みの `db.query(...)` は呼び出し時に解決した engine を使い続けます。
 - Lucene の quoted value 文字列は、引用符内でバックスラッシュエスケープ（`\"`, `\\`）を使用します。
 - SQL の `REGEXP` と Lucene の `field:/pattern/` は、ECMAScript `RegExp` と `RegExp.test(...)` の照合挙動に従います。
 - 述語評価では暗黙の型変換（文字列→数値など）を行いません。

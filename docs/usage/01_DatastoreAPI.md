@@ -320,6 +320,7 @@ Why:
 ## 9. Optional Query Engines (SQL / Lucene, Planned)
 
 Users can import query-engine modules directly instead of choosing query language at datastore initialization.
+For common usage, register engines once and call datastore-integrated `query(...)`.
 
 ```typescript
 import { Datastore } from "frostpillar";
@@ -328,12 +329,13 @@ import { luceneEngine } from "frostpillar/query-lucene";
 
 const db = new Datastore({ location: "memory" });
 
-const sqlReq = sqlEngine.toNativeQuery(
-  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
-);
-const sqlResult = await db.queryNative(sqlReq);
+db.registerQueryEngine(sqlEngine);
+db.registerQueryEngine(luceneEngine);
 
-const luceneReq = luceneEngine.toNativeQuery(
+const sqlResult = await db.query("sql", "SELECT COUNT(*) AS c FROM records WHERE status = 404");
+
+const luceneResult = await db.query(
+  "lucene",
   "status:[400 TO 499] AND service:api",
   {
     groupBy: ["service"],
@@ -342,7 +344,15 @@ const luceneReq = luceneEngine.toNativeQuery(
     limit: 10,
   },
 );
-const luceneResult = await db.queryNative(luceneReq);
+```
+
+Advanced/manual flow is still supported when you want to inspect or transform native requests:
+
+```typescript
+const sqlReq = sqlEngine.toNativeQuery(
+  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
+);
+const sqlResultViaNative = await db.queryNative(sqlReq);
 ```
 
 Canonical field path escaping rule:
@@ -354,6 +364,11 @@ Notes:
 
 - SQL/Lucene modules are optional and external to core.
 - Frostpillar core executes TypeScript-native request objects.
+- if `db.query(language, ...)` is called before `registerQueryEngine(...)`, it fails with `QueryEngineNotRegisteredError`.
+- after `db.close()`, `db.query(...)` fails with `ClosedDatastoreError`.
+- after `db.close()`, `registerQueryEngine(...)` / `unregisterQueryEngine(...)` fail with `ClosedDatastoreError`.
+- engine registration changes are applied to subsequent `db.query(...)` calls; already-started
+  `db.query(...)` uses the engine resolved at invocation boundary.
 - no implicit cross-type coercion is applied in predicate evaluation.
 - `field:*` maps to native `exists`, and `NOT field:*` maps to native `not_exists`.
 - `field:*` matches explicit `null` values (exists means field path is present).

@@ -20,6 +20,7 @@ In scope:
 - external query-engine modules for SQL subset and Lucene subset
 - translation from query text to native query request
 - execution through `Datastore.queryNative(...)`
+- datastore-integrated language query flow through `Datastore.query(...)`
 
 Out of scope:
 
@@ -77,6 +78,16 @@ export interface QueryEngineModule {
   ): NativeQueryRequest;
 }
 
+export interface DatastoreQueryIntegration {
+  registerQueryEngine(engine: QueryEngineModule): void;
+  unregisterQueryEngine(language: QueryLanguage): void;
+  query(
+    language: QueryLanguage,
+    queryText: string,
+    options?: QueryExecutionOptions,
+  ): Promise<NativeQueryResultRow[]>;
+}
+
 export async function runQueryWithEngine(
   db: Datastore,
   engine: QueryEngineModule,
@@ -95,6 +106,16 @@ Normative behavior:
   - Lucene module: `options` is the normative source for aggregation/grouping/output controls.
 - `runQueryWithEngine` MUST execute only through `db.queryNative(...)`.
 - `runQueryWithEngine` MUST call `engine.toNativeQuery(queryText, options)` and pass the result to `db.queryNative(...)` without mutation.
+- Datastore integrated query path MUST call `engine.toNativeQuery(queryText, options)` and execute via `db.queryNative(...)` only.
+- `Datastore.query(...)` and `runQueryWithEngine(...)` MUST be behaviorally equivalent
+  for the same `engine`, `queryText`, and `options`.
+- `Datastore.query(...)` MUST resolve engine registry mapping once per invocation before translation.
+- registry changes after resolution (`registerQueryEngine` / `unregisterQueryEngine`) MUST NOT
+  change engine instance used by that in-flight `Datastore.query(...)` call.
+- if no engine is registered at resolution time, `Datastore.query(...)` MUST fail with `QueryEngineNotRegisteredError`.
+- after datastore close state, `Datastore.query(...)` MUST fail with `ClosedDatastoreError`.
+- after datastore close state, `registerQueryEngine(...)` and `unregisterQueryEngine(...)`
+  MUST fail with `ClosedDatastoreError`.
 - query-engine modules MUST NOT mutate datastore state except via explicit mutation requests supported by native API.
 
 ## 5. Determinism Rules

@@ -77,9 +77,9 @@ Constraints:
 - `timestamp`: canonical epoch milliseconds
 - top-level payload fields are addressed by key names
 - nested payload fields are addressed with dot path notation (for example `user.profile.country`)
-- dot characters within one key segment MUST be expressed as escaped dot in canonical field path (`\\.`)
-- backslash in one key segment MUST be escaped as `\\\\` in canonical field path
-- quoted identifiers MUST preserve literal segment content before canonical escaping
+- canonical payload path escaping MUST follow `docs/specs/05_QueryEngineContract.md` section 6
+  (single source of truth across query engines)
+- quoted identifiers MUST preserve literal segment content before applying canonical escaping
   (example: SQL field `\"service.name\"` maps to canonical `service\\.name`)
 
 ## 5. Error Mapping

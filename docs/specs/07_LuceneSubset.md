@@ -104,8 +104,8 @@ Constraints:
   - This normalization rule applies to both term comparisons and range-query bounds.
   - Invalid `timestamp` date strings MUST raise `QueryValidationError`.
 - nested payload fields are addressed with dot path notation (for example `user.profile.country:JP`)
-- dot characters within one key segment MUST be escaped as `\\.` in canonical field path
-- backslash in one key segment MUST be escaped as `\\\\` in canonical field path
+- canonical payload path escaping MUST follow `docs/specs/05_QueryEngineContract.md` section 6
+  (single source of truth across query engines)
 
 ## 5. Integration Rules
 

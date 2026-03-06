@@ -139,6 +139,12 @@ Browser backend (M3+):
 Query-engine modules (M6+):
 
 - SQL/Lucene translation parity for representative filter/aggregate/group/order/limit cases
+- datastore integrated query path (`registerQueryEngine` + `query`) delegates to
+  `toNativeQuery` and `queryNative` without request mutation
+- datastore close-state behavior: `query`, `registerQueryEngine`, `unregisterQueryEngine`
+  fail with `ClosedDatastoreError`
+- in-flight query engine snapshot behavior under concurrent
+  `registerQueryEngine` / `unregisterQueryEngine`
 - canonical field-path escaping for keys containing dot/backslash
 - SQL text vs `QueryExecutionOptions` conflict rejection (`QueryValidationError`)
 - Lucene filter text + `QueryExecutionOptions` mapping correctness
