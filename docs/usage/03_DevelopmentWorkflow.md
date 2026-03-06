@@ -75,3 +75,19 @@ Use the following practical policy for TypeScript implementation files:
 - route cross-domain imports through public barrels; keep same-domain imports direct
 - keep validation/normalization helpers as pure functions when possible
 - prefer behavior-preserving split refactors before adding new features in the same area
+
+## 6. GitHub Actions CI/CD
+
+Repository automation follows this trigger split:
+
+- for pull request create/update (`opened`, `reopened`, `synchronize`, `ready_for_review`), run:
+  - `pnpm check`
+  - `pnpm test --run`
+- for pushes that land on the default branch (for example merge completion), run:
+  - `pnpm check`
+  - `pnpm test --run`
+  - `pnpm build`
+  - `pnpm build:bundle`
+
+Current policy does not publish artifacts to external destinations.
+Build outputs are generated only as workflow-local validation artifacts.
