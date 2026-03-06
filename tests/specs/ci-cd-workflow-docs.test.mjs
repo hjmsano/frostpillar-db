@@ -3,7 +3,9 @@ import test from 'node:test';
 import { readFileUtf8 } from '../shared/read-file-utf8.mjs';
 
 test('distribution spec defines CI/CD trigger and command contract', async () => {
-  const spec = await readFileUtf8('docs/specs/13_DistributionDeliveryTracks.md');
+  const spec = await readFileUtf8(
+    'docs/specs/13_DistributionDeliveryTracks.md',
+  );
 
   assert.match(spec, /GitHub Actions CI\/CD Contract/i);
   assert.match(spec, /pull request open\/reopen\/synchronize events/i);
@@ -30,7 +32,9 @@ test('development workflow usage docs include bilingual CI/CD operation guidance
 });
 
 test('adr for ci cd workflow policy is recorded and indexed', async () => {
-  const adr = await readFileUtf8('docs/adr/42_GitHub_Actions_CI_CD_Validation_and_Build_Policy.md');
+  const adr = await readFileUtf8(
+    'docs/adr/44_GitHub_Actions_CI_CD_Validation_and_Build_Policy.md',
+  );
   const adrIndex = await readFileUtf8('docs/adr/INDEX.md');
 
   assert.match(adr, /ADR-42/i);
