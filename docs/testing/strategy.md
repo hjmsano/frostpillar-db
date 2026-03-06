@@ -113,11 +113,15 @@ Memory backend:
 File backend:
 
 - reopen persistence correctness
+- exclusive open-lock acquisition for single-writer safety
+- second-process open on same datastore path must fail with `DatabaseLockedError`
+- lock release on `close()` and subsequent open success
 - header/version mismatch handling
 - incomplete/corrupt file failure behavior
 - `target` resolution tests (`filePath` shorthand vs `target.kind`)
 - directory target naming tests (`directory` + `filePrefix` + `fileName`)
 - sidecar metadata file open/reopen consistency checks
+- sidecar `nextInsertionOrder` persistence and O(1) allocator recovery checks on reopen
 - crash-recovery behavior with interrupted commit temp files (must not become active state)
 - `commitId` monotonicity across successful durable commits
 

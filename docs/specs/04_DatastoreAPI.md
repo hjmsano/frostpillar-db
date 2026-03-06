@@ -289,8 +289,26 @@ Physical files:
 
 - Metadata sidecar file: `${resolvedDataFilePath}.meta.json`.
 - Committed generation data files: `${resolvedDataFilePath}.g.<commitId>`.
+- Lock file (single-writer guard): `${resolvedDataFilePath}.lock`.
 - Implementations MUST use metadata sidecar for format version and durable open/reopen checks.
 - Active generation MUST be resolved by sidecar pointer (`activeDataFile`) only.
+
+### 5.1.0 File Backend Open Lock (Single-Writer Requirement)
+
+- File backend MUST enforce single-writer access across processes for one resolved datastore path.
+- On `Datastore` open/initialization, implementation MUST acquire an exclusive lock before any
+  read/write operation on sidecar or generation files.
+- Exclusive lock MUST be represented by `${resolvedDataFilePath}.lock` and MUST be acquired with
+  an atomic cross-process primitive (for example atomic create with exclusive flag, or equivalent
+  OS-level mechanism).
+- If exclusive lock acquisition fails because another live process already owns the lock, open
+  MUST fail fast and MUST NOT proceed in read-only or best-effort mode.
+- Lock-acquisition failure due to existing owner MUST throw `DatabaseLockedError`, which is a
+  subtype of `StorageEngineError`.
+- On successful `close()`, implementation MUST release the lock and remove lock ownership state.
+- Implementations MUST NOT silently break or steal an existing lock during normal open flow.
+- Implementations MAY provide explicit operator-controlled stale-lock recovery flow, but default
+  open behavior MUST be fail-fast when lock is not acquirable.
 
 ### 5.1.1 Metadata Sidecar Schema
 
@@ -304,6 +322,7 @@ The sidecar file (`.meta.json`) MUST contain the following JSON structure:
   "rootPageId": 1,
   "nextPageId": 2,
   "freePageHeadId": null,
+  "nextInsertionOrder": "0",
   "commitId": 0
 }
 ```
@@ -312,10 +331,15 @@ The sidecar file (`.meta.json`) MUST contain the following JSON structure:
 - `rootPageId`: mirrored root page ID from fixed page-0 meta payload.
 - `nextPageId`: mirrored next page ID from fixed page-0 meta payload.
 - `freePageHeadId`: mirrored free-list head page ID from fixed page-0 meta payload, or `null` if none.
+- `nextInsertionOrder`: next allocatable insertion-order value for new inserts.
+  - MUST be serialized as unsigned base-10 integer string (no sign, no zero padding except `"0"`).
+  - MUST satisfy `0 <= value <= 18446744073709551615`.
 - `commitId`: monotonic durable commit sequence number.
 - Commit ordering and restart recovery semantics MUST follow `docs/specs/10_FlushAndDurability.md`.
 - open MUST fail with typed storage corruption error when `activeDataFile` is missing or invalid.
 - page-0 meta layout/source-of-truth rules MUST follow `docs/specs/03_PageStructure.md` section 8.1.
+- on open/restart, implementation MUST initialize insertion-order allocator from `nextInsertionOrder` in O(1) without full data scan.
+- implementation MUST NOT derive allocator state from rightmost/last B+ tree key because key order is `(timestamp, insertionOrder)` and backfilled timestamps break monotonic key-tail inference.
 - on open/restart, implementation MUST validate that sidecar mirrored fields
   (`rootPageId`, `nextPageId`, `freePageHeadId`) match page-0 meta payload;
   mismatch MUST fail with typed corruption error.
@@ -365,6 +389,12 @@ LocalStorage chunking and quota behavior:
 - Required chunk count MUST be `<= maxChunks`; otherwise datastore MUST reject with `QuotaExceededError`.
 - On browser quota errors from localStorage writes, datastore MUST reject with `QuotaExceededError`.
 - Existing committed generation MUST remain readable when a new generation write fails.
+- To satisfy the previous rule, localStorage commit MUST use generation-level copy-on-write:
+  all chunks for the new generation are written before manifest switch.
+- Until manifest switch and old-generation cleanup complete, transient usage can approach
+  `previousGenerationSize + newGenerationSize` (worst case near 2x steady-state footprint).
+- For capacity planning, effective steady-state writable size in localStorage is typically
+  around half of browser quota when generation sizes are similar.
 - Generation switch order MUST follow `docs/specs/10_FlushAndDurability.md`.
 
 ## 6. Error Taxonomy
@@ -376,6 +406,7 @@ LocalStorage chunking and quota behavior:
 - `UnsupportedBackendError`: config is valid but backend is not available in current milestone.
 - `ClosedDatastoreError`: operation attempted after `close()`.
 - `StorageEngineError`: adapter-level I/O or storage failure.
+- `DatabaseLockedError`: file-backend exclusive lock acquisition failed because datastore is already opened by another process (subtype of `StorageEngineError`).
 - `BinaryFormatError`: binary decode/encode format violation (subtype of `StorageEngineError`).
 - `PageCorruptionError`: page-structure invariant violation (subtype of `StorageEngineError`).
 - `IndexCorruptionError`: B+ tree invariant violation (subtype of `StorageEngineError`).

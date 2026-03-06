@@ -56,9 +56,9 @@ import type {
   NativeOrderBy,
   NativeQueryRequest,
   NativeQueryResultRow,
-} from "./04_DatastoreAPI";
+} from './04_DatastoreAPI';
 
-export type QueryLanguage = "sql" | "lucene";
+export type QueryLanguage = 'sql' | 'lucene';
 
 export type QueryExecutionOptions = {
   select?: string[];
@@ -118,10 +118,13 @@ Normative behavior:
 ## 7. Predicate Type and Null/Missing Semantics (Normative)
 
 - SQL and Lucene modules MUST preserve literal value types in translated `NativeQueryRequest`.
-- For Lucene range bounds, modules MUST preserve literal typing:
+- For Lucene range bounds, modules MUST preserve literal typing at parse stage:
   - unquoted numeric literal -> `number`
   - quoted literal -> `string`
   - unquoted non-numeric literal -> `string`
+- For reserved field `timestamp`, modules MUST normalize accepted timestamp-string range
+  bounds to epoch-millisecond `number` values before execution/native comparison.
+- Invalid timestamp-string bounds for `timestamp` range queries MUST raise `QueryValidationError`.
 - Native execution MUST NOT apply implicit cross-type coercion
   (for example string `"10"` to number `10`).
 - For operators other than `exists` / `not_exists`, missing field path evaluates `false`.

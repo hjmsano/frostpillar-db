@@ -206,9 +206,19 @@ const db = new Datastore({
 
 - メタデータファイル: `./data/frostpillar/prod_events.fpdb.meta.json`
 - 世代データファイル: `./data/frostpillar/prod_events.fpdb.g.<commitId>`
+- ロックファイル（単一 writer 保護）: `./data/frostpillar/prod_events.fpdb.lock`
 - 有効世代は sidecar の `activeDataFile` で選択されます
 - 各コミット世代では、再起動時のルート参照用に page `0` を固定メタページとして予約します
 - sidecar の `rootPageId` / `nextPageId` / `freePageHeadId` はミラー値であり、page-0 メタページ内容と一致する必要があります
+- sidecar の `nextInsertionOrder` には次回採番値を符号なし 10 進文字列で保存し、
+  再オープン時に全件走査なし O(1) で insertion-order 採番状態を復元します
+
+単一 writer の挙動（マルチプロセス安全性）:
+
+- file backend は open 時に排他ロック（`<resolvedDataFilePath>.lock`）を取得します
+- 他プロセスがロックを保持している場合、open は `DatabaseLockedError`
+  （`StorageEngineError` の subtype）で失敗します
+- 既定の open フローでは、既存ロックを自動で奪取しません
 
 ## 6. Browser Storage: バックエンド選択とフォールバック
 
@@ -271,6 +281,9 @@ const dbLocal = new Datastore({
 - 必要チャンク数が `maxChunks` を超える場合は `QuotaExceededError` で失敗します
 - ブラウザのクォータ超過も `QuotaExceededError` で通知されます
 - 新しい世代の書き込み失敗時でも、直前にコミット済みの世代は読み出し可能である必要があります
+- この安全性は世代単位の copy-on-write（新世代チャンクを書き切ってから manifest 切替）で実現します
+- commit 中の一時使用量は `旧世代 + 新世代`（実質2倍近傍）まで増える可能性があります
+- 実運用の目安として、localStorage の実効利用可能量はブラウザクォータのおおむね50%前後です
 
 ## 7. 主なエラー
 

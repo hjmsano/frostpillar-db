@@ -41,8 +41,13 @@ To follow SQL subset requirements, Lucene subset MUST cover equivalent operation
 - inclusive: `field:[a TO b]`
 - exclusive: `field:{a TO b}`
 - Unquoted numeric literals in range bounds MUST be parsed as `number`.
-- Quoted range bounds MUST remain `string` literals.
-- Unquoted non-numeric range bounds MUST remain `string` literals.
+- Quoted range bounds MUST remain `string` literals at parse stage.
+- Unquoted non-numeric range bounds MUST remain `string` literals at parse stage.
+- For reserved field `timestamp`, accepted timestamp-string bounds (quoted or unquoted)
+  MUST be normalized to Unix epoch milliseconds before native query execution.
+- Timestamp range normalization MUST apply to both inclusive (`[]`) and exclusive (`{}`)
+  range forms.
+- Invalid timestamp bounds for `timestamp` range queries MUST raise `QueryValidationError`.
 
 ### 2.4 Wildcards
 
@@ -96,6 +101,7 @@ Constraints:
     (for example `2026-01-01T09:00:00+09:00`).
   - Date-only literals `YYYY-MM-DD` are also allowed and MUST be interpreted as `YYYY-MM-DDT00:00:00.000Z`.
   - Query engine MUST normalize accepted timestamp strings into Unix epoch milliseconds before execution.
+  - This normalization rule applies to both term comparisons and range-query bounds.
   - Invalid `timestamp` date strings MUST raise `QueryValidationError`.
 - nested payload fields are addressed with dot path notation (for example `user.profile.country:JP`)
 - dot characters within one key segment MUST be escaped as `\\.` in canonical field path

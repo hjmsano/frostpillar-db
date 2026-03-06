@@ -206,10 +206,20 @@ Resolved files in this example:
 
 - metadata file: `./data/frostpillar/prod_events.fpdb.meta.json`
 - generation data files: `./data/frostpillar/prod_events.fpdb.g.<commitId>`
+- lock file (single-writer guard): `./data/frostpillar/prod_events.fpdb.lock`
 - active generation is selected by sidecar field `activeDataFile`
 - each committed generation reserves page `0` as fixed meta page containing
   `rootPageId`/allocation state for restart
 - sidecar `rootPageId`/`nextPageId`/`freePageHeadId` are mirrored values and must match page-0 meta payload
+- sidecar `nextInsertionOrder` stores the next allocation counter as unsigned decimal string,
+  so reopen can restore insertion-order allocation in O(1) without full-record scan
+
+Single-writer behavior (multi-process safety):
+
+- file backend acquires an exclusive lock on open (`<resolvedDataFilePath>.lock`)
+- if another process already owns the lock, open fails with `DatabaseLockedError`
+  (a subtype of `StorageEngineError`)
+- Frostpillar does not auto-steal a lock in default open flow
 
 ## 6. Browser Storage: Backend Choice and Fallback
 
@@ -272,6 +282,9 @@ When `browserStorage: "localStorage"`:
 - if required chunks exceed `maxChunks`, datastore rejects with `QuotaExceededError`
 - browser quota failures are also reported as `QuotaExceededError`
 - failed write of a new generation must not break previous committed generation
+- this safety rule uses generation copy-on-write (write new chunks first, then switch manifest)
+- transient commit-time usage can approach `oldGeneration + newGeneration` (near 2x steady-state)
+- practical capacity planning target is often about 50% of browser localStorage quota
 
 ## 7. Common Errors
 
