@@ -36,3 +36,4 @@ This directory contains Architectural Decision Records (ADRs) that document key 
 | [**30_QueryEngineRegistrySnapshot_and_ClosedStateSemantics.md**](./30_QueryEngineRegistrySnapshot_and_ClosedStateSemantics.md) | Defines close-state failure contract and per-call engine snapshot semantics for integrated datastore query API. |
 | [**31_DevelopmentWorkflow_and_PhasedExecutionPlaybook.md**](./31_DevelopmentWorkflow_and_PhasedExecutionPlaybook.md) | Formalizes shared phase-gate workflow, collaboration checklist expectations, and roadmap-driven execution discipline. |
 | [**32_ActivePhase_M1_and_v0.1_ScopeLock.md**](./32_ActivePhase_M1_and_v0.1_ScopeLock.md) | Sets the active implementation phase to M1 and locks immediate coding scope to v0.1 deliverables. |
+| [**33_SeparatePlanningDocs_from_Specs.md**](./33_SeparatePlanningDocs_from_Specs.md) | Separates phased/tasked planning artifacts into `docs/plans` and keeps `docs/specs` strictly normative. |

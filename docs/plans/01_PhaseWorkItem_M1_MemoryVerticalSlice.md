@@ -1,4 +1,4 @@
-# Specification: Early-Phase Work Item (M1 Memory Vertical Slice)
+# Plan: Phase Work Item (M1 Memory Vertical Slice)
 
 Status: Draft  
 Version: 0.1 planning  
@@ -6,7 +6,7 @@ Last Updated: 2026-03-06
 
 ## 1. Purpose
 
-This document defines the first implementation target for the early coding phase.
+This planning document defines the first implementation target for the early coding phase.
 It converts the phase roadmap into one concrete, execution-ready work item.
 
 ## 2. Scope
@@ -25,7 +25,7 @@ Out of scope:
 - optional SQL/Lucene engine integration behavior
 - post-`v0.1` mutation APIs (`getById`, `updateById`, `deleteById`)
 
-## 3. Normative Requirements
+## 3. Execution Requirements
 
 - The current active implementation phase MUST be `Phase 1: Memory Vertical Slice`.
 - In this work item, version target MUST remain aligned to `v0.1` short-term scope from `docs/adr/01_DevelopmentPlan.md`.
@@ -66,4 +66,4 @@ Work item completion requires:
 - targeted new tests pass
 - full suite passes (`pnpm test --run`)
 - quality gate passes (`pnpm check`)
-- related docs remain aligned (`docs/specs`, `docs/usage` EN/JA when user-visible, and ADR when decisions change)
+- related docs remain aligned (`docs/specs`, `docs/plans`, `docs/usage` EN/JA when user-visible, and ADR when decisions change)

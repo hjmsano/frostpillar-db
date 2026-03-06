@@ -10,7 +10,7 @@ It operationalizes `docs/adr/01_DevelopmentPlan.md` and `docs/specs/12_Developme
 
 - Active phase: `Phase 1: Memory Vertical Slice`
 - Scope lock: immediate coding target is `v0.1` deliverables only
-- Work-item spec: `docs/specs/13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice.md`
+- Work-item plan: `docs/plans/01_PhaseWorkItem_M1_MemoryVerticalSlice.md`
 - Decision record: `docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md`
 
 ## Phase 0: Foundation Sync
