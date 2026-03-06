@@ -63,3 +63,12 @@ Last Updated: 2026-03-06
 - 実装スタイルより spec とテストの整合性
 - 境界条件での決定性（時間範囲、容量、耐久性）
 - エラー型と失敗条件の明示性
+
+## 5. TypeScript コード構成ポリシー
+
+TypeScript 実装では次の実務ポリシーを適用します。
+
+- `src/core/index.ts` は薄い export バレルとして維持する
+- 大きなファイルは責務ごと（types / errors / validation / ordering / datastore orchestration）に分割する
+- validation / normalization は可能な限り pure function として実装する
+- 同一領域で機能追加する前に、まず振る舞い不変のリファクタを分離する

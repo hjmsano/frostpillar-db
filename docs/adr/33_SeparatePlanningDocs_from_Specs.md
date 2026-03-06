@@ -11,7 +11,7 @@ This caused taxonomy ambiguity because `docs/specs` is intended to contain norma
 ## Decision
 
 - Create a dedicated planning directory at `docs/plans`.
-- Move and rename the M1 work-item document to `docs/plans/01_PhaseWorkItem_M1_MemoryVerticalSlice.md`.
+- Move and rename the M1 work-item document to `docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md`.
 - Keep `docs/specs` limited to normative feature and behavior specifications.
 - Update roadmap and index references to point planning artifacts to `docs/plans`.
 

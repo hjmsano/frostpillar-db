@@ -151,6 +151,17 @@ Notes:
 - `filePath` is a backward-compatible shorthand for `target: { kind: "path", filePath }`.
 - `filePath` and `target` MUST NOT be specified together.
 
+### 2.1 M1 Runtime Slice Lock (Normative)
+
+- Active implementation phase is `Phase 1: Memory Vertical Slice` (see `docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md`).
+- For this phase, implementation MUST prioritize this baseline surface:
+  `insert`, `select`, `commit`, `on("error", ...)`, `off("error", ...)`, `close`.
+- `location: "memory"` MUST initialize successfully with async-only behavior.
+- `location: "file"` and `location: "browser"` remain forward-looking configuration branches
+  and MUST fail fast with `UnsupportedBackendError` in M1 runtime implementation.
+- Sections marked as post-baseline requirements in this document (for example section 8 and later)
+  are not required for M1 completion.
+
 ## 3. `Datastore` Class
 
 ```typescript
@@ -177,6 +188,7 @@ export class Datastore {
 - payload object max nesting depth is `64` (root depth `0`, +1 per nested object).
 - payload key UTF-8 byte length max is `1024` at every nested object level.
 - payload string UTF-8 byte length max is `65535` at every nested object level.
+- user input record MUST NOT provide `insertionOrder`; if present, `insert` MUST reject with `ValidationError`.
 - datastore MUST assign one immutable internal `insertionOrder` key on first insert and
   persist it as `INSERTION_ORDER_U64` per `docs/specs/02_BinaryEncoding.md`.
 - For paged storage, implementation MUST check encoded record byte length against
@@ -253,6 +265,7 @@ export class Datastore {
 
 - Datastore MUST expose an event channel for asynchronous failures that are not tied to a caller-visible Promise.
 - Initial supported event is `"error"` only.
+- Calling `on(...)` or `off(...)` with an unsupported event name MUST throw `ValidationError`.
 - `on("error", listener)` MUST register listener and return an unsubscribe function equivalent to `off("error", listener)`.
 - `off("error", listener)` MUST remove only the matching listener and MUST be idempotent.
 - One background auto-commit failure MUST emit one `"error"` event.

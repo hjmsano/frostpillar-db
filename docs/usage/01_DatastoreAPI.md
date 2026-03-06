@@ -5,6 +5,12 @@ Last Updated: 2026-03-06
 
 This guide explains the user-facing API described in `docs/specs/04_DatastoreAPI.md`.
 
+Implementation status note (M1):
+
+- The current runtime implementation target is memory backend only (`location: "memory"`).
+- `location: "file"` and `location: "browser"` are documented for forward compatibility and
+  currently throw `UnsupportedBackendError` in M1.
+
 ## 1. Basic Setup (Memory Backend)
 
 ```typescript
@@ -39,6 +45,7 @@ Validation reminders:
 - leaf values must be `string | number | boolean | null` (arrays are not supported).
 - payload `number` values must be finite (`Number.isFinite`); `NaN`, `Infinity`, and `-Infinity` are rejected.
 - payload `bigint` values are not supported in v0.2.
+- `insertionOrder` is datastore-internal metadata and must not be provided by application input.
 - if exact 64-bit integer precision is required in payload, store the value as a decimal string and parse it in application code.
 
 Additional valid example:
@@ -136,6 +143,7 @@ Notes:
 - this channel is for asynchronous/background failures without direct Promise rejection
 - explicit foreground calls (`insert`, `commit`) still reject their own Promises on failure
 - `close()` stops background auto-commit scheduling and further auto-commit error events
+- only `"error"` event is supported; unsupported event names throw `ValidationError`
 
 ## 4.1 Capacity and Retention Policy
 

@@ -5,6 +5,12 @@ Last Updated: 2026-03-06
 
 このドキュメントは `docs/specs/04_DatastoreAPI.md` で定義した公開 API の利用方法を説明します。
 
+実装ステータス注記（M1）:
+
+- 現在の実装対象はメモリバックエンド（`location: "memory"`）のみです。
+- `location: "file"` と `location: "browser"` の記述は将来互換のためであり、
+  M1 時点の実装では `UnsupportedBackendError` になります。
+
 ## 1. 基本セットアップ (Memory Backend)
 
 ```typescript
@@ -39,6 +45,7 @@ await db.insert({
 - 末端の値は `string | number | boolean | null` である必要があります（配列は未対応）。
 - payload の `number` 値は有限値（`Number.isFinite`）である必要があります（`NaN`, `Infinity`, `-Infinity` は拒否されます）。
 - payload の `bigint` 値は v0.2 ではサポートされません。
+- `insertionOrder` は Datastore 内部管理メタデータであり、アプリケーション入力で指定してはいけません。
 - payload で 64-bit 整数の厳密な精度が必要な場合は、10進文字列として保存し、アプリケーション側でパースしてください。
 
 追加の有効例:
@@ -136,6 +143,7 @@ unsubscribe(); // db.off("error", onDatastoreError) と同等
 - このチャネルは Promise 返却元が存在しない非同期/バックグラウンド失敗のためのものです
 - `insert` / `commit` など明示呼び出しの失敗は、これまで通り各 Promise が reject します
 - `close()` はバックグラウンド自動コミットを停止し、以後は auto-commit 由来の error event を発火しません
+- サポートされるイベント名は `"error"` のみで、非対応イベント名は `ValidationError` になります
 
 ## 4.1 容量制限と保持ポリシー
 

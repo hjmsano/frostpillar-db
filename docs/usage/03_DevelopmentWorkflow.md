@@ -63,3 +63,12 @@ For reviewers, prioritize:
 - spec and test alignment over implementation style
 - deterministic behavior at boundaries (time range, capacity, durability)
 - error typing and explicit failure semantics
+
+## 5. TypeScript Code Organization Policy
+
+Use the following practical policy for TypeScript implementation files:
+
+- keep `src/core/index.ts` as a thin export barrel
+- split large files by concern (types, errors, validation, ordering, datastore orchestration)
+- keep validation/normalization helpers as pure functions when possible
+- prefer behavior-preserving refactor commits before adding new features in the same area

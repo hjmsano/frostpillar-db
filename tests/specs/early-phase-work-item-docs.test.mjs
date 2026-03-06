@@ -8,12 +8,12 @@ const readDoc = async (relativePath) => {
   return await readFile(absolutePath, 'utf8');
 };
 
-test('early-phase work item spec defines v0.1 scope and red-test plan', async () => {
+test('phase work-item plan defines v0.1 scope and red-test plan', async () => {
   const source = await readDoc(
-    'docs/specs/13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice.md',
+    'docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md',
   );
 
-  assert.match(source, /Specification: Early-Phase Work Item \(M1 Memory Vertical Slice\)/i);
+  assert.match(source, /Plan: Phase Work Item \(M1 Memory Vertical Slice\)/i);
   assert.match(source, /version target MUST remain aligned to `v0\.1` short-term scope/i);
   assert.match(source, /MUST NOT implement `v0\.2`-planned APIs in this work item/i);
   assert.match(source, /Acceptance Criteria/i);
@@ -24,7 +24,7 @@ test('early-phase work item spec defines v0.1 scope and red-test plan', async ()
 test('active-phase ADR records the phase and scope-lock decision and is indexed', async () => {
   const adr = await readDoc('docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md');
   const adrIndex = await readDoc('docs/adr/INDEX.md');
-  const specsIndex = await readDoc('docs/specs/INDEX.md');
+  const plansIndex = await readDoc('docs/plans/INDEX.md');
   const roadmap = await readDoc('docs/architecture/development-roadmap.md');
 
   assert.match(adr, /ADR-32: Active Phase M1 and v0\.1 Scope Lock/i);
@@ -33,8 +33,8 @@ test('active-phase ADR records the phase and scope-lock decision and is indexed'
 
   assert.match(adrIndex, /32_ActivePhase_M1_and_v0\.1_ScopeLock\.md/);
   assert.match(
-    specsIndex,
-    /13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice\.md/,
+    plansIndex,
+    /02_PhaseWorkItem_M1_MemoryVerticalSlice\.md/,
   );
   assert.match(roadmap, /Current Focus \(2026-03-06\)/i);
 });

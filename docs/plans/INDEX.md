@@ -5,4 +5,5 @@ Unlike `docs/specs`, these files are execution plans, not normative product spec
 
 | File | Description |
 | :--- | :---------- |
-| [**01_PhaseWorkItem_M1_MemoryVerticalSlice.md**](./01_PhaseWorkItem_M1_MemoryVerticalSlice.md) | Defines the initial Phase 1 work-item plan with scope, acceptance criteria, and explicit TDD red-test checkpoints. |
+| [**01_DevelopmentStatusChecklist.md**](./01_DevelopmentStatusChecklist.md) | Canonical checklist for tracking current phase/work-item execution status and completion gates. |
+| [**02_PhaseWorkItem_M1_MemoryVerticalSlice.md**](./02_PhaseWorkItem_M1_MemoryVerticalSlice.md) | Defines the initial Phase 1 work-item plan with scope, acceptance criteria, and explicit TDD red-test checkpoints. |

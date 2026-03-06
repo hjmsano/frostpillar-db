@@ -145,3 +145,17 @@ Examples:
 
 - if tests were added after implementation, rewrite sequence by revalidating spec and restoring explicit red-green evidence
 - if usage docs are missing in one language, task remains incomplete
+
+## 8. TypeScript Source Organization Policy
+
+To keep implementation maintainable as milestones grow, contributors MUST apply the
+following code-organization policy for TypeScript source files:
+
+- `src/core/index.ts` MUST be a thin barrel entry (exports only, no domain logic).
+- Domain logic MUST be split by responsibility (for example: datastore orchestration,
+  validation, ordering helpers, and error definitions).
+- Shared domain types SHOULD be declared in dedicated type modules rather than mixed
+  into orchestration classes.
+- Validation and normalization logic SHOULD be implemented as pure functions where practical.
+- Refactors that only change structure (no behavior change) MUST keep tests green and
+  SHOULD be accompanied by module-structure tests.
