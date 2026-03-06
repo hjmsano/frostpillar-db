@@ -15,3 +15,4 @@ This directory contains the detailed technical specifications for each feature a
 | [**09_CapacityAndRetention.md**](./09_CapacityAndRetention.md) | Defines bounded-size behavior, strict limits, and turnover policies.                                        |
 | [**10_FlushAndDurability.md**](./10_FlushAndDurability.md)     | Defines flush triggers, auto-commit scheduling, and crash-safe durability protocols.                        |
 | [**11_BTreeIndexInvariants.md**](./11_BTreeIndexInvariants.md) | Defines structural invariants and split/merge rules for the B+ Tree index.                                  |
+| [**12_DevelopmentWorkflow.md**](./12_DevelopmentWorkflow.md)   | Defines mandatory phase-gate collaboration workflow (intent, spec, tests, implementation, verification).   |
