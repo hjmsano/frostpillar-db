@@ -6,6 +6,13 @@ Last Updated: 2026-03-06
 This document provides an executable, task-level plan for the next implementation cycles.
 It operationalizes `docs/adr/01_DevelopmentPlan.md` and `docs/specs/12_DevelopmentWorkflow.md`.
 
+## Current Focus (2026-03-06)
+
+- Active phase: `Phase 1: Memory Vertical Slice`
+- Scope lock: immediate coding target is `v0.1` deliverables only
+- Work-item spec: `docs/specs/13_EarlyPhaseWorkItem_M1_MemoryVerticalSlice.md`
+- Decision record: `docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md`
+
 ## Phase 0: Foundation Sync
 
 Goal: Ensure execution discipline and baseline quality gates are stable.
