@@ -159,7 +159,7 @@ Requirements:
 - `_id` MUST be deterministically derived from persisted tuple key
   `(timestamp, insertionOrder)` using this canonical string form:
   `"<timestamp>:<insertionOrder>"`.
-- `timestamp` segment MUST be signed base-10 integer text without `+` sign
+- `timestamp` segment MUST be signed base-10 integer text without `+` sign and with no zero-padding
   (for example `-1`, `0`, `1735689600000`).
 - `insertionOrder` segment MUST be unsigned base-10 integer text
   (`0` to `18446744073709551615`) with no zero-padding.
