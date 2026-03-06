@@ -302,6 +302,14 @@ Configuration resolution:
   - `<directory>/<filePrefix><fileName>.fpdb`
   - `filePrefix` default: empty string
   - `fileName` default: `"frostpillar"`
+- File target security constraints:
+  - resolved datastore path MUST stay within current working directory (`process.cwd()`).
+  - this containment rule applies to `filePath`, `target.kind === "path"` and
+    `target.kind === "directory"` resolutions.
+  - `target.filePrefix` and `target.fileName` MUST be file-name fragments and MUST NOT
+    include path separators (`/`, `\\`) or traversal tokens (`..`).
+  - configurations violating containment or fragment constraints MUST fail with
+    `ConfigurationError`.
 
 Physical files:
 

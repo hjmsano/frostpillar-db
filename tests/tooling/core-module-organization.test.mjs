@@ -36,6 +36,7 @@ test('core entry is a thin barrel and split modules exist', async () => {
     'src/core/datastore/config.ts',
     'src/core/datastore/encoding.ts',
     'src/core/datastore/fileBackend.ts',
+    'src/core/datastore/fileBackendController.ts',
     'src/core/datastore/fileBackendSnapshot.ts',
     'src/core/datastore/query.ts',
     'src/core/datastore/types.ts',
@@ -75,4 +76,16 @@ test('core entry is a thin barrel and split modules exist', async () => {
       `${relativePath} must be <= 300 non-empty, non-comment lines, got ${lineCount}.`,
     );
   }
+
+  const datastoreSource = await readFile(
+    resolvePath('src/core/datastore/Datastore.ts'),
+    'utf8',
+  );
+  assert.doesNotMatch(datastoreSource, /\bcreateFileBackend\b/);
+  assert.doesNotMatch(datastoreSource, /\bloadFileSnapshot\b/);
+  assert.doesNotMatch(datastoreSource, /\bwriteInitialFileSnapshot\b/);
+  assert.doesNotMatch(datastoreSource, /\bcommitFileBackendSnapshot\b/);
+  assert.doesNotMatch(datastoreSource, /\breleaseFileLock\b/);
+  assert.doesNotMatch(datastoreSource, /\bsetInterval\s*\(/);
+  assert.match(datastoreSource, /fileBackendController/i);
 });

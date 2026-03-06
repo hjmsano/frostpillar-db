@@ -22,6 +22,10 @@ module.exports = {
       'error',
       { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
     ],
+    'max-lines': [
+      'error',
+      { max: 300, skipBlankLines: true, skipComments: true },
+    ],
     // As per AGENTS.md, "DO NOT use `any` type."
     '@typescript-eslint/no-explicit-any': 'error',
   },

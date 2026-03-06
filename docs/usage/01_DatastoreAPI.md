@@ -228,6 +228,8 @@ Single-writer behavior (multi-process safety):
 - if another process already owns the lock, open fails with `DatabaseLockedError`
   (a subtype of `StorageEngineError`)
 - Frostpillar does not auto-steal a lock in default open flow
+- resolved file datastore path must stay under `process.cwd()`
+- `target.filePrefix` and `target.fileName` must not include path separators or `..`
 
 ### 5.1 File Backend Troubleshooting (Phase 2 baseline)
 
@@ -402,3 +404,5 @@ Notes:
 - invalid timestamp literals raise `QueryValidationError`.
 - Lucene quoted value strings use backslash escaping inside quotes (`\"`, `\\`).
 - SQL `REGEXP` and Lucene `field:/pattern/` follow ECMAScript `RegExp` semantics and `RegExp.test(...)` matching behavior.
+- `regexp` blocks look-around, backreferences, and nested quantifier groups (for example `(a+)+`).
+- `like`/`regexp` patterns are bounded to 256 UTF-16 code units and unsafe patterns raise `QueryValidationError`.

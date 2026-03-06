@@ -157,7 +157,13 @@ Normative behavior:
   - when either side is non-comparable or type-incompatible, predicate evaluates `false`
 - `like` and `regexp` are string predicates:
   - non-string field values evaluate `false`
-  - invalid pattern syntax MUST raise `QueryValidationError`
+  - `like` MUST use bounded wildcard matching semantics (`%` and `_`) without compiling
+    user-provided pattern text into dynamic regular expressions
+  - `like` pattern length MUST be bounded (max 256 UTF-16 code units)
+  - `regexp` pattern syntax errors MUST raise `QueryValidationError`
+  - `regexp` pattern length MUST be bounded (max 256 UTF-16 code units)
+  - `regexp` patterns using backreferences, look-around assertions, or nested quantifier
+    group forms (for example `(a+)+`) MUST be rejected with `QueryValidationError`
 - Missing field vs explicit `null` are distinct states.
 - `exists` is true iff field path exists (including explicit `null` value).
 - `not_exists` is true iff field path does not exist.
