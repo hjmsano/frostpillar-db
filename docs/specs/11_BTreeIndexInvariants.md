@@ -58,6 +58,9 @@ Rules:
 - `SeparatorKey` MUST include both tuple components
   `(timestamp_i64, insertion_order_u64)` and MUST be encoded per
   `docs/specs/03_PageStructure.md` section 9.1.
+- In v0.2, branch routing cell byte layout is
+  `ChildPageID(4) || SeparatorTimestampI64(8) || SeparatorInsertionOrderU64(8)`
+  (all little-endian).
 - For each routing cell `(ChildPageID, SeparatorKey)`:
   - all keys in the subtree rooted at `ChildPageID` MUST be `>= SeparatorKey`
   - if there is a next routing cell with `NextSeparator`, subtree keys MUST be `< NextSeparator`

@@ -56,7 +56,16 @@ On each `insert(record)`:
 
 1. normalize and validate record
 2. compute encoded byte length for capacity accounting
-3. evaluate capacity policy before finalizing mutation
+3. run page-fit boundary check for paged storage
+4. evaluate capacity policy before finalizing mutation
+
+For paged storage, page-fit boundary check MUST run before strict/turnover policy evaluation.
+If encoded record bytes exceed `maxSingleRecordBytes` from
+`docs/specs/03_PageStructure.md` section 2.1:
+
+- operation MUST fail with `QuotaExceededError`
+- no eviction attempt is allowed
+- this rejection is independent from `capacity.policy`
 
 If record encoded size alone is larger than `maxSize`:
 

@@ -36,6 +36,9 @@ Constraints:
 - Predicate type semantics MUST follow `docs/specs/05_QueryEngineContract.md` section 7.
 - `IS NULL` checks explicit `null` only (missing field is not `NULL`).
 - Missing field checks MUST be expressed via `EXISTS(...)` / `NOT EXISTS(...)`.
+- `REGEXP` syntax and runtime behavior MUST follow ECMAScript `RegExp` semantics in TypeScript runtime.
+- `REGEXP` matching behavior MUST be equivalent to `RegExp.test(...)` (partial match; no implicit full-string anchoring).
+- Invalid regex pattern syntax MUST raise `QueryValidationError`.
 
 ### 2.2 Aggregation
 

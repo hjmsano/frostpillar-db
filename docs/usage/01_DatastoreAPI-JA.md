@@ -33,7 +33,13 @@ await db.insert({
 - `string` はタイムゾーン付き ISO 8601 日時である必要があります（例: `Z`, `+09:00`）。
 - canonical timestamp は Unix epoch ミリ秒の JavaScript safe integer（`Number.isSafeInteger`）です。
 - `payload` はネストしたオブジェクトをサポートします。
+- payload の最大ネスト深さは 64 です（payload ルートを深さ 0 として数えます）。
+- payload キーの UTF-8 バイト長上限は 1024 です。
+- payload 文字列値の UTF-8 バイト長上限は 65535 です。
 - 末端の値は `string | number | boolean | null` である必要があります（配列は未対応）。
+- payload の `number` 値は有限値（`Number.isFinite`）である必要があります（`NaN`, `Infinity`, `-Infinity` は拒否されます）。
+- payload の `bigint` 値は v0.2 ではサポートされません。
+- payload で 64-bit 整数の厳密な精度が必要な場合は、10進文字列として保存し、アプリケーション側でパースしてください。
 
 追加の有効例:
 
@@ -151,6 +157,10 @@ const db = new Datastore({
 - `turnover`: 最も古いレコードから決定的順序で削除し、新規レコードを挿入
 - `turnover` の退避削除は内部 delete 経路で実装され、v0.2 では公開 delete API は提供されません
 - 単一レコードが `maxSize` を超える場合は `QuotaExceededError` で失敗
+- v0.2 では単一レコードのページ跨ぎ分割は行いません。1レコードのページ適合上限は
+  `maxSingleRecordBytes = pageSize - 32 - 4` です
+- エンコード済みレコードが `maxSingleRecordBytes` を超える場合は `QuotaExceededError` で失敗
+- payload 文字列バイト長上限とページ適合判定は独立した境界条件です
 - `policy` 省略時のデフォルトは `"strict"`
 
 ## 5. File Backend: パス / ディレクトリ / ファイル名 / プレフィックス
@@ -197,6 +207,8 @@ const db = new Datastore({
 - メタデータファイル: `./data/frostpillar/prod_events.fpdb.meta.json`
 - 世代データファイル: `./data/frostpillar/prod_events.fpdb.g.<commitId>`
 - 有効世代は sidecar の `activeDataFile` で選択されます
+- 各コミット世代では、再起動時のルート参照用に page `0` を固定メタページとして予約します
+- sidecar の `rootPageId` / `nextPageId` / `freePageHeadId` はミラー値であり、page-0 メタページ内容と一致する必要があります
 
 ## 6. Browser Storage: バックエンド選択とフォールバック
 
@@ -278,9 +290,9 @@ const dbLocal = new Datastore({
 ## 8. v0.1以降のネイティブレコード操作（予定）
 
 ```typescript
-const one = await db.getById("rec_001");
-await db.updateById("rec_001", { success: false });
-await db.deleteById("rec_001");
+const one = await db.getById("1735689600000:42");
+await db.updateById("1735689600000:42", { success: false });
+await db.deleteById("1735689600000:42");
 ```
 
 目的:
@@ -288,6 +300,8 @@ await db.deleteById("rec_001");
 - 特定レコードの更新・削除には内部IDが必要
 - 時系列走査向けの `select` は引き続き利用可能
 - 同一 `timestamp` の tie-break は、更新時に元の挿入順を保持することで決定的に維持します
+- 予定されている canonical `_id` 形式はタプル由来の `"<timestamp>:<insertionOrder>"` です
+  （例: `"1735689600000:42"`）
 
 ## 9. オプショナルQuery Engine（SQL/Lucene, 予定）
 
@@ -326,6 +340,15 @@ Canonical field path のエスケープ規則:
 
 - SQL/LuceneモジュールはCore本体とは分離された任意機能です。
 - Frostpillar CoreはTypeScriptネイティブなリクエストを実行します。
+- Lucene の quoted value 文字列は、引用符内でバックスラッシュエスケープ（`\"`, `\\`）を使用します。
+- SQL の `REGEXP` と Lucene の `field:/pattern/` は、ECMAScript `RegExp` と `RegExp.test(...)` の照合挙動に従います。
 - 述語評価では暗黙の型変換（文字列→数値など）を行いません。
 - `field:*` は native `exists`、`NOT field:*` は native `not_exists` に対応します。
+- `field:*` は明示的な `null` 値にも一致します（exists はフィールドパスの存在判定です）。
+- Lucene の `field:null` は native `is_null` に対応します（非quotedキーワード）。
 - `IS NULL` は明示的な `null` のみを対象とし、欠損フィールド判定は `EXISTS(...)` / `NOT EXISTS(...)` を使用します。
+- Lucene の範囲境界は型付きで扱います: 非quoted数値は number、quoted は string、非quoted非数値は string。
+- Lucene の `timestamp` はタイムゾーン付き ISO-8601 日時文字列を受け付けます。
+- 日付のみ `YYYY-MM-DD` は UTC の 00:00:00.000 として解釈します。
+- 有効な Lucene `timestamp` リテラルは評価前に epoch milliseconds へ正規化されます。
+- 不正な timestamp リテラルは `QueryValidationError` になります。

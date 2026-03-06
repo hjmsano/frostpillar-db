@@ -33,7 +33,13 @@ Validation reminders:
 - `string` must be ISO 8601 date-time with timezone (for example `Z` or `+09:00`).
 - canonical timestamp is epoch milliseconds as JavaScript safe integer (`Number.isSafeInteger`).
 - `payload` supports nested objects.
+- maximum payload object nesting depth is 64 (payload root is depth 0).
+- payload key UTF-8 byte length limit is 1024.
+- payload string UTF-8 byte length limit is 65535.
 - leaf values must be `string | number | boolean | null` (arrays are not supported).
+- payload `number` values must be finite (`Number.isFinite`); `NaN`, `Infinity`, and `-Infinity` are rejected.
+- payload `bigint` values are not supported in v0.2.
+- if exact 64-bit integer precision is required in payload, store the value as a decimal string and parse it in application code.
 
 Additional valid example:
 
@@ -151,6 +157,10 @@ Behavior:
 - `turnover`: oldest records are evicted deterministically, then new record is inserted
 - `turnover` eviction is handled by an internal delete path; a public delete API is not available in v0.2
 - if one record is larger than `maxSize`, insert fails with `QuotaExceededError`
+- v0.2 does not split one record across multiple pages; per-page fit boundary is
+  `maxSingleRecordBytes = pageSize - 32 - 4`
+- if encoded record bytes exceed `maxSingleRecordBytes`, insert fails with `QuotaExceededError`
+- payload string-byte limits and page-fit checks are independent boundaries
 - default policy is `"strict"` when omitted
 
 ## 5. File Backend: Path, Directory, File Name, Prefix
@@ -197,6 +207,9 @@ Resolved files in this example:
 - metadata file: `./data/frostpillar/prod_events.fpdb.meta.json`
 - generation data files: `./data/frostpillar/prod_events.fpdb.g.<commitId>`
 - active generation is selected by sidecar field `activeDataFile`
+- each committed generation reserves page `0` as fixed meta page containing
+  `rootPageId`/allocation state for restart
+- sidecar `rootPageId`/`nextPageId`/`freePageHeadId` are mirrored values and must match page-0 meta payload
 
 ## 6. Browser Storage: Backend Choice and Fallback
 
@@ -278,9 +291,9 @@ When `browserStorage: "localStorage"`:
 ## 8. Post-v0.1 Native Record Operations (Planned)
 
 ```typescript
-const one = await db.getById("rec_001");
-await db.updateById("rec_001", { success: false });
-await db.deleteById("rec_001");
+const one = await db.getById("1735689600000:42");
+await db.updateById("1735689600000:42", { success: false });
+await db.deleteById("1735689600000:42");
 ```
 
 Why:
@@ -288,6 +301,8 @@ Why:
 - precise update/delete targeting requires internal record identity
 - time-range `select` remains available for native timeseries scans
 - tie-break order for equal timestamps remains deterministic by preserving original insertion order on updates
+- planned canonical `_id` format is tuple-derived: `"<timestamp>:<insertionOrder>"`
+  (for example `"1735689600000:42"`)
 
 ## 9. Optional Query Engines (SQL / Lucene, Planned)
 
@@ -328,4 +343,13 @@ Notes:
 - Frostpillar core executes TypeScript-native request objects.
 - no implicit cross-type coercion is applied in predicate evaluation.
 - `field:*` maps to native `exists`, and `NOT field:*` maps to native `not_exists`.
+- `field:*` matches explicit `null` values (exists means field path is present).
+- Lucene `field:null` maps to native `is_null` (unquoted keyword).
 - `IS NULL` targets explicit `null`; missing fields must be checked with `EXISTS(...)` / `NOT EXISTS(...)`.
+- Lucene range bounds use typed literals: unquoted numeric -> number, quoted -> string, unquoted non-numeric -> string.
+- Lucene `timestamp` accepts ISO-8601 date-time strings with timezone.
+- Date-only `YYYY-MM-DD` is interpreted as UTC midnight (`YYYY-MM-DDT00:00:00.000Z`).
+- accepted Lucene `timestamp` literals are normalized to epoch milliseconds before evaluation.
+- invalid timestamp literals raise `QueryValidationError`.
+- Lucene quoted value strings use backslash escaping inside quotes (`\"`, `\\`).
+- SQL `REGEXP` and Lucene `field:/pattern/` follow ECMAScript `RegExp` semantics and `RegExp.test(...)` matching behavior.

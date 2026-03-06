@@ -90,8 +90,8 @@ Sidecar schema extension:
   "magic": "FPGE_META",
   "version": 1,
   "activeDataFile": "frostpillar.fpdb.g.0",
-  "rootPageId": 0,
-  "nextPageId": 1,
+  "rootPageId": 1,
+  "nextPageId": 2,
   "freePageHeadId": null,
   "commitId": 0
 }
@@ -102,9 +102,16 @@ Rules:
 - `commitId` MUST be a monotonic non-negative integer incremented per successful durable commit.
 - startup recovery MUST treat sidecar as source of truth for active committed state.
 - `activeDataFile` MUST reference one committed generation file in the same directory.
+- page-0 meta payload (see `docs/specs/03_PageStructure.md` section 8.1) MUST be
+  source of truth for B+ tree root/allocation fields
+  (`rootPageId`, `nextPageId`, `freePageHeadId`).
+- sidecar root/allocation fields are mirrored values for restart precheck and
+  MUST match page-0 meta payload.
 - leftover `*.tmp` files from interrupted commits MUST be ignored or removed during open and MUST NOT become active state automatically.
 - generation files not referenced by sidecar MUST NOT be auto-selected as active state.
 - if sidecar points to a missing/corrupt active generation file, open MUST fail with typed storage corruption error.
+- if sidecar mirrored root/allocation fields do not match page-0 meta payload,
+  open MUST fail with typed storage corruption error.
 
 ## 7. Browser Generation-Swap Rule
 

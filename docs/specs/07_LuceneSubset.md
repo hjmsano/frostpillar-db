@@ -18,6 +18,19 @@ To follow SQL subset requirements, Lucene subset MUST cover equivalent operation
 - `field:value`
 - quoted term: `field:"exact phrase"`
 
+### 2.1.1 Nested Fields
+
+- Dot notation MUST be used for nested object path traversal: `user.profile.country:JP`
+
+### 2.1.2 Quoted Value Escaping
+
+- Quoted value text uses double quotes: `field:"exact phrase"`.
+- Inside quoted value text, backslash escaping MUST support:
+  - `\"` for literal double quote.
+  - `\\` for literal backslash.
+- Unterminated quoted strings, trailing escape, or unsupported escape sequences MUST raise `QueryParseError`.
+- Example: `msg:"Error: \\\"Timeout\\\""` represents value `Error: "Timeout"`.
+
 ### 2.2 Boolean Logic
 
 - `AND`, `OR`, `NOT`
@@ -27,6 +40,9 @@ To follow SQL subset requirements, Lucene subset MUST cover equivalent operation
 
 - inclusive: `field:[a TO b]`
 - exclusive: `field:{a TO b}`
+- Unquoted numeric literals in range bounds MUST be parsed as `number`.
+- Quoted range bounds MUST remain `string` literals.
+- Unquoted non-numeric range bounds MUST remain `string` literals.
 
 ### 2.4 Wildcards
 
@@ -35,13 +51,15 @@ To follow SQL subset requirements, Lucene subset MUST cover equivalent operation
 
 ### 2.5 Null/Missing Handling
 
+- explicit null: `field:null`
 - field exists: `field:*`
 - field missing: `NOT field:*`
 
 Mapping:
 
-- `field:*` MUST map to native `exists` operator.
-- `NOT field:*` MUST map to native `not_exists` operator.
+- `field:null` MUST match records where the field exists and value is explicit `null`.
+- `field:*` MUST map to native `exists` and MUST include explicit `null` values.
+- `NOT field:*` MUST map to native `not_exists` and MUST match only missing fields.
 
 ### 2.6 Regular Expression
 
@@ -74,6 +92,11 @@ Constraints:
 
 - `_id`: internal record id
 - `timestamp`: canonical epoch milliseconds
+  - Query values for `timestamp` MAY be ISO-8601 date-time strings with timezone
+    (for example `2026-01-01T09:00:00+09:00`).
+  - Date-only literals `YYYY-MM-DD` are also allowed and MUST be interpreted as `YYYY-MM-DDT00:00:00.000Z`.
+  - Query engine MUST normalize accepted timestamp strings into Unix epoch milliseconds before execution.
+  - Invalid `timestamp` date strings MUST raise `QueryValidationError`.
 - nested payload fields are addressed with dot path notation (for example `user.profile.country:JP`)
 - dot characters within one key segment MUST be escaped as `\\.` in canonical field path
 - backslash in one key segment MUST be escaped as `\\\\` in canonical field path

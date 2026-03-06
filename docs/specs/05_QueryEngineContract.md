@@ -118,6 +118,10 @@ Normative behavior:
 ## 7. Predicate Type and Null/Missing Semantics (Normative)
 
 - SQL and Lucene modules MUST preserve literal value types in translated `NativeQueryRequest`.
+- For Lucene range bounds, modules MUST preserve literal typing:
+  - unquoted numeric literal -> `number`
+  - quoted literal -> `string`
+  - unquoted non-numeric literal -> `string`
 - Native execution MUST NOT apply implicit cross-type coercion
   (for example string `"10"` to number `10`).
 - For operators other than `exists` / `not_exists`, missing field path evaluates `false`.
@@ -138,6 +142,7 @@ Normative behavior:
 - Lucene subset mapping MUST align with these operators:
   - `field:*` -> `exists`
   - `NOT field:*` -> `not_exists`
+  - `field:null` -> `is_null` (unquoted keyword, case-insensitive)
 
 ## 8. Versioning and Compatibility
 

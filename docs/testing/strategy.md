@@ -65,6 +65,7 @@ TLV codec:
 - deterministic encoding output for equivalent input
 - nested object payload round-trip
 - reject arrays and cyclic payload graphs at encode/validation boundary
+- payload nesting depth boundary (`64` accepted, `65` rejected)
 - timestamp conversion boundary tests (`number` safe integer <-> `Int64` `bigint`)
 - reject decode when `TIMESTAMP_I64` is outside JavaScript safe integer range
 - verify no precision loss at boundary values (`MIN_SAFE_INTEGER`, `MAX_SAFE_INTEGER`)
