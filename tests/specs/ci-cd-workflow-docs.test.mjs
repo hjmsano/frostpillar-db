@@ -43,6 +43,6 @@ test('adr for ci cd workflow policy is recorded and indexed', async () => {
   assert.match(adr, /default branch[\s\S]*build/i);
   assert.match(
     adrIndex,
-    /42_GitHub_Actions_CI_CD_Validation_and_Build_Policy\.md/,
+    /44_GitHub_Actions_CI_CD_Validation_and_Build_Policy\.md/,
   );
 });
