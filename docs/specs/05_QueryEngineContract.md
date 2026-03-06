@@ -20,6 +20,7 @@ In scope:
 - external query-engine modules for SQL subset and Lucene subset
 - translation from query text to native query request
 - execution through `Datastore.queryNative(...)`
+- datastore-integrated language query flow through `Datastore.query(...)`
 
 Out of scope:
 
@@ -56,9 +57,9 @@ import type {
   NativeOrderBy,
   NativeQueryRequest,
   NativeQueryResultRow,
-} from "./04_DatastoreAPI";
+} from './04_DatastoreAPI';
 
-export type QueryLanguage = "sql" | "lucene";
+export type QueryLanguage = 'sql' | 'lucene';
 
 export type QueryExecutionOptions = {
   select?: string[];
@@ -75,6 +76,16 @@ export interface QueryEngineModule {
     queryText: string,
     options?: QueryExecutionOptions,
   ): NativeQueryRequest;
+}
+
+export interface DatastoreQueryIntegration {
+  registerQueryEngine(engine: QueryEngineModule): void;
+  unregisterQueryEngine(language: QueryLanguage): void;
+  query(
+    language: QueryLanguage,
+    queryText: string,
+    options?: QueryExecutionOptions,
+  ): Promise<NativeQueryResultRow[]>;
 }
 
 export async function runQueryWithEngine(
@@ -95,6 +106,16 @@ Normative behavior:
   - Lucene module: `options` is the normative source for aggregation/grouping/output controls.
 - `runQueryWithEngine` MUST execute only through `db.queryNative(...)`.
 - `runQueryWithEngine` MUST call `engine.toNativeQuery(queryText, options)` and pass the result to `db.queryNative(...)` without mutation.
+- Datastore integrated query path MUST call `engine.toNativeQuery(queryText, options)` and execute via `db.queryNative(...)` only.
+- `Datastore.query(...)` and `runQueryWithEngine(...)` MUST be behaviorally equivalent
+  for the same `engine`, `queryText`, and `options`.
+- `Datastore.query(...)` MUST resolve engine registry mapping once per invocation before translation.
+- registry changes after resolution (`registerQueryEngine` / `unregisterQueryEngine`) MUST NOT
+  change engine instance used by that in-flight `Datastore.query(...)` call.
+- if no engine is registered at resolution time, `Datastore.query(...)` MUST fail with `QueryEngineNotRegisteredError`.
+- after datastore close state, `Datastore.query(...)` MUST fail with `ClosedDatastoreError`.
+- after datastore close state, `registerQueryEngine(...)` and `unregisterQueryEngine(...)`
+  MUST fail with `ClosedDatastoreError`.
 - query-engine modules MUST NOT mutate datastore state except via explicit mutation requests supported by native API.
 
 ## 5. Determinism Rules
@@ -118,6 +139,13 @@ Normative behavior:
 ## 7. Predicate Type and Null/Missing Semantics (Normative)
 
 - SQL and Lucene modules MUST preserve literal value types in translated `NativeQueryRequest`.
+- For Lucene range bounds, modules MUST preserve literal typing at parse stage:
+  - unquoted numeric literal -> `number`
+  - quoted literal -> `string`
+  - unquoted non-numeric literal -> `string`
+- For reserved field `timestamp`, modules MUST normalize accepted timestamp-string range
+  bounds to epoch-millisecond `number` values before execution/native comparison.
+- Invalid timestamp-string bounds for `timestamp` range queries MUST raise `QueryValidationError`.
 - Native execution MUST NOT apply implicit cross-type coercion
   (for example string `"10"` to number `10`).
 - For operators other than `exists` / `not_exists`, missing field path evaluates `false`.
@@ -138,6 +166,7 @@ Normative behavior:
 - Lucene subset mapping MUST align with these operators:
   - `field:*` -> `exists`
   - `NOT field:*` -> `not_exists`
+  - `field:null` -> `is_null` (unquoted keyword, case-insensitive)
 
 ## 8. Versioning and Compatibility
 

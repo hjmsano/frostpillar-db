@@ -79,6 +79,7 @@ For `location: "file"`, implementation MUST follow this order:
 5. write sidecar metadata to temporary sidecar (`<dataPath>.meta.json.tmp`) including:
    - incremented `commitId`
    - `activeDataFile` pointing to the generation file name for `<dataPath>.g.<nextCommitId>`
+   - `nextInsertionOrder` serialized as unsigned decimal string
 6. persist sidecar temporary bytes to OS boundary
 7. atomically replace sidecar file with sidecar temporary file (activation point)
 8. optionally remove old unreferenced generation files after successful activation
@@ -90,9 +91,10 @@ Sidecar schema extension:
   "magic": "FPGE_META",
   "version": 1,
   "activeDataFile": "frostpillar.fpdb.g.0",
-  "rootPageId": 0,
-  "nextPageId": 1,
+  "rootPageId": 1,
+  "nextPageId": 2,
   "freePageHeadId": null,
+  "nextInsertionOrder": "0",
   "commitId": 0
 }
 ```
@@ -100,11 +102,20 @@ Sidecar schema extension:
 Rules:
 
 - `commitId` MUST be a monotonic non-negative integer incremented per successful durable commit.
+- `nextInsertionOrder` MUST be a decimal string encoding of unsigned 64-bit integer (`0` to `18446744073709551615`).
+- `nextInsertionOrder` value in activated sidecar is the value that MUST be used as the next insertion-order allocator state after reopen.
 - startup recovery MUST treat sidecar as source of truth for active committed state.
 - `activeDataFile` MUST reference one committed generation file in the same directory.
+- page-0 meta payload (see `docs/specs/03_PageStructure.md` section 8.1) MUST be
+  source of truth for B+ tree root/allocation fields
+  (`rootPageId`, `nextPageId`, `freePageHeadId`).
+- sidecar root/allocation fields are mirrored values for restart precheck and
+  MUST match page-0 meta payload.
 - leftover `*.tmp` files from interrupted commits MUST be ignored or removed during open and MUST NOT become active state automatically.
 - generation files not referenced by sidecar MUST NOT be auto-selected as active state.
 - if sidecar points to a missing/corrupt active generation file, open MUST fail with typed storage corruption error.
+- if sidecar mirrored root/allocation fields do not match page-0 meta payload,
+  open MUST fail with typed storage corruption error.
 
 ## 7. Browser Generation-Swap Rule
 

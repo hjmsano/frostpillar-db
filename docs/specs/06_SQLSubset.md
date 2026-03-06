@@ -36,6 +36,9 @@ Constraints:
 - Predicate type semantics MUST follow `docs/specs/05_QueryEngineContract.md` section 7.
 - `IS NULL` checks explicit `null` only (missing field is not `NULL`).
 - Missing field checks MUST be expressed via `EXISTS(...)` / `NOT EXISTS(...)`.
+- `REGEXP` syntax and runtime behavior MUST follow ECMAScript `RegExp` semantics in TypeScript runtime.
+- `REGEXP` matching behavior MUST be equivalent to `RegExp.test(...)` (partial match; no implicit full-string anchoring).
+- Invalid regex pattern syntax MUST raise `QueryValidationError`.
 
 ### 2.2 Aggregation
 
@@ -74,9 +77,9 @@ Constraints:
 - `timestamp`: canonical epoch milliseconds
 - top-level payload fields are addressed by key names
 - nested payload fields are addressed with dot path notation (for example `user.profile.country`)
-- dot characters within one key segment MUST be expressed as escaped dot in canonical field path (`\\.`)
-- backslash in one key segment MUST be escaped as `\\\\` in canonical field path
-- quoted identifiers MUST preserve literal segment content before canonical escaping
+- canonical payload path escaping MUST follow `docs/specs/05_QueryEngineContract.md` section 6
+  (single source of truth across query engines)
+- quoted identifiers MUST preserve literal segment content before applying canonical escaping
   (example: SQL field `\"service.name\"` maps to canonical `service\\.name`)
 
 ## 5. Error Mapping

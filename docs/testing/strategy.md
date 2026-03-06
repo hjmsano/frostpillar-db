@@ -65,6 +65,7 @@ TLV codec:
 - deterministic encoding output for equivalent input
 - nested object payload round-trip
 - reject arrays and cyclic payload graphs at encode/validation boundary
+- payload nesting depth boundary (`64` accepted, `65` rejected)
 - timestamp conversion boundary tests (`number` safe integer <-> `Int64` `bigint`)
 - reject decode when `TIMESTAMP_I64` is outside JavaScript safe integer range
 - verify no precision loss at boundary values (`MIN_SAFE_INTEGER`, `MAX_SAFE_INTEGER`)
@@ -112,11 +113,15 @@ Memory backend:
 File backend:
 
 - reopen persistence correctness
+- exclusive open-lock acquisition for single-writer safety
+- second-process open on same datastore path must fail with `DatabaseLockedError`
+- lock release on `close()` and subsequent open success
 - header/version mismatch handling
 - incomplete/corrupt file failure behavior
 - `target` resolution tests (`filePath` shorthand vs `target.kind`)
 - directory target naming tests (`directory` + `filePrefix` + `fileName`)
 - sidecar metadata file open/reopen consistency checks
+- sidecar `nextInsertionOrder` persistence and O(1) allocator recovery checks on reopen
 - crash-recovery behavior with interrupted commit temp files (must not become active state)
 - `commitId` monotonicity across successful durable commits
 
@@ -134,6 +139,12 @@ Browser backend (M3+):
 Query-engine modules (M6+):
 
 - SQL/Lucene translation parity for representative filter/aggregate/group/order/limit cases
+- datastore integrated query path (`registerQueryEngine` + `query`) delegates to
+  `toNativeQuery` and `queryNative` without request mutation
+- datastore close-state behavior: `query`, `registerQueryEngine`, `unregisterQueryEngine`
+  fail with `ClosedDatastoreError`
+- in-flight query engine snapshot behavior under concurrent
+  `registerQueryEngine` / `unregisterQueryEngine`
 - canonical field-path escaping for keys containing dot/backslash
 - SQL text vs `QueryExecutionOptions` conflict rejection (`QueryValidationError`)
 - Lucene filter text + `QueryExecutionOptions` mapping correctness

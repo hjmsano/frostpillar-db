@@ -33,7 +33,13 @@ await db.insert({
 - `string` はタイムゾーン付き ISO 8601 日時である必要があります（例: `Z`, `+09:00`）。
 - canonical timestamp は Unix epoch ミリ秒の JavaScript safe integer（`Number.isSafeInteger`）です。
 - `payload` はネストしたオブジェクトをサポートします。
+- payload の最大ネスト深さは 64 です（payload ルートを深さ 0 として数えます）。
+- payload キーの UTF-8 バイト長上限は 1024 です。
+- payload 文字列値の UTF-8 バイト長上限は 65535 です。
 - 末端の値は `string | number | boolean | null` である必要があります（配列は未対応）。
+- payload の `number` 値は有限値（`Number.isFinite`）である必要があります（`NaN`, `Infinity`, `-Infinity` は拒否されます）。
+- payload の `bigint` 値は v0.2 ではサポートされません。
+- payload で 64-bit 整数の厳密な精度が必要な場合は、10進文字列として保存し、アプリケーション側でパースしてください。
 
 追加の有効例:
 
@@ -151,6 +157,10 @@ const db = new Datastore({
 - `turnover`: 最も古いレコードから決定的順序で削除し、新規レコードを挿入
 - `turnover` の退避削除は内部 delete 経路で実装され、v0.2 では公開 delete API は提供されません
 - 単一レコードが `maxSize` を超える場合は `QuotaExceededError` で失敗
+- v0.2 では単一レコードのページ跨ぎ分割は行いません。1レコードのページ適合上限は
+  `maxSingleRecordBytes = pageSize - 32 - 4` です
+- エンコード済みレコードが `maxSingleRecordBytes` を超える場合は `QuotaExceededError` で失敗
+- payload 文字列バイト長上限とページ適合判定は独立した境界条件です
 - `policy` 省略時のデフォルトは `"strict"`
 
 ## 5. File Backend: パス / ディレクトリ / ファイル名 / プレフィックス
@@ -196,7 +206,19 @@ const db = new Datastore({
 
 - メタデータファイル: `./data/frostpillar/prod_events.fpdb.meta.json`
 - 世代データファイル: `./data/frostpillar/prod_events.fpdb.g.<commitId>`
+- ロックファイル（単一 writer 保護）: `./data/frostpillar/prod_events.fpdb.lock`
 - 有効世代は sidecar の `activeDataFile` で選択されます
+- 各コミット世代では、再起動時のルート参照用に page `0` を固定メタページとして予約します
+- sidecar の `rootPageId` / `nextPageId` / `freePageHeadId` はミラー値であり、page-0 メタページ内容と一致する必要があります
+- sidecar の `nextInsertionOrder` には次回採番値を符号なし 10 進文字列で保存し、
+  再オープン時に全件走査なし O(1) で insertion-order 採番状態を復元します
+
+単一 writer の挙動（マルチプロセス安全性）:
+
+- file backend は open 時に排他ロック（`<resolvedDataFilePath>.lock`）を取得します
+- 他プロセスがロックを保持している場合、open は `DatabaseLockedError`
+  （`StorageEngineError` の subtype）で失敗します
+- 既定の open フローでは、既存ロックを自動で奪取しません
 
 ## 6. Browser Storage: バックエンド選択とフォールバック
 
@@ -259,6 +281,9 @@ const dbLocal = new Datastore({
 - 必要チャンク数が `maxChunks` を超える場合は `QuotaExceededError` で失敗します
 - ブラウザのクォータ超過も `QuotaExceededError` で通知されます
 - 新しい世代の書き込み失敗時でも、直前にコミット済みの世代は読み出し可能である必要があります
+- この安全性は世代単位の copy-on-write（新世代チャンクを書き切ってから manifest 切替）で実現します
+- commit 中の一時使用量は `旧世代 + 新世代`（実質2倍近傍）まで増える可能性があります
+- 実運用の目安として、localStorage の実効利用可能量はブラウザクォータのおおむね50%前後です
 
 ## 7. 主なエラー
 
@@ -278,9 +303,9 @@ const dbLocal = new Datastore({
 ## 8. v0.1以降のネイティブレコード操作（予定）
 
 ```typescript
-const one = await db.getById("rec_001");
-await db.updateById("rec_001", { success: false });
-await db.deleteById("rec_001");
+const one = await db.getById("1735689600000:42");
+await db.updateById("1735689600000:42", { success: false });
+await db.deleteById("1735689600000:42");
 ```
 
 目的:
@@ -288,10 +313,13 @@ await db.deleteById("rec_001");
 - 特定レコードの更新・削除には内部IDが必要
 - 時系列走査向けの `select` は引き続き利用可能
 - 同一 `timestamp` の tie-break は、更新時に元の挿入順を保持することで決定的に維持します
+- 予定されている canonical `_id` 形式はタプル由来の `"<timestamp>:<insertionOrder>"` です
+  （例: `"1735689600000:42"`）
 
 ## 9. オプショナルQuery Engine（SQL/Lucene, 予定）
 
 クエリ言語は初期化設定で固定せず、利用側コードで必要なモジュールをimportして使います。
+通常は Query Engine を登録して、Datastore 統合の `query(...)` を使います。
 
 ```typescript
 import { Datastore } from "frostpillar";
@@ -300,12 +328,13 @@ import { luceneEngine } from "frostpillar/query-lucene";
 
 const db = new Datastore({ location: "memory" });
 
-const sqlReq = sqlEngine.toNativeQuery(
-  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
-);
-const sqlResult = await db.queryNative(sqlReq);
+db.registerQueryEngine(sqlEngine);
+db.registerQueryEngine(luceneEngine);
 
-const luceneReq = luceneEngine.toNativeQuery(
+const sqlResult = await db.query("sql", "SELECT COUNT(*) AS c FROM records WHERE status = 404");
+
+const luceneResult = await db.query(
+  "lucene",
   "status:[400 TO 499] AND service:api",
   {
     groupBy: ["service"],
@@ -314,7 +343,15 @@ const luceneReq = luceneEngine.toNativeQuery(
     limit: 10,
   },
 );
-const luceneResult = await db.queryNative(luceneReq);
+```
+
+ネイティブリクエストを明示的に確認したい場合は、従来どおり手動フローも使えます:
+
+```typescript
+const sqlReq = sqlEngine.toNativeQuery(
+  "SELECT COUNT(*) AS c FROM records WHERE status = 404",
+);
+const sqlResultViaNative = await db.queryNative(sqlReq);
 ```
 
 Canonical field path のエスケープ規則:
@@ -326,6 +363,21 @@ Canonical field path のエスケープ規則:
 
 - SQL/LuceneモジュールはCore本体とは分離された任意機能です。
 - Frostpillar CoreはTypeScriptネイティブなリクエストを実行します。
+- `registerQueryEngine(...)` 前に `db.query(language, ...)` を呼ぶと `QueryEngineNotRegisteredError` で失敗します。
+- `db.close()` 後の `db.query(...)` は `ClosedDatastoreError` で失敗します。
+- `db.close()` 後の `registerQueryEngine(...)` / `unregisterQueryEngine(...)` は
+  `ClosedDatastoreError` で失敗します。
+- Query Engine の登録変更は「次に開始される `db.query(...)`」から適用され、
+  既に開始済みの `db.query(...)` は呼び出し時に解決した engine を使い続けます。
+- Lucene の quoted value 文字列は、引用符内でバックスラッシュエスケープ（`\"`, `\\`）を使用します。
+- SQL の `REGEXP` と Lucene の `field:/pattern/` は、ECMAScript `RegExp` と `RegExp.test(...)` の照合挙動に従います。
 - 述語評価では暗黙の型変換（文字列→数値など）を行いません。
 - `field:*` は native `exists`、`NOT field:*` は native `not_exists` に対応します。
+- `field:*` は明示的な `null` 値にも一致します（exists はフィールドパスの存在判定です）。
+- Lucene の `field:null` は native `is_null` に対応します（非quotedキーワード）。
 - `IS NULL` は明示的な `null` のみを対象とし、欠損フィールド判定は `EXISTS(...)` / `NOT EXISTS(...)` を使用します。
+- Lucene の範囲境界は型付きで扱います: 非quoted数値は number、quoted は string、非quoted非数値は string。
+- Lucene の `timestamp` はタイムゾーン付き ISO-8601 日時文字列を受け付けます。
+- 日付のみ `YYYY-MM-DD` は UTC の 00:00:00.000 として解釈します。
+- 有効な Lucene `timestamp` リテラルは評価前に epoch milliseconds へ正規化されます。
+- 不正な timestamp リテラルは `QueryValidationError` になります。

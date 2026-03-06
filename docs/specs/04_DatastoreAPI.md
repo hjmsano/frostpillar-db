@@ -174,8 +174,18 @@ export class Datastore {
 - `record.timestamp` accepts `number | string | Date`.
 - `string` input MUST be ISO 8601 date-time with timezone (`Z` or `+/-HH:MM`).
 - input is normalized to canonical epoch milliseconds before persistence.
+- payload object max nesting depth is `64` (root depth `0`, +1 per nested object).
+- payload key UTF-8 byte length max is `1024` at every nested object level.
+- payload string UTF-8 byte length max is `65535` at every nested object level.
 - datastore MUST assign one immutable internal `insertionOrder` key on first insert and
   persist it as `INSERTION_ORDER_U64` per `docs/specs/02_BinaryEncoding.md`.
+- For paged storage, implementation MUST check encoded record byte length against
+  `maxSingleRecordBytes` from `docs/specs/03_PageStructure.md` section 2.1.
+- If encoded record bytes exceed `maxSingleRecordBytes`, insert MUST reject with `QuotaExceededError`.
+- A record that passes payload string-length validation can still fail page-fit checks
+  because page-fit boundary is computed from configured `pageSize`.
+- This page-fit rejection MUST occur before strict/turnover capacity policy evaluation
+  and MUST NOT attempt turnover eviction.
 - On success, record becomes visible to subsequent `select` in the same instance.
 - MUST reject if datastore has been closed.
 
@@ -279,8 +289,26 @@ Physical files:
 
 - Metadata sidecar file: `${resolvedDataFilePath}.meta.json`.
 - Committed generation data files: `${resolvedDataFilePath}.g.<commitId>`.
+- Lock file (single-writer guard): `${resolvedDataFilePath}.lock`.
 - Implementations MUST use metadata sidecar for format version and durable open/reopen checks.
 - Active generation MUST be resolved by sidecar pointer (`activeDataFile`) only.
+
+### 5.1.0 File Backend Open Lock (Single-Writer Requirement)
+
+- File backend MUST enforce single-writer access across processes for one resolved datastore path.
+- On `Datastore` open/initialization, implementation MUST acquire an exclusive lock before any
+  read/write operation on sidecar or generation files.
+- Exclusive lock MUST be represented by `${resolvedDataFilePath}.lock` and MUST be acquired with
+  an atomic cross-process primitive (for example atomic create with exclusive flag, or equivalent
+  OS-level mechanism).
+- If exclusive lock acquisition fails because another live process already owns the lock, open
+  MUST fail fast and MUST NOT proceed in read-only or best-effort mode.
+- Lock-acquisition failure due to existing owner MUST throw `DatabaseLockedError`, which is a
+  subtype of `StorageEngineError`.
+- On successful `close()`, implementation MUST release the lock and remove lock ownership state.
+- Implementations MUST NOT silently break or steal an existing lock during normal open flow.
+- Implementations MAY provide explicit operator-controlled stale-lock recovery flow, but default
+  open behavior MUST be fail-fast when lock is not acquirable.
 
 ### 5.1.1 Metadata Sidecar Schema
 
@@ -291,20 +319,30 @@ The sidecar file (`.meta.json`) MUST contain the following JSON structure:
   "magic": "FPGE_META",
   "version": 1,
   "activeDataFile": "frostpillar.fpdb.g.0",
-  "rootPageId": 0,
-  "nextPageId": 1,
+  "rootPageId": 1,
+  "nextPageId": 2,
   "freePageHeadId": null,
+  "nextInsertionOrder": "0",
   "commitId": 0
 }
 ```
 
 - `activeDataFile`: file name of the committed generation selected as active.
-- `rootPageId`: Page ID of the B+ Tree root.
-- `nextPageId`: The next ID to assign when allocating a new page.
-- `freePageHeadId`: Page ID of the first free page (linked list via `Next Page ID` in page header), or `null` if none.
+- `rootPageId`: mirrored root page ID from fixed page-0 meta payload.
+- `nextPageId`: mirrored next page ID from fixed page-0 meta payload.
+- `freePageHeadId`: mirrored free-list head page ID from fixed page-0 meta payload, or `null` if none.
+- `nextInsertionOrder`: next allocatable insertion-order value for new inserts.
+  - MUST be serialized as unsigned base-10 integer string (no sign, no zero padding except `"0"`).
+  - MUST satisfy `0 <= value <= 18446744073709551615`.
 - `commitId`: monotonic durable commit sequence number.
 - Commit ordering and restart recovery semantics MUST follow `docs/specs/10_FlushAndDurability.md`.
 - open MUST fail with typed storage corruption error when `activeDataFile` is missing or invalid.
+- page-0 meta layout/source-of-truth rules MUST follow `docs/specs/03_PageStructure.md` section 8.1.
+- on open/restart, implementation MUST initialize insertion-order allocator from `nextInsertionOrder` in O(1) without full data scan.
+- implementation MUST NOT derive allocator state from rightmost/last B+ tree key because key order is `(timestamp, insertionOrder)` and backfilled timestamps break monotonic key-tail inference.
+- on open/restart, implementation MUST validate that sidecar mirrored fields
+  (`rootPageId`, `nextPageId`, `freePageHeadId`) match page-0 meta payload;
+  mismatch MUST fail with typed corruption error.
 
 ### 5.2 Browser Backend (`location: "browser"`)
 
@@ -351,6 +389,12 @@ LocalStorage chunking and quota behavior:
 - Required chunk count MUST be `<= maxChunks`; otherwise datastore MUST reject with `QuotaExceededError`.
 - On browser quota errors from localStorage writes, datastore MUST reject with `QuotaExceededError`.
 - Existing committed generation MUST remain readable when a new generation write fails.
+- To satisfy the previous rule, localStorage commit MUST use generation-level copy-on-write:
+  all chunks for the new generation are written before manifest switch.
+- Until manifest switch and old-generation cleanup complete, transient usage can approach
+  `previousGenerationSize + newGenerationSize` (worst case near 2x steady-state footprint).
+- For capacity planning, effective steady-state writable size in localStorage is typically
+  around half of browser quota when generation sizes are similar.
 - Generation switch order MUST follow `docs/specs/10_FlushAndDurability.md`.
 
 ## 6. Error Taxonomy
@@ -362,6 +406,7 @@ LocalStorage chunking and quota behavior:
 - `UnsupportedBackendError`: config is valid but backend is not available in current milestone.
 - `ClosedDatastoreError`: operation attempted after `close()`.
 - `StorageEngineError`: adapter-level I/O or storage failure.
+- `DatabaseLockedError`: file-backend exclusive lock acquisition failed because datastore is already opened by another process (subtype of `StorageEngineError`).
 - `BinaryFormatError`: binary decode/encode format violation (subtype of `StorageEngineError`).
 - `PageCorruptionError`: page-structure invariant violation (subtype of `StorageEngineError`).
 - `IndexCorruptionError`: B+ tree invariant violation (subtype of `StorageEngineError`).
@@ -382,9 +427,15 @@ The following requirements are mandatory for the next API evolution after the cu
 ### 8.1 Record Identity
 
 - each persisted record MUST have immutable internal `RecordId`.
+- identified record field name MUST be `_id` (see `docs/specs/01_RecordFormat.md`).
 - `RecordId` MUST be generated by Frostpillar (not user-provided on insert).
 - `RecordId` MUST be unique within one datastore.
 - `RecordId` MUST stay stable across commit/reopen for durable backends.
+- `RecordId` MUST be deterministically derived from tuple key
+  `(timestamp, insertionOrder)` using canonical form
+  `"<timestamp>:<insertionOrder>"` (see `docs/specs/01_RecordFormat.md`).
+- `RecordId` MUST NOT be independently persisted as extra top-level TLV field
+  in binary record bytes (see `docs/specs/02_BinaryEncoding.md`).
 
 ### 8.2 Native CRUD Surface
 
@@ -471,7 +522,20 @@ export type NativeQueryRequest = {
   distinct?: boolean;
 };
 
+import type {
+  QueryEngineModule,
+  QueryExecutionOptions,
+  QueryLanguage,
+} from './05_QueryEngineContract';
+
 export class Datastore {
+  registerQueryEngine(engine: QueryEngineModule): void;
+  unregisterQueryEngine(language: QueryLanguage): void;
+  query(
+    language: QueryLanguage,
+    queryText: string,
+    options?: QueryExecutionOptions,
+  ): Promise<NativeQueryResultRow[]>;
   queryNative(request: NativeQueryRequest): Promise<NativeQueryResultRow[]>;
 }
 ```
@@ -485,12 +549,32 @@ Field reference rules for `NativeQueryRequest`:
 - canonical path escaping follows `docs/specs/05_QueryEngineContract.md`.
 - predicate type/null/missing semantics MUST follow `docs/specs/05_QueryEngineContract.md`.
 
+Integrated query-engine usage rules:
+
+- `registerQueryEngine(engine)` MUST register one active module per `engine.language`.
+- registering the same `language` again MUST replace previous module deterministically.
+- `query(language, queryText, options)` MUST resolve the registered module by `language`.
+- if module is missing, `query(...)` MUST fail with `QueryEngineNotRegisteredError`.
+- `query(...)` MUST delegate translation/execution only through:
+  `engine.toNativeQuery(queryText, options)` -> `queryNative(request)`.
+- `query(...)` MUST NOT mutate translated `NativeQueryRequest` before `queryNative(...)`.
+- `query(...)` MUST resolve target engine once at query invocation boundary.
+- `registerQueryEngine(...)` / `unregisterQueryEngine(...)` calls that happen after this resolution
+  MUST NOT alter engine instance used by that in-flight `query(...)` call.
+- engine registration changes MUST apply only to subsequent `query(...)` calls.
+- `unregisterQueryEngine(language)` MUST remove module mapping and MUST be idempotent.
+- `query(...)` MUST fail with `ClosedDatastoreError` if datastore has been closed.
+- `registerQueryEngine(...)` and `unregisterQueryEngine(...)` MUST throw `ClosedDatastoreError`
+  if datastore has been closed.
+
 ## 9. External Query Language Integration Requirements
 
 - SQL subset and Lucene subset support MUST be implemented as optional query-engine modules.
 - Users choose query engine by importing modules in application code.
 - Datastore initialization config MUST NOT require query-language selection.
 - Query-engine modules MUST translate language text into `queryNative(...)` requests.
+- Datastore SHOULD provide integrated language-based query path (`query(...)`) so users are not
+  required to manually handle `NativeQueryRequest` in common flows.
 
 ## 10. Additional Error Taxonomy (Post-Baseline)
 
@@ -498,3 +582,4 @@ Field reference rules for `NativeQueryRequest`:
 - `QueryParseError`: invalid SQL/Lucene syntax in external query-engine modules.
 - `QueryValidationError`: syntactically valid query that violates Frostpillar subset constraints.
 - `UnsupportedQueryFeatureError`: query uses valid language feature outside supported subset.
+- `QueryEngineNotRegisteredError`: requested query language has no registered query-engine module.
