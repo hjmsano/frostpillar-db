@@ -1,7 +1,7 @@
 # 使い方: 段階的コラボレーションワークフロー
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 このガイドは、機能開発を共通のフェーズゲートで進めるための実践手順を説明します。
 基準仕様は `docs/specs/12_DevelopmentWorkflow.md` です。
@@ -68,7 +68,10 @@ Last Updated: 2026-03-06
 
 TypeScript 実装では次の実務ポリシーを適用します。
 
-- `src/core/index.ts` は薄い export バレルとして維持する
-- 大きなファイルは責務ごと（types / errors / validation / ordering / datastore orchestration）に分割する
+- ドメイン境界の `index.ts` は薄く、副作用のない barrel として維持する
+- 複数責務が混在した時点、または 300 行超（空行・コメント除く）で分割する
+- 220 行超（空行・コメント除く）の時点で機能追加前の先行分割を推奨する
+- barrel は明示 re-export（`export { X } from './x'`）を使い、runtime 値での `export *` は避ける
+- ドメイン間 import は公開 barrel 経由、同一ドメイン内は直接 import を基本とする
 - validation / normalization は可能な限り pure function として実装する
-- 同一領域で機能追加する前に、まず振る舞い不変のリファクタを分離する
+- 同一領域で機能追加する前に、まず振る舞い不変の分割リファクタを分離する

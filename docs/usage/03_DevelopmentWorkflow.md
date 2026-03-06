@@ -1,7 +1,7 @@
 # Usage: Phased Collaboration Workflow
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This guide explains how we execute feature work together using a consistent phase gate flow.
 It is based on `docs/specs/12_DevelopmentWorkflow.md`.
@@ -68,7 +68,10 @@ For reviewers, prioritize:
 
 Use the following practical policy for TypeScript implementation files:
 
-- keep `src/core/index.ts` as a thin export barrel
-- split large files by concern (types, errors, validation, ordering, datastore orchestration)
+- keep domain entry `index.ts` files as thin, side-effect-free barrels
+- split a module once it mixes multiple responsibilities or exceeds 300 non-empty lines
+- proactively split before feature work when a module is around 220+ non-empty lines
+- use explicit barrel re-exports (`export { X } from './x'`) and avoid `export *` for runtime symbols
+- route cross-domain imports through public barrels; keep same-domain imports direct
 - keep validation/normalization helpers as pure functions when possible
-- prefer behavior-preserving refactor commits before adding new features in the same area
+- prefer behavior-preserving split refactors before adding new features in the same area

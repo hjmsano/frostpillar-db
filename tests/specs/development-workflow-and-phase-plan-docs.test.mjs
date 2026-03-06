@@ -16,7 +16,10 @@ test('development workflow spec defines mandatory phase gates and task disciplin
   assert.match(workflowSpec, /A phase MUST NOT start implementation tasks before its failing tests are committed/i);
   assert.match(workflowSpec, /Any behavior change MUST update user docs in both English and Japanese/i);
   assert.match(workflowSpec, /TypeScript Source Organization Policy/i);
-  assert.match(workflowSpec, /`src\/core\/index\.ts` MUST be a thin barrel entry/i);
+  assert.match(
+    workflowSpec,
+    /`src\/core\/index\.ts`[\s\S]*MUST stay thin barrel entries with exports only/i,
+  );
 });
 
 test('usage docs provide bilingual workflow guide with checklist and done criteria', async () => {
@@ -27,13 +30,13 @@ test('usage docs provide bilingual workflow guide with checklist and done criter
   assert.match(usageEn, /Session Checklist/i);
   assert.match(usageEn, /Definition of Done \(PR Ready\)/i);
   assert.match(usageEn, /TypeScript Code Organization Policy/i);
-  assert.match(usageEn, /thin export barrel/i);
+  assert.match(usageEn, /thin, side-effect-free barrels/i);
 
   assert.match(usageJa, /段階的コラボレーションワークフロー/);
   assert.match(usageJa, /セッションチェックリスト/);
   assert.match(usageJa, /完了の定義（PR Ready）/);
   assert.match(usageJa, /TypeScript コード構成ポリシー/);
-  assert.match(usageJa, /薄い export バレル/);
+  assert.match(usageJa, /副作用のない barrel/);
 });
 
 test('usage template docs provide spec and ADR templates in English and Japanese', async () => {

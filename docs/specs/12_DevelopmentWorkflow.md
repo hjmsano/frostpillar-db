@@ -1,7 +1,7 @@
 # Specification: Development Workflow
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 ## 1. Purpose
 
@@ -149,13 +149,36 @@ Examples:
 ## 8. TypeScript Source Organization Policy
 
 To keep implementation maintainable as milestones grow, contributors MUST apply the
-following code-organization policy for TypeScript source files:
+following code-organization policy for `src/**/*.ts`.
 
-- `src/core/index.ts` MUST be a thin barrel entry (exports only, no domain logic).
-- Domain logic MUST be split by responsibility (for example: datastore orchestration,
-  validation, ordering helpers, and error definitions).
-- Shared domain types SHOULD be declared in dedicated type modules rather than mixed
-  into orchestration classes.
+### 8.1 Module Granularity and Split Triggers
+
+- Public entry files include `src/core/index.ts`, `src/queryEngine/index.ts`,
+  and `src/storageEngine/index.ts`; they MUST stay thin barrel entries with exports only
+  and no domain logic.
+- A TypeScript module MUST be split when at least one condition is true:
+  - the module mixes multiple high-level responsibilities (for example:
+    orchestration + validation + error taxonomy)
+  - the module exceeds 300 non-empty, non-comment lines
+- Contributors SHOULD split proactively before adding features when a module exceeds
+  220 non-empty, non-comment lines.
+- Shared types SHOULD be declared in dedicated type modules rather than mixed into
+  orchestration classes.
 - Validation and normalization logic SHOULD be implemented as pure functions where practical.
-- Refactors that only change structure (no behavior change) MUST keep tests green and
-  SHOULD be accompanied by module-structure tests.
+
+### 8.2 Barrel Export Policy
+
+- One `index.ts` barrel SHOULD be used at each public package/directory boundary.
+- Barrel files MUST be side-effect free and MUST contain only re-export declarations.
+- Barrels MUST use explicit re-exports (`export { Symbol } from './module'`).
+- Broad wildcard re-export (`export * from`) MUST NOT be used for runtime values.
+- Cross-domain imports (`core` <-> `queryEngine` <-> `storageEngine`) MUST go through
+  each domain's public barrel.
+- Imports within the same domain SHOULD use direct module paths to keep dependency
+  edges explicit.
+
+### 8.3 Refactor Safety
+
+- Structure-only refactors (split/rename/move without behavior change) MUST keep tests green.
+- A change that introduces or updates split rules SHOULD include module-structure tests
+  or import-surface assertions where practical.

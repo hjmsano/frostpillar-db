@@ -1,7 +1,65 @@
-export * from './types.js';
-export * from './errors/index.js';
-export * from './validation/timestamp.js';
-export * from './validation/payload.js';
-export * from './records/ordering.js';
-export * from './datastore/Datastore.js';
-export * from '../queryEngine/runQueryWithEngine.js';
+export type {
+  AutoCommitConfig,
+  AutoCommitFrequencyInput,
+  BrowserDatastoreConfig,
+  BrowserStorageType,
+  ByteSizeInput,
+  CapacityConfig,
+  CapacityPolicy,
+  DatastoreConfig,
+  DatastoreErrorEvent,
+  DatastoreErrorListener,
+  FileDatastoreConfig,
+  FileTargetByDirectoryConfig,
+  FileTargetByPathConfig,
+  FileTargetConfig,
+  IndexedDBConfig,
+  InputTimeseriesRecord,
+  LocalStorageConfig,
+  MemoryDatastoreConfig,
+  NativeAggregateExpression,
+  NativeAggregateFunction,
+  NativeComparisonOperator,
+  NativeFilterExpression,
+  NativeOrderBy,
+  NativeQueryRequest,
+  NativeQueryResultRow,
+  NativeScalar,
+  OpfsConfig,
+  PersistedTimeseriesRecord,
+  QueryEngineModule,
+  QueryExecutionOptions,
+  QueryLanguage,
+  RecordId,
+  RecordPayload,
+  SupportedNestedValue,
+  SupportedValue,
+  TimeRangeQuery,
+  TimeseriesRecord,
+  TimestampInput,
+} from './types.js';
+
+export {
+  BinaryFormatError,
+  ClosedDatastoreError,
+  ConfigurationError,
+  DatabaseLockedError,
+  IndexCorruptionError,
+  InvalidQueryRangeError,
+  PageCorruptionError,
+  QueryEngineNotRegisteredError,
+  QueryParseError,
+  QueryValidationError,
+  QuotaExceededError,
+  StorageEngineError,
+  TimestampParseError,
+  UnsupportedBackendError,
+  UnsupportedQueryFeatureError,
+  ValidationError,
+} from './errors/index.js';
+
+export { normalizeTimestampInput } from './validation/timestamp.js';
+export { clonePayloadObject, validateAndNormalizePayload } from './validation/payload.js';
+export { compareByLogicalOrder, toPublicRecord } from './records/ordering.js';
+export { Datastore } from './datastore/Datastore.js';
+export { runQueryWithEngine } from '../queryEngine/runQueryWithEngine.js';
