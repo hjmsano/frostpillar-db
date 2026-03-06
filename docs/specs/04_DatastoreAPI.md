@@ -149,6 +149,7 @@ Notes:
 - `location: "browser"` remains out of current runtime slice and MUST throw `UnsupportedBackendError`.
 - `filePath` is a backward-compatible shorthand for `target: { kind: "path", filePath }`.
 - `filePath` and `target` MUST NOT be specified together.
+- Delivery artifact/profile obligations are defined separately in `docs/specs/13_DistributionDeliveryTracks.md`.
 
 ### 2.1 Runtime Slice Status (Normative, 2026-03-07)
 

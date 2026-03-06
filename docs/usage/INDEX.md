@@ -12,3 +12,5 @@ This directory contains user-facing usage guides and examples in English and Jap
 | [**03_DevelopmentWorkflow-JA.md**](./03_DevelopmentWorkflow-JA.md) | Japanese | 段階的な共同開発フローと PR Ready の完了条件。 |
 | [**04_DevelopmentTemplates.md**](./04_DevelopmentTemplates.md) | English | Reusable templates for spec updates, ADR writing, and phased task breakdown. |
 | [**04_DevelopmentTemplates-JA.md**](./04_DevelopmentTemplates-JA.md) | Japanese | spec 更新、ADR 記述、段階別タスク分解の再利用テンプレート。 |
+| [**05_DeliveryOptions.md**](./05_DeliveryOptions.md) | English | Delivery-track guidance for NPM install and browser bundle profile selection. |
+| [**05_DeliveryOptions-JA.md**](./05_DeliveryOptions-JA.md) | Japanese | NPM 配布とブラウザバンドルプロファイル選択のガイド。 |

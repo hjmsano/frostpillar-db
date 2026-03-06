@@ -99,6 +99,26 @@ Exit criteria:
 
 - query and capacity behavior stays deterministic under mixed workloads
 
+## Phase 4: Distribution Delivery Tracks
+
+Goal: Make Frostpillar shippable through both package-manager and browser-first delivery styles.
+
+Entry criteria:
+
+- Phase 3 exit criteria met
+
+Expected activities:
+
+- harden installable NPM package delivery contract
+- produce browser bundle artifacts for at least `core` profile
+- define and document bundle profile matrix (`core`, adapter-specific, or `full-browser`)
+- add smoke verification for NPM install/import and browser bundle load paths
+
+Exit criteria:
+
+- dual-track delivery artifacts are test-proven and documented in EN/JA usage docs
+- delivery policy and execution plan stay aligned with spec/ADR/plans artifacts
+
 ## Phase Governance
 
 For every phase:

@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 2: File Durability Slice (completed 2026-03-07)`
-- Active work item: `docs/plans/04_PhaseWorkItem_M2_FileDurabilitySlice.md`
-- Scope note: M2 durability obligations are closed; next execution can move to Phase 3 tasks.
+- Active phase: `Phase 3: Query and Capacity Hardening (in progress)`
+- Active work item: `docs/plans/05_PhaseWorkItem_P4_DistributionDeliveryTracks.md (queued after Phase 3 exit)`
+- Scope note: dual delivery requirement (NPM + browser bundle profiles) is clarified in spec/ADR and queued for dedicated implementation planning.
 
 ## 4. Phase Status Checklist
 
@@ -65,6 +65,14 @@ Use it to track progress across phases and the currently active work item.
 - [ ] add regression suites for scheduler coalescing and error-channel propagation
 - [ ] exit criteria met: query and capacity behavior stays deterministic under mixed workloads
 
+### Phase 4: Distribution Delivery Tracks
+
+- [ ] define release-ready NPM delivery contract with smoke verification
+- [ ] produce browser bundle artifacts for mandatory `core` profile
+- [ ] define and verify bundle profile matrix for optional browser adapters
+- [ ] publish EN/JA usage guidance for delivery/profile selection
+- [ ] exit criteria met: dual delivery tracks are test-proven and documented
+
 ## 5. Active Work-Item Checklist (M1 Historical)
 
 Use this section as the day-to-day completion board for the current work item.
@@ -96,3 +104,12 @@ Use this section as the day-to-day completion board for the current work item.
 - [x] durable default auto-commit behavior validated when omitted and when `autoCommit: {}` is used
 - [x] restart behavior validates sidecar/page-0 mirrored metadata consistency
 - [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 8. Active Work-Item Checklist (P4 Distribution Delivery Tracks)
+
+- [ ] npm install/import smoke tests added first and confirmed red
+- [ ] browser bundle `core` profile smoke test added first and confirmed red
+- [ ] package artifact/export shape implemented and verified
+- [ ] bundle profile artifacts and metadata matrix implemented and verified
+- [ ] EN/JA usage docs updated for delivery choices
+- [ ] full verification green (`pnpm test --run`, `pnpm check`)
