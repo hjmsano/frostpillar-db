@@ -20,20 +20,48 @@ import type {
   PersistedTimeseriesRecord,
 } from '../types.js';
 
+interface QueryEvaluationContext {
+  regexpByPattern: Map<string, RegExp>;
+}
+
+const readOrCompileRegexp = (
+  pattern: string,
+  context: QueryEvaluationContext,
+): RegExp => {
+  const cached = context.regexpByPattern.get(pattern);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  try {
+    validateRegexpPattern(pattern);
+    const compiled = new RegExp(pattern, 'u');
+    context.regexpByPattern.set(pattern, compiled);
+    return compiled;
+  } catch {
+    throw new QueryValidationError('Invalid regexp pattern.');
+  }
+};
+
 const evaluateFilterExpression = (
   record: PersistedTimeseriesRecord,
   expression: NativeFilterExpression,
+  context: QueryEvaluationContext,
 ): boolean => {
   if ('and' in expression) {
-    return expression.and.every((item) => evaluateFilterExpression(record, item));
+    return expression.and.every((item) =>
+      evaluateFilterExpression(record, item, context),
+    );
   }
 
   if ('or' in expression) {
-    return expression.or.some((item) => evaluateFilterExpression(record, item));
+    return expression.or.some((item) =>
+      evaluateFilterExpression(record, item, context),
+    );
   }
 
   if ('not' in expression) {
-    return !evaluateFilterExpression(record, expression.not);
+    return !evaluateFilterExpression(record, expression.not, context);
   }
 
   const fieldValue = readFieldValue(record, expression.field);
@@ -92,13 +120,8 @@ const evaluateFilterExpression = (
     if (typeof fieldValue !== 'string' || typeof expression.value !== 'string') {
       return false;
     }
-    try {
-      validateRegexpPattern(expression.value);
-      const regex = new RegExp(expression.value, 'u');
-      return regex.test(fieldValue);
-    } catch {
-      throw new QueryValidationError('Invalid regexp pattern.');
-    }
+    const regex = readOrCompileRegexp(expression.value, context);
+    return regex.test(fieldValue);
   }
   if (
     operator === '>' ||
@@ -183,11 +206,15 @@ export const executeNativeQuery = (
     }
   }
 
+  const evaluationContext: QueryEvaluationContext = {
+    regexpByPattern: new Map<string, RegExp>(),
+  };
+
   const filtered = records.filter((record) => {
     if (request.where === undefined) {
       return true;
     }
-    return evaluateFilterExpression(record, request.where);
+    return evaluateFilterExpression(record, request.where, evaluationContext);
   });
 
   const sorted = filtered.sort((left, right) => {

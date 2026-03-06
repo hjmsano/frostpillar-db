@@ -1,7 +1,7 @@
 # Usage: Datastore API (v0.2 draft)
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This guide explains the user-facing API described in `docs/specs/04_DatastoreAPI.md`.
 
@@ -406,3 +406,5 @@ Notes:
 - SQL `REGEXP` and Lucene `field:/pattern/` follow ECMAScript `RegExp` semantics and `RegExp.test(...)` matching behavior.
 - `regexp` blocks look-around, backreferences, and nested quantifier groups (for example `(a+)+`).
 - `like`/`regexp` patterns are bounded to 256 UTF-16 code units and unsafe patterns raise `QueryValidationError`.
+- `like` matching keeps additional working memory proportional to pattern length.
+- each validated `regexp` predicate pattern is compiled once per native query execution and reused for all candidate records.

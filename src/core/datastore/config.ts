@@ -215,6 +215,5 @@ export const resolveFileDataPath = (config: FileDatastoreConfig): string => {
       'Resolved file path must stay within target.directory.',
     );
   }
-  ensurePathWithinWorkingDirectory(resolvedFilePath, 'target.directory');
   return resolvedFilePath;
 };

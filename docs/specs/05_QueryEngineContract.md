@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This document defines the contract between Frostpillar core and optional query-engine modules.
 
@@ -160,10 +160,15 @@ Normative behavior:
   - `like` MUST use bounded wildcard matching semantics (`%` and `_`) without compiling
     user-provided pattern text into dynamic regular expressions
   - `like` pattern length MUST be bounded (max 256 UTF-16 code units)
+  - `like` matching implementation MUST keep additional working memory proportional to
+    pattern length (O(pattern length)); it MUST NOT allocate a full
+    `(text length + 1) * (pattern length + 1)` table
   - `regexp` pattern syntax errors MUST raise `QueryValidationError`
   - `regexp` pattern length MUST be bounded (max 256 UTF-16 code units)
   - `regexp` patterns using backreferences, look-around assertions, or nested quantifier
     group forms (for example `(a+)+`) MUST be rejected with `QueryValidationError`
+  - for one native query execution, each validated `regexp` predicate pattern MUST be
+    compiled once and reused across candidate-record evaluation
 - Missing field vs explicit `null` are distinct states.
 - `exists` is true iff field path exists (including explicit `null` value).
 - `not_exists` is true iff field path does not exist.

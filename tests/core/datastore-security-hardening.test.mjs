@@ -87,6 +87,48 @@ test('queryNative like/regexp enforce pattern safety guardrails', async () => {
   );
 });
 
+test('queryNative regexp compiles pattern once per query execution', async () => {
+  const { Datastore } = await loadCore();
+  const datastore = new Datastore({ location: 'memory' });
+
+  await datastore.insert({
+    timestamp: 1735689600000,
+    payload: { code: 'sensor-41' },
+  });
+  await datastore.insert({
+    timestamp: 1735689600001,
+    payload: { code: 'sensor-42' },
+  });
+  await datastore.insert({
+    timestamp: 1735689600002,
+    payload: { code: 'sensor-43' },
+  });
+
+  const OriginalRegExp = globalThis.RegExp;
+  let compileCount = 0;
+  globalThis.RegExp = class RegExpSpy extends OriginalRegExp {
+    constructor(pattern, flags) {
+      compileCount += 1;
+      super(pattern, flags);
+    }
+  };
+
+  try {
+    const rows = await datastore.queryNative({
+      where: {
+        field: 'code',
+        operator: 'regexp',
+        value: '^sensor-[0-9]+$',
+      },
+    });
+    assert.equal(rows.length, 3);
+  } finally {
+    globalThis.RegExp = OriginalRegExp;
+  }
+
+  assert.equal(compileCount, 1);
+});
+
 test('file datastore rejects path traversal and path escape outside cwd', async () => {
   const { ConfigurationError, Datastore } = await loadCore();
   const sandbox = await createSandboxDirectory('security-hardening-paths');
@@ -138,9 +180,5 @@ test('file datastore rejects path traversal and path escape outside cwd', async 
     );
   } finally {
     await rm(sandbox, { recursive: true, force: true });
-    await rm(escapedTargetPath, { force: true });
-    await rm(`${escapedTargetPath}.lock`, { force: true });
-    await rm(`${escapedTargetPath}.meta.json`, { force: true });
-    await rm(`${escapedTargetPath}.g.0`, { force: true });
   }
 });

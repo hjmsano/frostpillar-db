@@ -18,36 +18,41 @@ export const matchLikePattern = (value: string, pattern: string): boolean => {
   const patternTokens = Array.from(pattern);
   const rowCount = textTokens.length + 1;
   const columnCount = patternTokens.length + 1;
-  const dp: boolean[][] = Array.from({ length: rowCount }, (): boolean[] => {
-    return Array<boolean>(columnCount).fill(false);
-  });
+  const previousRow: boolean[] = Array<boolean>(columnCount).fill(false);
+  const currentRow: boolean[] = Array<boolean>(columnCount).fill(false);
 
-  dp[0][0] = true;
+  previousRow[0] = true;
   for (let column = 1; column < columnCount; column += 1) {
     if (patternTokens[column - 1] === '%') {
-      dp[0][column] = dp[0][column - 1];
+      previousRow[column] = previousRow[column - 1];
     }
   }
 
   for (let row = 1; row < rowCount; row += 1) {
+    currentRow[0] = false;
     for (let column = 1; column < columnCount; column += 1) {
       const token = patternTokens[column - 1];
       if (token === '%') {
-        dp[row][column] = dp[row][column - 1] || dp[row - 1][column];
+        currentRow[column] = currentRow[column - 1] || previousRow[column];
         continue;
       }
 
       if (token === '_') {
-        dp[row][column] = dp[row - 1][column - 1];
+        currentRow[column] = previousRow[column - 1];
         continue;
       }
 
-      dp[row][column] =
-        dp[row - 1][column - 1] && textTokens[row - 1] === token;
+      currentRow[column] =
+        previousRow[column - 1] && textTokens[row - 1] === token;
+    }
+
+    for (let column = 0; column < columnCount; column += 1) {
+      previousRow[column] = currentRow[column];
+      currentRow[column] = false;
     }
   }
 
-  return dp[rowCount - 1][columnCount - 1];
+  return previousRow[columnCount - 1];
 };
 
 interface GroupPatternState {
