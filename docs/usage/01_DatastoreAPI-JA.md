@@ -1,7 +1,7 @@
 # 使い方: Datastore API (v0.2 draft)
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 このドキュメントは `docs/specs/04_DatastoreAPI.md` で定義した公開 API の利用方法を説明します。
 
@@ -227,6 +227,8 @@ const db = new Datastore({
 - 他プロセスがロックを保持している場合、open は `DatabaseLockedError`
   （`StorageEngineError` の subtype）で失敗します
 - 既定の open フローでは、既存ロックを自動で奪取しません
+- file backend の解決後パスは `process.cwd()` 配下に制限されます
+- `target.filePrefix` と `target.fileName` にパス区切り文字や `..` は指定できません
 
 ### 5.1 File Backend トラブルシューティング（Phase 2 baseline）
 
@@ -392,6 +394,10 @@ Canonical field path のエスケープ規則:
   既に開始済みの `db.query(...)` は呼び出し時に解決した engine を使い続けます。
 - Lucene の quoted value 文字列は、引用符内でバックスラッシュエスケープ（`\"`, `\\`）を使用します。
 - SQL の `REGEXP` と Lucene の `field:/pattern/` は、ECMAScript `RegExp` と `RegExp.test(...)` の照合挙動に従います。
+- `regexp` は look-around・backreference・入れ子量指定グループ（例: `(a+)+`）を拒否します。
+- `like`/`regexp` のパターン長は 256 UTF-16 code units に制限され、不正/危険パターンは `QueryValidationError` になります。
+- `like` の照合は、追加作業メモリをパターン長に比例する範囲へ制限します。
+- 検証済み `regexp` パターンは 1 回の native query 実行につき 1 回だけコンパイルし、候補レコード評価で再利用します。
 - 述語評価では暗黙の型変換（文字列→数値など）を行いません。
 - `field:*` は native `exists`、`NOT field:*` は native `not_exists` に対応します。
 - `field:*` は明示的な `null` 値にも一致します（exists はフィールドパスの存在判定です）。

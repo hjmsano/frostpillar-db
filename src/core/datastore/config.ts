@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { ConfigurationError } from '../errors/index.js';
 import type {
   AutoCommitConfig,
@@ -6,6 +6,48 @@ import type {
   FileDatastoreConfig,
 } from '../types.js';
 import type { CapacityState, FileAutoCommitState } from './types.js';
+
+const containsPathTraversalToken = (value: string): boolean => {
+  return value.includes('..');
+};
+
+const hasPathSeparator = (value: string): boolean => {
+  return value.includes('/') || value.includes('\\');
+};
+
+const isPathWithinBaseDirectory = (
+  targetPath: string,
+  baseDirectory: string,
+): boolean => {
+  const relativePath = relative(baseDirectory, targetPath);
+  return (
+    relativePath === '' ||
+    (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+  );
+};
+
+const ensurePathWithinWorkingDirectory = (
+  targetPath: string,
+  optionName: string,
+): void => {
+  const workingDirectory = resolve(process.cwd());
+  if (!isPathWithinBaseDirectory(targetPath, workingDirectory)) {
+    throw new ConfigurationError(
+      `${optionName} must stay within process.cwd(): ${workingDirectory}`,
+    );
+  }
+};
+
+const ensureSafeFileNameFragment = (
+  value: string,
+  optionName: string,
+): void => {
+  if (hasPathSeparator(value) || containsPathTraversalToken(value)) {
+    throw new ConfigurationError(
+      `${optionName} must not contain path separators or traversal tokens.`,
+    );
+  }
+};
 
 const normalizeByteSizeInput = (value: CapacityConfig['maxSize']): number => {
   if (typeof value === 'number') {
@@ -143,7 +185,9 @@ export const resolveFileDataPath = (config: FileDatastoreConfig): string => {
   }
 
   if (config.filePath !== undefined) {
-    return resolve(config.filePath);
+    const resolvedFilePath = resolve(config.filePath);
+    ensurePathWithinWorkingDirectory(resolvedFilePath, 'filePath');
+    return resolvedFilePath;
   }
 
   if (config.target === undefined) {
@@ -151,11 +195,25 @@ export const resolveFileDataPath = (config: FileDatastoreConfig): string => {
   }
 
   if (config.target.kind === 'path') {
-    return resolve(config.target.filePath);
+    const resolvedFilePath = resolve(config.target.filePath);
+    ensurePathWithinWorkingDirectory(resolvedFilePath, 'target.filePath');
+    return resolvedFilePath;
   }
 
   const directoryPath = resolve(config.target.directory);
+  ensurePathWithinWorkingDirectory(directoryPath, 'target.directory');
   const filePrefix = config.target.filePrefix ?? '';
   const fileName = config.target.fileName ?? 'frostpillar';
-  return join(directoryPath, `${filePrefix}${fileName}.fpdb`);
+  ensureSafeFileNameFragment(filePrefix, 'target.filePrefix');
+  ensureSafeFileNameFragment(fileName, 'target.fileName');
+
+  const resolvedFilePath = resolve(
+    join(directoryPath, `${filePrefix}${fileName}.fpdb`),
+  );
+  if (!isPathWithinBaseDirectory(resolvedFilePath, directoryPath)) {
+    throw new ConfigurationError(
+      'Resolved file path must stay within target.directory.',
+    );
+  }
+  return resolvedFilePath;
 };

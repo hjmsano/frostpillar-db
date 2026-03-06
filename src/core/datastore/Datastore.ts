@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import {
   ClosedDatastoreError,
   ConfigurationError,
@@ -11,7 +10,6 @@ import { compareByLogicalOrder, toPublicRecord } from '../records/ordering.js';
 import type {
   DatastoreConfig,
   DatastoreErrorListener,
-  FileDatastoreConfig,
   InputTimeseriesRecord,
   NativeQueryRequest,
   NativeQueryResultRow,
@@ -26,21 +24,14 @@ import { emitAutoCommitErrorToListeners } from './autoCommit.js';
 import { validateAndNormalizePayload } from '../validation/payload.js';
 import { normalizeTimestampInput } from '../validation/timestamp.js';
 import { enforceCapacityPolicy } from './capacity.js';
-import { parseCapacityConfig, parseFileAutoCommitConfig } from './config.js';
+import { parseCapacityConfig } from './config.js';
 import { computeRecordEncodedBytes } from './encoding.js';
-import { createFileBackend, releaseFileLock } from './fileBackend.js';
 import {
-  commitFileBackendSnapshot,
-  loadFileSnapshot,
-  writeInitialFileSnapshot,
-} from './fileBackendSnapshot.js';
+  FileBackendController,
+  type FileBackendControllerSnapshot,
+} from './fileBackendController.js';
 import { executeNativeQuery } from './query.js';
-import type {
-  CapacityState,
-  FileAutoCommitState,
-  FileBackendState,
-  IntervalTimerHandle,
-} from './types.js';
+import type { CapacityState } from './types.js';
 
 export class Datastore {
   private readonly errorListeners: Set<DatastoreErrorListener>;
@@ -50,10 +41,7 @@ export class Datastore {
   private nextInsertionOrder: bigint;
   private currentSizeBytes: number;
   private closed: boolean;
-  private fileBackend: FileBackendState | null;
-  private readonly fileAutoCommit: FileAutoCommitState | null;
-  private pendingAutoCommitBytes: number;
-  private fileAutoCommitTimer: IntervalTimerHandle | null;
+  private fileBackendController: FileBackendController | null;
 
   constructor(config: DatastoreConfig) {
     this.errorListeners = new Set<DatastoreErrorListener>();
@@ -63,10 +51,7 @@ export class Datastore {
     this.nextInsertionOrder = 0n;
     this.currentSizeBytes = 0;
     this.closed = false;
-    this.fileBackend = null;
-    this.fileAutoCommit = null;
-    this.pendingAutoCommitBytes = 0;
-    this.fileAutoCommitTimer = null;
+    this.fileBackendController = null;
 
     if (config.location === 'memory') {
       if (config.autoCommit !== undefined) {
@@ -78,9 +63,20 @@ export class Datastore {
     }
 
     if (config.location === 'file') {
-      this.fileAutoCommit = parseFileAutoCommitConfig(config.autoCommit);
-      this.initializeFileBackend(config);
-      this.startFileAutoCommitSchedule();
+      const fileBackendCreateResult = FileBackendController.create({
+        config,
+        getSnapshot: (): FileBackendControllerSnapshot => ({
+          records: this.records,
+          nextInsertionOrder: this.nextInsertionOrder,
+        }),
+        onAutoCommitError: (error: unknown): void => {
+          emitAutoCommitErrorToListeners(this.errorListeners, error);
+        },
+      });
+      this.records.push(...fileBackendCreateResult.initialRecords);
+      this.currentSizeBytes = fileBackendCreateResult.initialCurrentSizeBytes;
+      this.nextInsertionOrder = fileBackendCreateResult.initialNextInsertionOrder;
+      this.fileBackendController = fileBackendCreateResult.controller;
       return;
     }
 
@@ -125,23 +121,7 @@ export class Datastore {
       });
       this.currentSizeBytes += encodedBytes;
       this.nextInsertionOrder += 1n;
-
-      if (this.fileBackend !== null && this.fileAutoCommit !== null) {
-        if (this.fileAutoCommit.frequency === 'immediate') {
-          this.commitFileBackend();
-          this.pendingAutoCommitBytes = 0;
-          return;
-        }
-
-        this.pendingAutoCommitBytes += encodedBytes;
-        if (
-          this.fileAutoCommit.maxPendingBytes !== null &&
-          this.pendingAutoCommitBytes >= this.fileAutoCommit.maxPendingBytes
-        ) {
-          this.commitFileBackend();
-          this.pendingAutoCommitBytes = 0;
-        }
-      }
+      this.fileBackendController?.handleRecordAppended(encodedBytes);
     });
   }
 
@@ -201,10 +181,7 @@ export class Datastore {
   public commit(): Promise<void> {
     return Promise.resolve().then((): void => {
       this.ensureOpen();
-      if (this.fileBackend !== null) {
-        this.commitFileBackend();
-        this.pendingAutoCommitBytes = 0;
-      }
+      this.fileBackendController?.commitNow();
     });
   }
 
@@ -233,78 +210,13 @@ export class Datastore {
         return;
       }
 
-      this.stopFileAutoCommitSchedule();
-      if (this.fileBackend?.lockAcquired === true) {
-        releaseFileLock(this.fileBackend);
-      }
+      this.fileBackendController?.close();
+      this.fileBackendController = null;
 
       this.closed = true;
       this.queryEngines.clear();
       this.errorListeners.clear();
     });
-  }
-
-  private initializeFileBackend(config: FileDatastoreConfig): void {
-    const backend = createFileBackend(config);
-    if (!existsSync(backend.sidecarPath)) {
-      writeInitialFileSnapshot(backend, this.nextInsertionOrder);
-      this.fileBackend = backend;
-      return;
-    }
-
-    const loaded = loadFileSnapshot(backend);
-    this.records.length = 0;
-    this.records.push(...loaded.records);
-    this.currentSizeBytes = loaded.currentSizeBytes;
-    this.nextInsertionOrder = loaded.nextInsertionOrder;
-    this.fileBackend = backend;
-  }
-
-  private commitFileBackend(): void {
-    if (this.fileBackend === null) {
-      return;
-    }
-
-    commitFileBackendSnapshot(
-      this.fileBackend,
-      this.records,
-      this.nextInsertionOrder,
-    );
-  }
-
-  private startFileAutoCommitSchedule(): void {
-    if (this.fileAutoCommit === null || this.fileAutoCommit.frequency !== 'scheduled') {
-      return;
-    }
-    if (this.fileAutoCommit.intervalMs === null) {
-      return;
-    }
-
-    this.fileAutoCommitTimer = setInterval((): void => {
-      this.handleScheduledAutoCommitTick();
-    }, this.fileAutoCommit.intervalMs);
-  }
-
-  private stopFileAutoCommitSchedule(): void {
-    if (this.fileAutoCommitTimer === null) {
-      return;
-    }
-
-    clearInterval(this.fileAutoCommitTimer);
-    this.fileAutoCommitTimer = null;
-  }
-
-  private handleScheduledAutoCommitTick(): void {
-    if (this.closed || this.fileBackend === null || this.pendingAutoCommitBytes <= 0) {
-      return;
-    }
-
-    try {
-      this.commitFileBackend();
-      this.pendingAutoCommitBytes = 0;
-    } catch (error) {
-      emitAutoCommitErrorToListeners(this.errorListeners, error);
-    }
   }
 
   private ensureOpen(): void {

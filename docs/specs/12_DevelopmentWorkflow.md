@@ -165,6 +165,9 @@ following code-organization policy for `src/**/*.ts`.
 - Shared types SHOULD be declared in dedicated type modules rather than mixed into
   orchestration classes.
 - Validation and normalization logic SHOULD be implemented as pure functions where practical.
+- Public orchestration classes (for example `Datastore`) SHOULD delegate backend-specific
+  lifecycle logic (open/load/commit/schedule/close) to dedicated modules instead of
+  embedding adapter/snapshot operations directly.
 
 ### 8.2 Barrel Export Policy
 

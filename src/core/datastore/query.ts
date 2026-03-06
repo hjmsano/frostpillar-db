@@ -3,152 +3,65 @@ import {
   UnsupportedQueryFeatureError,
 } from '../errors/index.js';
 import { compareByLogicalOrder } from '../records/ordering.js';
+import {
+  ensurePatternLengthBounded,
+  matchLikePattern,
+  validateRegexpPattern,
+} from './queryPatternSafety.js';
+import {
+  compareNullableScalar,
+  isNativeScalar,
+  readFieldValue,
+} from './queryFieldValue.js';
 import type {
   NativeFilterExpression,
   NativeQueryRequest,
   NativeQueryResultRow,
-  NativeScalar,
   PersistedTimeseriesRecord,
 } from '../types.js';
 
-const isNativeScalar = (value: unknown): value is NativeScalar => {
-  return (
-    value === null ||
-    typeof value === 'string' ||
-    typeof value === 'number' ||
-    typeof value === 'boolean'
-  );
-};
+interface QueryEvaluationContext {
+  regexpByPattern: Map<string, RegExp>;
+}
 
-const splitCanonicalPath = (fieldPath: string): string[] => {
-  const segments: string[] = [];
-  let current = '';
-  let escape = false;
-
-  for (const char of fieldPath) {
-    if (escape) {
-      current += char;
-      escape = false;
-      continue;
-    }
-
-    if (char === '\\') {
-      escape = true;
-      continue;
-    }
-
-    if (char === '.') {
-      segments.push(current);
-      current = '';
-      continue;
-    }
-
-    current += char;
+const readOrCompileRegexp = (
+  pattern: string,
+  context: QueryEvaluationContext,
+): RegExp => {
+  const cached = context.regexpByPattern.get(pattern);
+  if (cached !== undefined) {
+    return cached;
   }
 
-  if (escape) {
-    current += '\\';
+  try {
+    validateRegexpPattern(pattern);
+    const compiled = new RegExp(pattern, 'u');
+    context.regexpByPattern.set(pattern, compiled);
+    return compiled;
+  } catch {
+    throw new QueryValidationError('Invalid regexp pattern.');
   }
-
-  segments.push(current);
-  return segments;
-};
-
-const readFieldValue = (
-  record: PersistedTimeseriesRecord,
-  field: string,
-): NativeScalar | undefined => {
-  if (field === 'timestamp') {
-    return record.timestamp;
-  }
-
-  if (field === '_id') {
-    return `${record.timestamp}:${record.insertionOrder.toString(10)}`;
-  }
-
-  const segments = splitCanonicalPath(field);
-  let cursor: unknown = record.payload;
-
-  for (const segment of segments) {
-    if (
-      typeof cursor !== 'object' ||
-      cursor === null ||
-      Array.isArray(cursor) ||
-      !(segment in (cursor as Record<string, unknown>))
-    ) {
-      return undefined;
-    }
-
-    cursor = (cursor as Record<string, unknown>)[segment];
-  }
-
-  if (isNativeScalar(cursor)) {
-    return cursor;
-  }
-
-  return undefined;
-};
-
-const compareNullableScalar = (
-  left: NativeScalar | undefined,
-  right: NativeScalar | undefined,
-): number => {
-  const leftValue = left ?? null;
-  const rightValue = right ?? null;
-
-  const rank = (value: NativeScalar): number => {
-    if (value === null) {
-      return 0;
-    }
-    if (typeof value === 'boolean') {
-      return 1;
-    }
-    if (typeof value === 'number') {
-      return 2;
-    }
-    return 3;
-  };
-
-  const leftRank = rank(leftValue);
-  const rightRank = rank(rightValue);
-
-  if (leftRank !== rightRank) {
-    return leftRank - rightRank;
-  }
-
-  if (leftValue === rightValue) {
-    return 0;
-  }
-
-  if (typeof leftValue === 'number' && typeof rightValue === 'number') {
-    return leftValue < rightValue ? -1 : 1;
-  }
-
-  if (typeof leftValue === 'string' && typeof rightValue === 'string') {
-    return leftValue < rightValue ? -1 : 1;
-  }
-
-  if (typeof leftValue === 'boolean' && typeof rightValue === 'boolean') {
-    return leftValue === false ? -1 : 1;
-  }
-
-  return 0;
 };
 
 const evaluateFilterExpression = (
   record: PersistedTimeseriesRecord,
   expression: NativeFilterExpression,
+  context: QueryEvaluationContext,
 ): boolean => {
   if ('and' in expression) {
-    return expression.and.every((item) => evaluateFilterExpression(record, item));
+    return expression.and.every((item) =>
+      evaluateFilterExpression(record, item, context),
+    );
   }
 
   if ('or' in expression) {
-    return expression.or.some((item) => evaluateFilterExpression(record, item));
+    return expression.or.some((item) =>
+      evaluateFilterExpression(record, item, context),
+    );
   }
 
   if ('not' in expression) {
-    return !evaluateFilterExpression(record, expression.not);
+    return !evaluateFilterExpression(record, expression.not, context);
   }
 
   const fieldValue = readFieldValue(record, expression.field);
@@ -200,21 +113,15 @@ const evaluateFilterExpression = (
     if (typeof fieldValue !== 'string' || typeof expression.value !== 'string') {
       return false;
     }
-    const escaped = expression.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
-    const regex = new RegExp(`^${pattern}$`, 'u');
-    return regex.test(fieldValue);
+    ensurePatternLengthBounded(expression.value, 'like');
+    return matchLikePattern(fieldValue, expression.value);
   }
   if (operator === 'regexp') {
     if (typeof fieldValue !== 'string' || typeof expression.value !== 'string') {
       return false;
     }
-    try {
-      const regex = new RegExp(expression.value, 'u');
-      return regex.test(fieldValue);
-    } catch {
-      throw new QueryValidationError('Invalid regexp pattern.');
-    }
+    const regex = readOrCompileRegexp(expression.value, context);
+    return regex.test(fieldValue);
   }
   if (
     operator === '>' ||
@@ -299,11 +206,15 @@ export const executeNativeQuery = (
     }
   }
 
+  const evaluationContext: QueryEvaluationContext = {
+    regexpByPattern: new Map<string, RegExp>(),
+  };
+
   const filtered = records.filter((record) => {
     if (request.where === undefined) {
       return true;
     }
-    return evaluateFilterExpression(record, request.where);
+    return evaluateFilterExpression(record, request.where, evaluationContext);
   });
 
   const sorted = filtered.sort((left, right) => {
