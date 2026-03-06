@@ -35,8 +35,12 @@ Ship a trustworthy `v0.1` that proves the core value:
 - append timeseries records
 - execute time-range queries correctly
 - persist and reload data via memory + file storage
+- keep the public `Datastore` API surface stable across M1 -> M2:
+  `insert`, `select`, `commit`, `on/off("error")`, `close`
 - enforce max size with at least one policy
 - provide reproducible tests and usage docs (EN/JA)
+- explicitly defer browser backend implementation to `v0.2+`; no browser delivery claim in
+  `v0.1` execution scope
 
 ## Milestones
 
@@ -47,6 +51,11 @@ Goal: Prepare an executable foundation before database logic.
 Deliverables:
 
 - Confirm project scripts and minimal source layout (`src/core`, `src/storageEngine`, `src/queryEngine`).
+- Explicitly enforce Markdown quality gate from ADR-11 and `docs/specs/08_DocumentationLinting.md`:
+  - `pnpm textlint` (check mode)
+  - `pnpm textlint:fix` (fix mode)
+  - `pnpm format:md` alias to `pnpm textlint:fix`
+  - `pnpm check` includes Markdown lint
 - Add missing architecture and testing docs referenced by `AGENTS.md`:
   - `docs/architecture/overview.md`
   - `docs/testing/strategy.md`
@@ -55,12 +64,14 @@ Deliverables:
 Tests first:
 
 - Smoke tests for toolchain and test runner.
+- Script-contract checks for docs quality commands (presence and callable behavior).
 - No feature code until baseline checks pass.
 
 Exit criteria:
 
 - `pnpm check` and `pnpm test --run` are green.
 - All architecture/testing references in `AGENTS.md` resolve to existing docs.
+- Markdown lint commands and aliases are verified as baseline tooling contracts.
 
 ### M1. Minimum Vertical Slice (Memory Backend First)
 
@@ -71,18 +82,25 @@ Scope:
 - Canonical record schema for timeseries events.
 - TLV encode/decode for supported value types used in v0.1.
 - In-memory pager/page format (fixed-size pages with slotted layout).
-- Insert + `select(startTime, endTime)` working through a single public datastore API.
+- Full public datastore API signature from `docs/specs/04_DatastoreAPI.md` section 3:
+  - `insert`, `select`, `commit`, `on/off("error")`, `close`
+- Memory-specific behavior remains minimal in M1:
+  - `commit()` is a no-op that resolves
+  - `on/off("error")` wiring is available even if no background auto-commit source is active
 
 Tests first:
 
 - TLV round-trip and invalid-input tests.
 - Page insertion/compaction/free-space tests.
 - End-to-end tests for insert/query correctness with deterministic fixtures.
+- API compatibility tests for M1 surface (including `commit`, `close`, `on/off`).
+- Closed-state tests: `insert`/`select`/`commit` reject with `ClosedDatastoreError` after `close()`.
 
 Exit criteria:
 
 - Core end-to-end flow works in memory.
 - Public API and error behavior documented in `docs/specs` and `docs/usage` (EN/JA).
+- M1 implementation preserves API shape required for M2 without breaking signature changes.
 
 ### M2. Durable Storage (File Backend)
 
@@ -93,16 +111,26 @@ Scope:
 - File storage adapter using `fs/promises`.
 - File header/version metadata and safe open/close flow.
 - Reload path validating persisted pages and index reconstruction.
+- Single-writer open lock is mandatory (`docs/specs/04_DatastoreAPI.md` section 5.1.0):
+  - exclusive lock acquisition before sidecar/generation I/O
+  - fail-fast open with `DatabaseLockedError` on active lock contention
+  - lock release on successful `close()`
+- Verify durable-backend default auto-commit behavior (`frequency: "immediate"`), unless explicitly overridden.
 
 Tests first:
 
 - Persistence tests across reopen cycles.
 - Corrupt-header / unsupported-version failure tests.
+- Lock contention tests across independent datastore instances/processes.
+- Lock release tests proving reopen success after `close()`.
+- Immediate auto-commit default behavior tests for file backend.
+- Interrupted commit recovery tests (stale temp artifacts do not become active generation).
 
 Exit criteria:
 
 - Data written in one process can be read in a new process.
 - All persistence failure paths are covered by tests.
+- Locking semantics and durable default commit behavior are test-proven and documented.
 
 ### M3. Query Scalability (Index Hardening)
 
@@ -220,3 +248,4 @@ Positive:
 Trade-off:
 
 - Some advanced features (browser/custom storage) are intentionally delayed until core reliability is proven.
+- Browser backend delivery is intentionally out of `v0.1` execution scope and targeted for `v0.2+`.
