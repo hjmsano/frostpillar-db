@@ -1,15 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import test from 'node:test';
-
-const readDoc = async (relativePath) => {
-  const absolutePath = path.resolve(process.cwd(), relativePath);
-  return await readFile(absolutePath, 'utf8');
-};
+import { readFileUtf8 } from '../shared/read-file-utf8.mjs';
 
 test('distribution spec defines CI/CD trigger and command contract', async () => {
-  const spec = await readDoc('docs/specs/13_DistributionDeliveryTracks.md');
+  const spec = await readFileUtf8('docs/specs/13_DistributionDeliveryTracks.md');
 
   assert.match(spec, /GitHub Actions CI\/CD Contract/i);
   assert.match(spec, /pull request open\/reopen\/synchronize events/i);
@@ -21,8 +15,8 @@ test('distribution spec defines CI/CD trigger and command contract', async () =>
 });
 
 test('development workflow usage docs include bilingual CI/CD operation guidance', async () => {
-  const usageEn = await readDoc('docs/usage/03_DevelopmentWorkflow.md');
-  const usageJa = await readDoc('docs/usage/03_DevelopmentWorkflow-JA.md');
+  const usageEn = await readFileUtf8('docs/usage/03_DevelopmentWorkflow.md');
+  const usageJa = await readFileUtf8('docs/usage/03_DevelopmentWorkflow-JA.md');
 
   assert.match(usageEn, /GitHub Actions CI\/CD/i);
   assert.match(usageEn, /pull request/i);
@@ -36,8 +30,8 @@ test('development workflow usage docs include bilingual CI/CD operation guidance
 });
 
 test('adr for ci cd workflow policy is recorded and indexed', async () => {
-  const adr = await readDoc('docs/adr/42_GitHub_Actions_CI_CD_Validation_and_Build_Policy.md');
-  const adrIndex = await readDoc('docs/adr/INDEX.md');
+  const adr = await readFileUtf8('docs/adr/42_GitHub_Actions_CI_CD_Validation_and_Build_Policy.md');
+  const adrIndex = await readFileUtf8('docs/adr/INDEX.md');
 
   assert.match(adr, /ADR-42/i);
   assert.match(adr, /GitHub Actions CI\/CD Validation and Build Policy/i);

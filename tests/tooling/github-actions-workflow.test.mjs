@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import test from 'node:test';
-
-const readFileUtf8 = async (relativePath) => {
-  const absolutePath = path.resolve(process.cwd(), relativePath);
-  return await readFile(absolutePath, 'utf8');
-};
+import { readFileUtf8 } from '../shared/read-file-utf8.mjs';
 
 test('github actions workflow defines pull request ci and default branch build gates', async () => {
   const workflow = await readFileUtf8('.github/workflows/ci-cd.yml');
