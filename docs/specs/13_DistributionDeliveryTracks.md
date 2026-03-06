@@ -15,11 +15,12 @@ In scope:
 - browser bundle delivery contract
 - bundle profile policy (`core` only vs. `core + browser adapter` variants)
 - compatibility and failure expectations across delivery tracks
+- CI/CD validation and build trigger contract for pull requests and default-branch merges
 
 Out of scope:
 
 - exact build tool selection
-- CI release automation internals
+- release publishing/deployment to external destinations
 - npm registry operational credentials/process
 
 ## 2. Terms
@@ -96,3 +97,33 @@ Repository tooling MUST provide a dedicated bundle build command:
 - `pnpm build:bundle` MUST generate browser bundle artifacts and profile metadata.
 - `pnpm build:bundle` MAY assume `pnpm build` has already produced TypeScript outputs under `dist/`.
 - If required input files are missing, `pnpm build:bundle` MUST fail with actionable error text.
+
+## 8. GitHub Actions CI/CD Contract
+
+Repository CI/CD workflow definitions MUST satisfy the following trigger and command policy.
+
+### 8.1 Pull Request Validation (CI)
+
+On pull request create/update events, CI MUST run quality gates for code validation.
+
+- Trigger scope MUST include pull request open/reopen/synchronize events.
+- CI MUST execute lint and test validation through project commands:
+  - `pnpm check`
+  - `pnpm test --run`
+- Pull request CI MUST NOT execute delivery artifact build commands by default.
+
+### 8.2 Default-Branch Merge Validation + Build (CD Preparation)
+
+When commits are merged into the repository default branch, CI/CD MUST run validation and build preparation.
+
+- Trigger scope MUST include push events targeting the default branch.
+- Pipeline MUST execute:
+  - `pnpm check`
+  - `pnpm test --run`
+  - `pnpm build`
+  - `pnpm build:bundle`
+- Resulting NPM module and browser bundle artifacts MAY remain local workflow outputs with no publishing destination configured.
+
+### 8.3 Behavior Consistency
+
+The same Node.js and pnpm setup policy SHOULD be used across pull request and default-branch jobs to minimize drift between validation and build environments.

@@ -75,3 +75,19 @@ TypeScript 実装では次の実務ポリシーを適用します。
 - ドメイン間 import は公開 barrel 経由、同一ドメイン内は直接 import を基本とする
 - validation / normalization は可能な限り pure function として実装する
 - 同一領域で機能追加する前に、まず振る舞い不変の分割リファクタを分離する
+
+## 6. GitHub Actions CI/CD
+
+リポジトリの自動化は、次のトリガー分離で運用します。
+
+- プルリクエスト作成/更新時（`opened`, `reopened`, `synchronize`, `ready_for_review`）は次を実行:
+  - `pnpm check`
+  - `pnpm test --run`
+- デフォルトブランチに反映された push（例: マージ完了）では次を実行:
+  - `pnpm check`
+  - `pnpm test --run`
+  - `pnpm build`
+  - `pnpm build:bundle`
+
+現時点のポリシーでは外部公開先へのアーティファクト配布は行いません。
+ビルド成果物はワークフロー内検証用としてのみ生成します。
