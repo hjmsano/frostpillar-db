@@ -2,6 +2,56 @@ export type TimestampInput = number | string | Date;
 export type RecordId = string;
 export type NativeScalar = string | number | boolean | null;
 export type NativeQueryResultRow = Record<string, NativeScalar>;
+export type NativeComparisonOperator =
+  | '='
+  | '!='
+  | '>'
+  | '>='
+  | '<'
+  | '<='
+  | 'like'
+  | 'regexp'
+  | 'is_null'
+  | 'is_not_null'
+  | 'exists'
+  | 'not_exists'
+  | 'between';
+export type NativeFilterExpression =
+  | {
+      field: string;
+      operator: NativeComparisonOperator;
+      value?: NativeScalar;
+      range?: readonly [NativeScalar, NativeScalar];
+    }
+  | { and: NativeFilterExpression[] }
+  | { or: NativeFilterExpression[] }
+  | { not: NativeFilterExpression };
+export interface NativeOrderBy {
+  field: string;
+  direction: 'asc' | 'desc';
+}
+export type NativeAggregateFunction =
+  | 'count'
+  | 'min'
+  | 'max'
+  | 'sum'
+  | 'avg'
+  | 'percentile_cont';
+export interface NativeAggregateExpression {
+  fn: NativeAggregateFunction;
+  field?: string;
+  as?: string;
+  percentile?: number;
+}
+export interface NativeQueryRequest {
+  where?: NativeFilterExpression;
+  select?: string[];
+  aggregates?: NativeAggregateExpression[];
+  orderBy?: NativeOrderBy[];
+  groupBy?: string[];
+  limit?: number;
+  distinct?: boolean;
+}
 export type ByteSizeInput =
   | number
   | `${number}B`
@@ -29,6 +79,7 @@ export interface TimeseriesRecord {
 
 export interface PersistedTimeseriesRecord extends TimeseriesRecord {
   insertionOrder: bigint;
+  encodedBytes: number;
 }
 
 export type InputTimeseriesRecord = Omit<TimeseriesRecord, 'timestamp'> & {
@@ -119,6 +170,25 @@ export type DatastoreConfig =
   | MemoryDatastoreConfig
   | FileDatastoreConfig
   | BrowserDatastoreConfig;
+
+export type QueryLanguage = 'sql' | 'lucene';
+
+export interface QueryExecutionOptions {
+  select?: string[];
+  aggregates?: NativeAggregateExpression[];
+  groupBy?: string[];
+  orderBy?: NativeOrderBy[];
+  limit?: number;
+  distinct?: boolean;
+}
+
+export interface QueryEngineModule {
+  readonly language: QueryLanguage;
+  toNativeQuery(
+    queryText: string,
+    options?: QueryExecutionOptions,
+  ): NativeQueryRequest;
+}
 
 export interface DatastoreErrorEvent {
   source: 'autoCommit';

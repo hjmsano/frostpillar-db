@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This document defines flush trigger semantics and crash-safe durability boundaries.
 It complements `docs/specs/04_DatastoreAPI.md` and `docs/specs/09_CapacityAndRetention.md`.
@@ -46,6 +46,8 @@ For durable backends, flush is triggered by OR semantics:
 
 Rules:
 
+- If `autoCommit` is omitted, effective configuration is equivalent to `autoCommit: { frequency: "immediate" }`.
+- If `autoCommit: {}` is provided, effective frequency is `"immediate"`.
 - If `frequency` is omitted, effective value is `"immediate"`.
 - If both periodic and size trigger are configured, whichever condition occurs first MUST trigger commit.
 - `commit()` MUST remain callable regardless of auto-commit configuration.

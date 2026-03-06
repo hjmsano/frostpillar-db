@@ -1,7 +1,7 @@
 # Plan: Development Status Checklist
 
 Status: Draft  
-Version: 0.1 planning  
+Version: 0.2 planning  
 Last Updated: 2026-03-07
 
 ## 1. Purpose
@@ -16,14 +16,18 @@ Use it to track progress across phases and the currently active work item.
   spec update -> failing tests -> implementation -> verification.
 - Keep this file aligned with:
   - `docs/architecture/development-roadmap.md`
-  - `docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md`
+  - active work-item plan under `docs/plans/`
   - relevant ADRs when decisions change.
+- Treat this file and active work-item files in `docs/plans/` as the canonical source
+  for current status.
+- If status statements conflict with `docs/architecture/development-roadmap.md`,
+  this file takes precedence for execution tracking.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 1: Memory Vertical Slice`
-- Active work item: `docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md`
-- Scope lock: `v0.1` deliverables only (ADR-32)
+- Active phase: `Phase 2: File Durability Slice (completed 2026-03-07)`
+- Active work item: `docs/plans/04_PhaseWorkItem_M2_FileDurabilitySlice.md`
+- Scope note: M2 durability obligations are closed; next execution can move to Phase 3 tasks.
 
 ## 4. Phase Status Checklist
 
@@ -46,19 +50,22 @@ Use it to track progress across phases and the currently active work item.
 
 ### Phase 2: File Durability Slice
 
-- [ ] expand failure-path tests for lock, corruption, and interrupted commit recovery
-- [ ] verify sidecar metadata consistency across restart paths
-- [ ] ensure usage docs include practical file-backend troubleshooting in EN/JA
-- [ ] exit criteria met: durability and lock semantics are test-proven and documented
+- [x] expand failure-path tests for lock, corruption, and interrupted commit recovery
+- [x] verify sidecar metadata consistency across restart paths
+- [x] ensure usage docs include practical file-backend troubleshooting in EN/JA
+- [x] add explicit tests for sidecar corrupt-header and unsupported-version failures
+- [x] prove lock release after `close()` via reopen from independent instance/process
+- [x] verify durable default auto-commit behavior (`frequency: "immediate"`)
+- [x] exit criteria met: durability and lock semantics are test-proven and documented
 
 ### Phase 3: Query and Capacity Hardening
 
-- [ ] add parity tests across native, SQL subset, and Lucene subset query paths
-- [ ] strengthen capacity-boundary tests for strict/turnover policy edges
+- [x] add parity tests across native, SQL subset, and Lucene subset query paths
+- [x] strengthen capacity-boundary tests for strict/turnover policy edges
 - [ ] add regression suites for scheduler coalescing and error-channel propagation
 - [ ] exit criteria met: query and capacity behavior stays deterministic under mixed workloads
 
-## 5. Active Work-Item Checklist (M1)
+## 5. Active Work-Item Checklist (M1 Historical)
 
 Use this section as the day-to-day completion board for the current work item.
 
@@ -70,3 +77,22 @@ Use this section as the day-to-day completion board for the current work item.
 - [x] quality gates green: `pnpm test --run` and `pnpm check`
 - [x] related docs updated (`docs/specs`, `docs/plans`, usage EN/JA when user-visible)
 - [x] ADR updated if architecture-level decisions were introduced
+
+## 6. Active Work-Item Checklist (P2/P3 Kickoff)
+
+- [x] file lock conflict path tested and passing
+- [x] file commit/reopen durability baseline tested and passing
+- [x] interrupted commit temp-file recovery path tested and passing
+- [x] sidecar consistency validation path tested and passing
+- [x] strict/turnover capacity boundary tests added and passing
+- [x] query registry parity tests added and passing
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 7. Active Work-Item Checklist (M2 File Durability Completion)
+
+- [x] sidecar corrupt-header and unsupported-version failure tests added (red -> green)
+- [x] lock conflict path verified across independent process/instance scenarios
+- [x] lock release and reopen success after `close()` verified
+- [x] durable default auto-commit behavior validated when omitted and when `autoCommit: {}` is used
+- [x] restart behavior validates sidecar/page-0 mirrored metadata consistency
+- [x] full verification green (`pnpm test --run`, `pnpm check`)

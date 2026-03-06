@@ -5,11 +5,11 @@ Last Updated: 2026-03-06
 
 このドキュメントは `docs/specs/04_DatastoreAPI.md` で定義した公開 API の利用方法を説明します。
 
-実装ステータス注記（M1）:
+実装ステータス注記（2026-03-07）:
 
-- 現在の実装対象はメモリバックエンド（`location: "memory"`）のみです。
-- `location: "file"` と `location: "browser"` の記述は将来互換のためであり、
-  M1 時点の実装では `UnsupportedBackendError` になります。
+- `location: "memory"` は基準バックエンドとしてサポートされています。
+- `location: "file"` は durability-slice の段階実装として利用可能です。
+- `location: "browser"` は将来スコープで、現時点では `UnsupportedBackendError` になります。
 
 ## 1. 基本セットアップ (Memory Backend)
 
@@ -94,7 +94,7 @@ Timestamp 精度に関する注意:
 ## 4. Commit と Close
 
 ```typescript
-await db.commit(); // M1 の memory backend では no-op
+await db.commit(); // memory backend では no-op
 await db.close();
 ```
 
@@ -228,6 +228,19 @@ const db = new Datastore({
   （`StorageEngineError` の subtype）で失敗します
 - 既定の open フローでは、既存ロックを自動で奪取しません
 
+### 5.1 File Backend トラブルシューティング（Phase 2 baseline）
+
+- open 時に `DatabaseLockedError` が出る場合:
+  - 別プロセスが `<resolvedDataFilePath>.lock` を保持しています
+  - ロック保持中のプロセスを停止してから再度 open してください
+- open 時に `PageCorruptionError` が出る場合:
+  - sidecar の `activeDataFile` が存在し、読み出し可能か確認してください
+  - sidecar のミラー値（`rootPageId` / `nextPageId` / `freePageHeadId`）が
+    active generation snapshot と一致しているか確認してください
+- interrupted commit の一時ファイルについて:
+  - `*.tmp` はコミット済み状態ではなく、次回 open 時に無視または掃除されます
+  - 有効なコミット状態は sidecar の `activeDataFile` のみで選択されます
+
 ## 6. Browser Storage: バックエンド選択とフォールバック
 
 `location: "browser"` は、まず async-native なバックエンドを優先し、互換性のためのフォールバックを持ちます。
@@ -299,7 +312,7 @@ const dbLocal = new Datastore({
 - `TimestampParseError`
 - `InvalidQueryRangeError`
 - `ConfigurationError`
-- `UnsupportedBackendError`（各バックエンドの対応マイルストーン前）
+- `UnsupportedBackendError`（現在の runtime slice 外のバックエンド）
 - `ClosedDatastoreError`
 - `StorageEngineError`
 - `BinaryFormatError`（バイナリのデコード/エンコード形式違反）

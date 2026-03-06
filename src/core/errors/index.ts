@@ -28,3 +28,11 @@ export class PageCorruptionError extends StorageEngineError {}
 export class IndexCorruptionError extends StorageEngineError {}
 
 export class QuotaExceededError extends FrostpillarError {}
+
+export class QueryParseError extends FrostpillarError {}
+
+export class QueryValidationError extends FrostpillarError {}
+
+export class UnsupportedQueryFeatureError extends FrostpillarError {}
+
+export class QueryEngineNotRegisteredError extends FrostpillarError {}

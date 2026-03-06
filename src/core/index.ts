@@ -4,3 +4,4 @@ export * from './validation/timestamp.js';
 export * from './validation/payload.js';
 export * from './records/ordering.js';
 export * from './datastore/Datastore.js';
+export * from '../queryEngine/runQueryWithEngine.js';

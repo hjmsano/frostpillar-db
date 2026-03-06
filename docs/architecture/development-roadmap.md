@@ -1,18 +1,30 @@
-# Current Development Phases and Task Breakdown
+# Development Phase Model and Governance
 
 Status: Draft  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
-This document provides an executable, task-level plan for the next implementation cycles.
+This document defines the stable phase model, entry/exit gates, and governance rules.
 It operationalizes `docs/adr/01_DevelopmentPlan.md` and `docs/specs/12_DevelopmentWorkflow.md`.
 
-## Current Focus (2026-03-06)
+## Document Role
 
-- Active phase: `Phase 1: Memory Vertical Slice`
-- Scope lock: immediate coding target is `v0.1` deliverables only
-- Work-item plan: `docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md`
-- Status checklist: `docs/plans/01_DevelopmentStatusChecklist.md`
-- Decision record: `docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md`
+- This file is not the live progress board.
+- Live status, active phase snapshot, and checkbox tracking are maintained in
+  `docs/plans/01_DevelopmentStatusChecklist.md`.
+- Active execution scope and acceptance criteria are maintained in the active work-item file
+  under `docs/plans/`.
+
+## Source-of-Truth Order
+
+If documents partially overlap, resolve in this order:
+
+1. ADR decisions under `docs/adr/`
+2. Normative product behavior in `docs/specs/`
+3. Execution status and active work-item scope in `docs/plans/`
+4. Phase model and governance in this file
+
+When this file conflicts with `docs/plans/` about current status, `docs/plans/` is authoritative.
+Update this file only when the phase model or governance itself changes.
 
 ## Phase 0: Foundation Sync
 
@@ -23,11 +35,11 @@ Entry criteria:
 - baseline toolchain commands are available
 - workflow spec and templates are published
 
-Tasks:
+Expected activities:
 
-- [ ] confirm `docs/specs` and `docs/adr` references are consistent in new changes
-- [ ] enforce phase-gate checklist in every feature PR
-- [ ] keep test strategy and workflow docs aligned
+- confirm `docs/specs` and `docs/adr` references are consistent in new changes
+- enforce phase-gate checklist in every feature PR
+- keep test strategy and workflow docs aligned
 
 Exit criteria:
 
@@ -41,11 +53,11 @@ Entry criteria:
 
 - Phase 0 exit criteria met
 
-Tasks:
+Expected activities:
 
-- [ ] close any remaining gaps between `docs/specs/01..04` and current memory behavior
-- [ ] add boundary tests for record validation, range query edges, and ordering stability
-- [ ] document unresolved ambiguities as ADR candidates
+- close any remaining gaps between `docs/specs/01..04` and current memory behavior
+- add boundary tests for record validation, range query edges, and ordering stability
+- document unresolved ambiguities as ADR candidates
 
 Exit criteria:
 
@@ -59,11 +71,11 @@ Entry criteria:
 
 - memory vertical slice is stable
 
-Tasks:
+Expected activities:
 
-- [ ] expand failure-path tests for lock, corruption, and interrupted commit recovery
-- [ ] verify sidecar metadata consistency across restart paths
-- [ ] ensure usage docs include practical file-backend troubleshooting in EN/JA
+- expand failure-path tests for lock, corruption, and interrupted commit recovery
+- verify sidecar metadata consistency across restart paths
+- ensure usage docs include practical file-backend troubleshooting in EN/JA
 
 Exit criteria:
 
@@ -77,11 +89,11 @@ Entry criteria:
 
 - file durability slice is stable
 
-Tasks:
+Expected activities:
 
-- [ ] add parity tests across native, SQL subset, and Lucene subset query paths
-- [ ] strengthen capacity-boundary tests for strict/turnover policy edges
-- [ ] add regression suites for scheduler coalescing and error-channel propagation
+- add parity tests across native, SQL subset, and Lucene subset query paths
+- strengthen capacity-boundary tests for strict/turnover policy edges
+- add regression suites for scheduler coalescing and error-channel propagation
 
 Exit criteria:
 

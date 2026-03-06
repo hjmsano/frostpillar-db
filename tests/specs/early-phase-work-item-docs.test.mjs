@@ -23,6 +23,12 @@ test('phase work-item plan defines v0.1 scope and red-test plan', async () => {
 
 test('active-phase ADR records the phase and scope-lock decision and is indexed', async () => {
   const adr = await readDoc('docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md');
+  const adr37 = await readDoc(
+    'docs/adr/37_Phase2_Phase3_Kickoff_and_IncrementalScope.md',
+  );
+  const adr39 = await readDoc(
+    'docs/adr/39_Dedicated_M2_FileDurability_CompletionPlan.md',
+  );
   const adrIndex = await readDoc('docs/adr/INDEX.md');
   const plansIndex = await readDoc('docs/plans/INDEX.md');
   const roadmap = await readDoc('docs/architecture/development-roadmap.md');
@@ -36,5 +42,37 @@ test('active-phase ADR records the phase and scope-lock decision and is indexed'
     plansIndex,
     /02_PhaseWorkItem_M1_MemoryVerticalSlice\.md/,
   );
-  assert.match(roadmap, /Current Focus \(2026-03-06\)/i);
+  assert.match(
+    plansIndex,
+    /03_PhaseWorkItem_P2P3_FileDurability_and_QueryCapacityKickoff\.md/,
+  );
+  assert.match(
+    adrIndex,
+    /37_Phase2_Phase3_Kickoff_and_IncrementalScope\.md/,
+  );
+  assert.match(
+    adrIndex,
+    /39_Dedicated_M2_FileDurability_CompletionPlan\.md/,
+  );
+  assert.match(adr37, /Start a combined kickoff work item/i);
+  assert.match(adr39, /Introduce a dedicated M2 completion work item/i);
+  assert.match(roadmap, /Development Phase Model and Governance/i);
+  assert.match(roadmap, /Live status, active phase snapshot, and checkbox tracking/i);
+});
+
+test('M2 file-durability work-item plan captures remaining ADR-01 durability obligations', async () => {
+  const m2Plan = await readDoc(
+    'docs/plans/04_PhaseWorkItem_M2_FileDurabilitySlice.md',
+  );
+  const plansIndex = await readDoc('docs/plans/INDEX.md');
+
+  assert.match(m2Plan, /Plan: Phase Work Item \(M2 File Durability Slice\)/i);
+  assert.match(m2Plan, /corrupt-header and unsupported-version/i);
+  assert.match(m2Plan, /lock release.*reopen success/i);
+  assert.match(m2Plan, /default auto-commit behavior.*immediate/i);
+  assert.match(m2Plan, /Failing Tests \(TDD Red\)/i);
+  assert.match(
+    plansIndex,
+    /04_PhaseWorkItem_M2_FileDurabilitySlice\.md/,
+  );
 });

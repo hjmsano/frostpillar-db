@@ -4,12 +4,9 @@ import { loadCoreModule } from './load-core-module.mjs';
 
 const loadCore = async () => await loadCoreModule();
 
-test('memory datastore initializes and rejects out-of-scope backend configs in M1', async () => {
-  const {
-    Datastore,
-    ConfigurationError,
-    UnsupportedBackendError,
-  } = await loadCore();
+test('memory datastore initializes and rejects currently unsupported backend config', async () => {
+  const { Datastore, ConfigurationError, UnsupportedBackendError } =
+    await loadCore();
 
   assert.doesNotThrow(() => {
     new Datastore({ location: 'memory' });
@@ -23,13 +20,6 @@ test('memory datastore initializes and rejects out-of-scope backend configs in M
       });
     },
     ConfigurationError,
-  );
-
-  assert.throws(
-    () => {
-      new Datastore({ location: 'file' });
-    },
-    UnsupportedBackendError,
   );
 
   assert.throws(

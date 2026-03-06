@@ -61,7 +61,7 @@ test('architecture roadmap and indexes include phased development plan artifacts
     'docs/adr/34_CoreModuleSplit_and_TypeScriptSourceOrganizationPolicy.md',
   );
 
-  assert.match(roadmap, /Current Development Phases and Task Breakdown/i);
+  assert.match(roadmap, /Development Phase Model and Governance/i);
   assert.match(roadmap, /Phase 0: Foundation Sync/i);
   assert.match(roadmap, /Phase 1: Memory Vertical Slice/i);
   assert.match(roadmap, /Phase 2: File Durability Slice/i);

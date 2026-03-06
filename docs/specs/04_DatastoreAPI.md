@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This document defines the public contract of the `Datastore` class.
 It is the only user-facing entry point in the current baseline.
@@ -141,26 +141,29 @@ export type DatastoreErrorListener = (
 
 Notes:
 
-- M1 implementation supports `location: "memory"` only.
+- Current implementation baseline supports `location: "memory"` and incremental `location: "file"` durability slice.
 - `autoCommit` is allowed only when `location !== "memory"` (durable backend configuration).
 - Setting `autoCommit` for `location: "memory"` MUST throw `ConfigurationError`.
 - `capacity` applies to all backends and follows `docs/specs/09_CapacityAndRetention.md`.
 - `autoCommit.maxPendingBytes` is valid only for durable backends and follows `docs/specs/10_FlushAndDurability.md`.
-- Passing `location: "file"` before M2 MUST throw `UnsupportedBackendError`.
-- Passing `location: "browser"` before M3 MUST throw `UnsupportedBackendError`.
+- `location: "browser"` remains out of current runtime slice and MUST throw `UnsupportedBackendError`.
 - `filePath` is a backward-compatible shorthand for `target: { kind: "path", filePath }`.
 - `filePath` and `target` MUST NOT be specified together.
 
-### 2.1 M1 Runtime Slice Lock (Normative)
+### 2.1 Runtime Slice Status (Normative, 2026-03-07)
 
-- Active implementation phase is `Phase 1: Memory Vertical Slice` (see `docs/plans/02_PhaseWorkItem_M1_MemoryVerticalSlice.md`).
-- For this phase, implementation MUST prioritize this baseline surface:
-  `insert`, `select`, `commit`, `on("error", ...)`, `off("error", ...)`, `close`.
-- `location: "memory"` MUST initialize successfully with async-only behavior.
-- `location: "file"` and `location: "browser"` remain forward-looking configuration branches
-  and MUST fail fast with `UnsupportedBackendError` in M1 runtime implementation.
-- Sections marked as post-baseline requirements in this document (for example section 8 and later)
-  are not required for M1 completion.
+- Active implementation kickoff targets:
+  - `Phase 2: File Durability Slice`
+  - `Phase 3: Query and Capacity Hardening`
+- Baseline runtime surface MUST include:
+  `insert`, `select`, `commit`, `on("error", ...)`, `off("error", ...)`, `close`,
+  `registerQueryEngine`, `unregisterQueryEngine`, `query`, `queryNative`.
+- `location: "memory"` MUST remain fully supported.
+- `location: "file"` MUST support at least:
+  - exclusive open lock behavior
+  - commit/reopen durable baseline
+  - sidecar-driven active generation selection and consistency checks
+- `location: "browser"` remains future scope and MUST fail fast with `UnsupportedBackendError`.
 
 ## 3. `Datastore` Class
 
@@ -240,6 +243,7 @@ export class Datastore {
 
 - Auto-commit applies only to non-memory backends.
 - For durable backends, default auto-commit behavior is enabled with `frequency: "immediate"`.
+- For durable backends, omitted `autoCommit` and `autoCommit: {}` are both valid and MUST use effective `frequency: "immediate"`.
 - If `autoCommit` is specified without `frequency`, effective frequency MUST be `"immediate"`.
 - `frequency` accepts:
   - `"immediate"` (commit after each successful write operation)
