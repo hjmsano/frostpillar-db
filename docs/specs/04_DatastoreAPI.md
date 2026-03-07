@@ -298,8 +298,12 @@ export class Datastore {
 - Under `"turnover"`, datastore MUST evict oldest records deterministically before accepting new record.
 - Under `"turnover"`, oldest lookup in M3+ MUST use leftmost leaf head entry from B+ tree
   logical order (`docs/specs/11_BTreeIndexInvariants.md` section 8).
+- Under `"turnover"` in M3+, per-eviction record-buffer removal MUST be expected `O(1)`
+  keyed by `insertionOrder`, and MUST NOT rely on linear search/removal of retained records.
 - Turnover eviction path uses internal deletion and is required for retention behavior.
 - This internal deletion path MUST NOT be exposed as a public delete API in v0.2.
+- For one insert causing `E` evictions against `N` retained records, turnover path complexity
+  MUST stay index-dominated (`O(E * log N)`) and MUST NOT regress to `O(E * N)`.
 - If one record cannot fit even when datastore is empty, insert MUST reject with `QuotaExceededError`.
 
 ## 5. Durable Storage Naming and Layout (Normative)

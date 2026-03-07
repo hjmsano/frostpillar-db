@@ -68,3 +68,28 @@ test('ADR index records M3 runtime index decision and usage docs mention complex
   assert.match(usageEn, /expected `O\(log N \+ K\)`/i);
   assert.match(usageJa, /期待計算量 `O\(log N \+ K\)`/);
 });
+
+test('capacity turnover specs and ADR record O(1) retained-buffer removal requirement', async () => {
+  const apiSpec = await readDoc('docs/specs/04_DatastoreAPI.md');
+  const capacitySpec = await readDoc('docs/specs/09_CapacityAndRetention.md');
+  const usageEn = await readDoc('docs/usage/01_DatastoreAPI.md');
+  const usageJa = await readDoc('docs/usage/01_DatastoreAPI-JA.md');
+  const adrIndex = await readDoc('docs/adr/INDEX.md');
+  const adr48 = await readDoc(
+    'docs/adr/48_TurnoverEviction_O1_RecordBufferRemoval.md',
+  );
+
+  assert.match(apiSpec, /per-eviction record-buffer removal MUST be expected `O\(1\)`/i);
+  assert.match(
+    capacitySpec,
+    /M3\+ implementations MUST keep an internal record buffer keyed by `insertionOrder`/i,
+  );
+  assert.match(
+    capacitySpec,
+    /MUST NOT regress to `O\(E \* N\)` due to linear buffer scans/i,
+  );
+  assert.match(usageEn, /`O\(E \* log N\)`/i);
+  assert.match(usageJa, /`O\(E \* log N\)`/);
+  assert.match(adrIndex, /48_TurnoverEviction_O1_RecordBufferRemoval\.md/);
+  assert.match(adr48, /expected `O\(1\)`/i);
+});

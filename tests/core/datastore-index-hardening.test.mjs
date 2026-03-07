@@ -55,6 +55,81 @@ test('select does not rely on Array.filter/sort full-scan path in M3 runtime', a
   }
 });
 
+test('turnover eviction does not rely on Array.indexOf/splice linear removal path', async () => {
+  const { Datastore } = await loadCore();
+  const datastore = new Datastore({
+    location: 'memory',
+    capacity: {
+      maxSize: '500B',
+      policy: 'turnover',
+    },
+  });
+
+  await datastore.insert({
+    timestamp: 1735689600000,
+    payload: {
+      id: 'old',
+      blob: 'x'.repeat(300),
+    },
+  });
+
+  const originalIndexOf = Array.prototype.indexOf;
+  const originalSplice = Array.prototype.splice;
+  Array.prototype.indexOf = function blockedIndexOf(...args) {
+    const firstEntry = this[0];
+    if (
+      firstEntry !== undefined &&
+      typeof firstEntry === 'object' &&
+      firstEntry !== null &&
+      'insertionOrder' in firstEntry &&
+      'encodedBytes' in firstEntry
+    ) {
+      throw new Error(
+        'Unexpected Array.indexOf retained-buffer linear scan during turnover eviction.',
+      );
+    }
+    return originalIndexOf.apply(this, args);
+  };
+  Array.prototype.splice = function blockedSplice(...args) {
+    const firstEntry = this[0];
+    if (
+      firstEntry !== undefined &&
+      typeof firstEntry === 'object' &&
+      firstEntry !== null &&
+      'insertionOrder' in firstEntry &&
+      'encodedBytes' in firstEntry
+    ) {
+      throw new Error(
+        'Unexpected Array.splice retained-buffer linear removal during turnover eviction.',
+      );
+    }
+    return originalSplice.apply(this, args);
+  };
+
+  try {
+    await datastore.insert({
+      timestamp: 1735689600001,
+      payload: {
+        id: 'new',
+        blob: 'y'.repeat(300),
+      },
+    });
+
+    const rows = await datastore.select({
+      start: 1735689600000,
+      end: 1735689600001,
+    });
+    assert.deepEqual(
+      rows.map((row) => row.payload.id),
+      ['new'],
+    );
+  } finally {
+    Array.prototype.indexOf = originalIndexOf;
+    Array.prototype.splice = originalSplice;
+    await datastore.close();
+  }
+});
+
 test('property-style deterministic stream keeps range-query order invariants', async () => {
   const { Datastore } = await loadCore();
   const datastore = new Datastore({ location: 'memory' });

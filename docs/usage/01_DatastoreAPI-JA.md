@@ -170,6 +170,9 @@ const db = new Datastore({
 - `strict`: 上限超過時は `QuotaExceededError` で失敗（状態変更なし）
 - `turnover`: 最も古いレコードから決定的順序で削除し、新規レコードを挿入
 - `turnover` の退避削除は内部 delete 経路で実装され、v0.2 では公開 delete API は提供されません
+- M3+ では `turnover` の退避で保持バッファに対する線形探索/線形削除を避け、
+  1 回の insert 中に `E` 件退避が発生する場合の期待計算量を index 主体
+  （`O(E * log N)`）に保ちます
 - 単一レコードが `maxSize` を超える場合は `QuotaExceededError` で失敗
 - v0.2 では単一レコードのページ跨ぎ分割は行いません。1レコードのページ適合上限は
   `maxSingleRecordBytes = pageSize - 32 - 4` です

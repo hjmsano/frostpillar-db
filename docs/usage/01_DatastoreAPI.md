@@ -168,6 +168,8 @@ Behavior:
 - `strict`: overflow insert fails with `QuotaExceededError` (no mutation)
 - `turnover`: oldest records are evicted deterministically, then new record is inserted
 - `turnover` eviction is handled by an internal delete path; a public delete API is not available in v0.2
+- in M3+, turnover eviction avoids linear retained-buffer search/removal and keeps
+  expected index-dominated complexity (`O(E * log N)` for `E` evictions in one insert)
 - if one record is larger than `maxSize`, insert fails with `QuotaExceededError`
 - v0.2 does not split one record across multiple pages; per-page fit boundary is
   `maxSingleRecordBytes = pageSize - 32 - 4`

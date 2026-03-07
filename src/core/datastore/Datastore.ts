@@ -38,7 +38,7 @@ import { TimeIndexBTree } from './timeIndexBTree.js';
 export class Datastore {
   private readonly errorListeners: Set<DatastoreErrorListener>;
   private readonly queryEngines: Map<QueryLanguage, QueryEngineModule>;
-  private readonly records: PersistedTimeseriesRecord[];
+  private readonly recordsByInsertionOrder: Map<bigint, PersistedTimeseriesRecord>;
   private readonly timeIndex: TimeIndexBTree;
   private readonly capacityState: CapacityState | null;
   private nextInsertionOrder: bigint;
@@ -49,7 +49,7 @@ export class Datastore {
   constructor(config: DatastoreConfig) {
     this.errorListeners = new Set<DatastoreErrorListener>();
     this.queryEngines = new Map<QueryLanguage, QueryEngineModule>();
-    this.records = [];
+    this.recordsByInsertionOrder = new Map<bigint, PersistedTimeseriesRecord>();
     this.timeIndex = new TimeIndexBTree();
     this.capacityState = parseCapacityConfig(config.capacity);
     this.nextInsertionOrder = 0n;
@@ -70,14 +70,13 @@ export class Datastore {
       const fileBackendCreateResult = FileBackendController.create({
         config,
         getSnapshot: (): FileBackendControllerSnapshot => ({
-          records: this.records,
+          records: this.getRecordsSnapshot(),
           nextInsertionOrder: this.nextInsertionOrder,
         }),
         onAutoCommitError: (error: unknown): void => {
           emitAutoCommitErrorToListeners(this.errorListeners, error);
         },
       });
-      this.records.push(...fileBackendCreateResult.initialRecords);
       this.seedTimeIndex(fileBackendCreateResult.initialRecords);
       this.currentSizeBytes = fileBackendCreateResult.initialCurrentSizeBytes;
       this.nextInsertionOrder = fileBackendCreateResult.initialNextInsertionOrder;
@@ -121,11 +120,14 @@ export class Datastore {
         this.capacityState,
         this.currentSizeBytes,
         encodedBytes,
-        (): number => this.records.length,
+        (): number => this.recordsByInsertionOrder.size,
         (): number => this.evictOldestRecordAndReturnBytes(),
       );
 
-      this.records.push(persistedRecord);
+      this.recordsByInsertionOrder.set(
+        persistedRecord.insertionOrder,
+        persistedRecord,
+      );
       this.timeIndex.insert(persistedRecord);
       this.currentSizeBytes += encodedBytes;
       this.nextInsertionOrder += 1n;
@@ -169,7 +171,7 @@ export class Datastore {
   public queryNative(request: NativeQueryRequest): Promise<NativeQueryResultRow[]> {
     return Promise.resolve().then((): NativeQueryResultRow[] => {
       this.ensureOpen();
-      return executeNativeQuery(this.records, request);
+      return executeNativeQuery(this.getRecordsSnapshot(), request);
     });
   }
 
@@ -232,8 +234,18 @@ export class Datastore {
 
   private seedTimeIndex(records: PersistedTimeseriesRecord[]): void {
     for (const record of records) {
+      if (this.recordsByInsertionOrder.has(record.insertionOrder)) {
+        throw new IndexCorruptionError(
+          'Duplicate insertionOrder detected while seeding datastore state.',
+        );
+      }
+      this.recordsByInsertionOrder.set(record.insertionOrder, record);
       this.timeIndex.insert(record);
     }
+  }
+
+  private getRecordsSnapshot(): PersistedTimeseriesRecord[] {
+    return Array.from(this.recordsByInsertionOrder.values());
   }
 
   private evictOldestRecordAndReturnBytes(): number {
@@ -244,14 +256,11 @@ export class Datastore {
       );
     }
 
-    const recordIndex = this.records.indexOf(oldestRecord);
-    if (recordIndex < 0) {
+    if (!this.recordsByInsertionOrder.delete(oldestRecord.insertionOrder)) {
       throw new IndexCorruptionError(
         'Time index and record buffer are out of sync during turnover eviction.',
       );
     }
-
-    this.records.splice(recordIndex, 1);
     return oldestRecord.encodedBytes;
   }
 }
