@@ -1,7 +1,7 @@
 # Plan: Phase Work Item (M5 Release Hardening v0.1)
 
 Status: Active  
-Version: 0.2 execution  
+Version: v0.1 hardening  
 Last Updated: 2026-03-07
 
 ## 1. Purpose

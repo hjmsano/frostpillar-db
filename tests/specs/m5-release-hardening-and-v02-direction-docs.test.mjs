@@ -34,6 +34,7 @@ test('m5 release hardening work-item is added and indexed', async () => {
 
   assert.match(m5Plan, /Plan: Phase Work Item \(M5 Release Hardening v0\.1\)/i);
   assert.match(m5Plan, /Status: Active/i);
+  assert.match(m5Plan, /Version: v0\.1 hardening/i);
   assert.match(m5Plan, /performance baseline report/i);
   assert.match(m5Plan, /reproducible benchmark script/i);
   assert.match(m5Plan, /README.*limitations.*non-goals/i);
