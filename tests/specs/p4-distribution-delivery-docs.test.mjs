@@ -11,6 +11,8 @@ test('distribution delivery spec defines export and profile matrix contracts', a
   assert.match(spec, /`npm pack` output MUST be installable/i);
   assert.match(spec, /Browser Bundle Manifest and Profile Matrix Contract/i);
   assert.match(spec, /`profileMatrix`/i);
+  assert.match(spec, /frostpillar-core\.min\.js/i);
+  assert.match(spec, /globalThis\.Frostpillar/i);
 });
 
 test('delivery usage docs publish explicit profile matrix in english and japanese', async () => {
@@ -18,12 +20,12 @@ test('delivery usage docs publish explicit profile matrix in english and japanes
   const usageJa = await readFileUtf8('docs/usage/05_DeliveryOptions-JA.md');
 
   assert.match(usageEn, /dist\/bundles\/manifest\.json/i);
-  assert.match(usageEn, /frostpillar-core\.js/i);
+  assert.match(usageEn, /frostpillar-core\.min\.js/i);
   assert.match(usageEn, /core-indexeddb/i);
   assert.match(usageEn, /planned/i);
 
   assert.match(usageJa, /dist\/bundles\/manifest\.json/);
-  assert.match(usageJa, /frostpillar-core\.js/);
+  assert.match(usageJa, /frostpillar-core\.min\.js/);
   assert.match(usageJa, /core-indexeddb/);
   assert.match(usageJa, /計画中/);
 });
@@ -32,6 +34,9 @@ test('distribution delivery ADR is recorded and indexed', async () => {
   const adr = await readFileUtf8(
     'docs/adr/49_P4_ReleaseArtifactContract_for_NPM_Exports_and_ProfileMatrix.md',
   );
+  const adrSingleFileBundle = await readFileUtf8(
+    'docs/adr/54_CoreBrowserBundle_SingleFileMinifiedGlobalContract.md',
+  );
   const adrIndex = await readFileUtf8('docs/adr/INDEX.md');
 
   assert.match(adr, /ADR-49/i);
@@ -39,6 +44,12 @@ test('distribution delivery ADR is recorded and indexed', async () => {
   assert.match(
     adrIndex,
     /49_P4_ReleaseArtifactContract_for_NPM_Exports_and_ProfileMatrix\.md/,
+  );
+  assert.match(adrSingleFileBundle, /ADR-54/i);
+  assert.match(adrSingleFileBundle, /frostpillar-core\.min\.js/i);
+  assert.match(
+    adrIndex,
+    /54_CoreBrowserBundle_SingleFileMinifiedGlobalContract\.md/,
   );
 });
 

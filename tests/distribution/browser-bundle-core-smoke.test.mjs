@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
+import vm from 'node:vm';
 import { pathToFileURL } from 'node:url';
 import { loadCoreModule } from '../core/load-core-module.mjs';
 
@@ -49,7 +50,7 @@ const readJson = async (filePath) => {
   return JSON.parse(source);
 };
 
-test('browser core bundle smoke verifies runtime import path and profile matrix metadata', async () => {
+test('browser core min bundle smoke verifies script-load global API and profile matrix metadata', async () => {
   await loadCoreModule();
 
   const bundleScriptHref = pathToFileURL(
@@ -75,15 +76,33 @@ test('browser core bundle smoke verifies runtime import path and profile matrix 
 
     const coreProfile = manifest.profiles.find((profile) => profile.name === 'core');
     assert.equal(coreProfile !== undefined, true);
+    assert.equal(coreProfile.entry, 'dist/bundles/core/frostpillar-core.min.js');
 
-    const bundleEntryUrl = pathToFileURL(path.resolve(sandbox, coreProfile.entry)).href;
-    const bundleModule = await import(bundleEntryUrl);
+    const bundleEntryPath = path.resolve(sandbox, coreProfile.entry);
+    const bundleEntrySource = await readFile(bundleEntryPath, 'utf8');
 
-    assert.equal(typeof bundleModule.Datastore, 'function');
-    assert.equal(typeof bundleModule.runQueryWithEngine, 'function');
+    const browserContext = {
+      globalThis: {},
+      TextEncoder,
+    };
+    browserContext.globalThis = browserContext;
+    browserContext.window = browserContext;
+    browserContext.self = browserContext;
+    vm.runInNewContext(bundleEntrySource, browserContext, {
+      filename: bundleEntryPath,
+    });
 
-    const datastore = new bundleModule.Datastore({ location: 'memory' });
-    await datastore.insert({ timestamp: 10, payload: { value: 100 } });
+    const bundleApi = browserContext.Frostpillar;
+    assert.equal(typeof bundleApi, 'object');
+    assert.equal(typeof bundleApi.Datastore, 'function');
+    assert.equal(typeof bundleApi.runQueryWithEngine, 'function');
+
+    const datastore = new bundleApi.Datastore({ location: 'memory' });
+    const record = vm.runInNewContext(
+      '({ timestamp: 10, payload: { value: 100 } })',
+      browserContext,
+    );
+    await datastore.insert(record);
     const selected = await datastore.select({ start: 10, end: 10 });
     assert.equal(selected.length, 1);
     await datastore.close();

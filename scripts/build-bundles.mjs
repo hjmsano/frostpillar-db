@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -55,56 +55,240 @@ const ensureFileExists = async (absolutePath, relativePathForMessage) => {
   }
 };
 
-const copyDirectoryRecursive = async (sourceDirectory, targetDirectory) => {
-  await mkdir(targetDirectory, { recursive: true });
-  const entries = await readdir(sourceDirectory, { withFileTypes: true });
-
-  await Promise.all(
-    entries.map(async (entry) => {
-      const sourcePath = path.join(sourceDirectory, entry.name);
-      const targetPath = path.join(targetDirectory, entry.name);
-
-      if (entry.isDirectory()) {
-        await copyDirectoryRecursive(sourcePath, targetPath);
-        return;
-      }
-
-      if (entry.isFile()) {
-        await copyFile(sourcePath, targetPath);
-      }
-    }),
-  );
+const loadEsbuildBuild = async () => {
+  try {
+    const esbuild = await import('esbuild');
+    return esbuild.build;
+  } catch {
+    throw new Error(
+      'Bundle build requires "esbuild". Please run `pnpm add -D esbuild`.',
+    );
+  }
 };
 
-const writeCoreProfileEntryFiles = async (profileRoot) => {
-  const runtimeEntryPath = path.join(profileRoot, 'frostpillar-core.js');
+const writeCoreProfileTypeEntryFile = async (profileRoot) => {
   const typeEntryPath = path.join(profileRoot, 'frostpillar-core.d.ts');
 
-  const runtimeSource = [
-    "export * from './core/index.js';",
-    "export * from './queryEngine/runQueryWithEngine.js';",
-    '',
-  ].join('\n');
-
   const typesSource = [
-    "export * from './core/index.js';",
-    "export * from './queryEngine/runQueryWithEngine.js';",
+    "export * from '../../core/index.js';",
     '',
   ].join('\n');
 
-  await writeFile(runtimeEntryPath, runtimeSource, 'utf8');
   await writeFile(typeEntryPath, typesSource, 'utf8');
 
   return {
-    runtimeEntryPath,
     typeEntryPath,
+  };
+};
+
+const buildCoreRuntimeBundle = async (profileRoot) => {
+  const runtimeEntryPath = path.join(profileRoot, 'frostpillar-core.min.js');
+  const temporaryDirectory = path.join(profileRoot, '.bundle-temp');
+  const temporaryEntryPath = path.join(temporaryDirectory, 'entry.js');
+  const fileBackendControllerStubPath = path.join(
+    temporaryDirectory,
+    'fileBackendController.browser.js',
+  );
+  const datastoreConfigStubPath = path.join(
+    temporaryDirectory,
+    'config.browser.js',
+  );
+  const entrySource = ["export * from '../../../core/index.js';", ''].join('\n');
+  const fileBackendControllerStubSource = [
+    "import { UnsupportedBackendError } from '../../../core/errors/index.js';",
+    '',
+    'export class FileBackendController {',
+    '  static create() {',
+    '    throw new UnsupportedBackendError(',
+    `      'Backend "file" is not available in browser bundle profile "${CORE_PROFILE_NAME}".',`,
+    '    );',
+    '  }',
+    '',
+    '  async handleRecordAppended() {}',
+    '',
+    '  async commitNow() {}',
+    '',
+    '  async close() {}',
+    '}',
+    '',
+  ].join('\n');
+  const datastoreConfigStubSource = [
+    "import { ConfigurationError, UnsupportedBackendError } from '../../../core/errors/index.js';",
+    '',
+    'const normalizeByteSizeInput = (value) => {',
+    "  if (typeof value === 'number') {",
+    '    if (!Number.isSafeInteger(value) || value <= 0) {',
+    "      throw new ConfigurationError('capacity.maxSize must be a positive safe integer.');",
+    '    }',
+    '    return value;',
+    '  }',
+    '',
+    "  const matched = /^(\\d+)(B|KB|MB|GB)$/.exec(value);",
+    '  if (matched === null) {',
+    "    throw new ConfigurationError('capacity.maxSize string must be <positive><B|KB|MB|GB>.');",
+    '  }',
+    '',
+    '  const amount = Number(matched[1]);',
+    '  if (!Number.isSafeInteger(amount) || amount <= 0) {',
+    "    throw new ConfigurationError('capacity.maxSize must be positive.');",
+    '  }',
+    '',
+    '  const multiplierByUnit = {',
+    '    B: 1,',
+    '    KB: 1024,',
+    '    MB: 1024 * 1024,',
+    '    GB: 1024 * 1024 * 1024,',
+    '  };',
+    '  const multiplier = multiplierByUnit[matched[2]];',
+    '  const total = amount * multiplier;',
+    '  if (!Number.isSafeInteger(total) || total <= 0) {',
+    "    throw new ConfigurationError('capacity.maxSize exceeds safe integer range.');",
+    '  }',
+    '',
+    '  return total;',
+    '};',
+    '',
+    'export const parseCapacityConfig = (capacity) => {',
+    '  if (capacity === undefined) {',
+    '    return null;',
+    '  }',
+    '',
+    '  const maxSizeBytes = normalizeByteSizeInput(capacity.maxSize);',
+    "  const policy = capacity.policy ?? 'strict';",
+    "  if (policy !== 'strict' && policy !== 'turnover') {",
+    "    throw new ConfigurationError('capacity.policy must be \"strict\" or \"turnover\".');",
+    '  }',
+    '',
+    '  return { maxSizeBytes, policy };',
+    '};',
+    '',
+    'export const parseFileAutoCommitConfig = (autoCommit) => {',
+    "  if (autoCommit?.maxPendingBytes !== undefined) {",
+    '    if (!Number.isSafeInteger(autoCommit.maxPendingBytes) || autoCommit.maxPendingBytes <= 0) {',
+    "      throw new ConfigurationError('autoCommit.maxPendingBytes must be a positive safe integer.');",
+    '    }',
+    '  }',
+    '',
+    "  const frequency = autoCommit?.frequency;",
+    "  if (frequency === undefined || frequency === 'immediate') {",
+    '    return {',
+    "      frequency: 'immediate',",
+    '      intervalMs: null,',
+    '      maxPendingBytes: autoCommit?.maxPendingBytes ?? null,',
+    '    };',
+    '  }',
+    '',
+    "  if (typeof frequency === 'number') {",
+    '    if (!Number.isSafeInteger(frequency) || frequency <= 0) {',
+    "      throw new ConfigurationError('autoCommit.frequency number must be a positive safe integer.');",
+    '    }',
+    '',
+    '    return {',
+    "      frequency: 'scheduled',",
+    '      intervalMs: frequency,',
+    '      maxPendingBytes: autoCommit?.maxPendingBytes ?? null,',
+    '    };',
+    '  }',
+    '',
+    "  const matched = /^(\\d+)(ms|s|m|h)$/.exec(frequency);",
+    '  if (matched === null) {',
+    "    throw new ConfigurationError('autoCommit.frequency string must be one of: <positive>ms, <positive>s, <positive>m, <positive>h.');",
+    '  }',
+    '',
+    '  const amount = Number(matched[1]);',
+    '  if (!Number.isSafeInteger(amount) || amount <= 0) {',
+    "    throw new ConfigurationError('autoCommit.frequency string amount must be a positive safe integer.');",
+    '  }',
+    '',
+    '  const multiplierByUnit = {',
+    '    ms: 1,',
+    '    s: 1000,',
+    '    m: 60 * 1000,',
+    '    h: 60 * 60 * 1000,',
+    '  };',
+    '  const intervalMs = amount * multiplierByUnit[matched[2]];',
+    '',
+    '  if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {',
+    "    throw new ConfigurationError('autoCommit.frequency exceeds safe integer range.');",
+    '  }',
+    '',
+    '  return {',
+    "    frequency: 'scheduled',",
+    '    intervalMs,',
+    '    maxPendingBytes: autoCommit?.maxPendingBytes ?? null,',
+    '  };',
+    '};',
+    '',
+    'export const ensureCanonicalPathWithinWorkingDirectory = () => {',
+    '  throw new UnsupportedBackendError(',
+    "    'Path canonicalization is unavailable in browser bundle profile \"core\".',",
+    '  );',
+    '};',
+    '',
+    'export const resolveFileDataPath = () => {',
+    '  throw new UnsupportedBackendError(',
+    "    'File backend path resolution is unavailable in browser bundle profile \"core\".',",
+    '  );',
+    '};',
+    '',
+  ].join('\n');
+  const build = await loadEsbuildBuild();
+
+  await mkdir(temporaryDirectory, { recursive: true });
+  await writeFile(temporaryEntryPath, entrySource, 'utf8');
+  await writeFile(fileBackendControllerStubPath, fileBackendControllerStubSource, 'utf8');
+  await writeFile(datastoreConfigStubPath, datastoreConfigStubSource, 'utf8');
+
+  try {
+    await build({
+      bundle: true,
+      entryPoints: [temporaryEntryPath],
+      format: 'iife',
+      globalName: 'Frostpillar',
+      legalComments: 'none',
+      minify: true,
+      outfile: runtimeEntryPath,
+      platform: 'browser',
+      plugins: [
+        {
+          name: 'frostpillar-browser-bundle-stubs',
+          setup(buildContext) {
+            buildContext.onResolve(
+              { filter: /fileBackendController\.js$/ },
+              (args) => {
+                if (args.path.endsWith('fileBackendController.js')) {
+                  return { path: fileBackendControllerStubPath };
+                }
+                return null;
+              },
+            );
+
+            buildContext.onResolve({ filter: /config\.js$/ }, (args) => {
+              if (
+                args.path === './config.js' &&
+                args.importer.includes('/dist/core/datastore/')
+              ) {
+                return { path: datastoreConfigStubPath };
+              }
+              return null;
+            });
+          },
+        },
+      ],
+      target: ['es2020'],
+    });
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+
+  return {
+    runtimeEntryPath,
   };
 };
 
 export const buildBundleArtifacts = async (options = {}) => {
   const cwd =
     typeof options.cwd === 'string' ? path.resolve(options.cwd) : process.cwd();
-  const distDirectory = path.resolve(cwd, 'dist');
   const bundleRootDirectory = path.resolve(cwd, 'dist/bundles');
   const coreProfileDirectory = path.resolve(bundleRootDirectory, CORE_PROFILE_NAME);
 
@@ -117,18 +301,8 @@ export const buildBundleArtifacts = async (options = {}) => {
   await rm(bundleRootDirectory, { recursive: true, force: true });
   await mkdir(coreProfileDirectory, { recursive: true });
 
-  await copyDirectoryRecursive(
-    path.resolve(distDirectory, 'core'),
-    path.resolve(coreProfileDirectory, 'core'),
-  );
-  await copyDirectoryRecursive(
-    path.resolve(distDirectory, 'queryEngine'),
-    path.resolve(coreProfileDirectory, 'queryEngine'),
-  );
-
-  const { runtimeEntryPath, typeEntryPath } = await writeCoreProfileEntryFiles(
-    coreProfileDirectory,
-  );
+  const { runtimeEntryPath } = await buildCoreRuntimeBundle(coreProfileDirectory);
+  const { typeEntryPath } = await writeCoreProfileTypeEntryFile(coreProfileDirectory);
 
   const manifest = {
     schemaVersion: 1,

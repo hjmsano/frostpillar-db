@@ -56,7 +56,7 @@ test('package.json defines build:bundle script wiring', async () => {
   assert.equal(scripts['build:bundle'], 'node ./scripts/build-bundles.mjs');
 });
 
-test('build bundle script emits core profile entry files and manifest', async () => {
+test('build bundle script emits core single-file min bundle and manifest', async () => {
   const bundleScriptHref = pathToFileURL(
     path.resolve(process.cwd(), 'scripts/build-bundles.mjs'),
   ).href;
@@ -75,7 +75,7 @@ test('build bundle script emits core profile entry files and manifest', async ()
 
     const bundleEntryPath = path.resolve(
       sandbox,
-      'dist/bundles/core/frostpillar-core.js',
+      'dist/bundles/core/frostpillar-core.min.js',
     );
     const bundleEntryTypesPath = path.resolve(
       sandbox,
@@ -88,11 +88,7 @@ test('build bundle script emits core profile entry files and manifest', async ()
     assert.equal(await pathExists(manifestPath), true);
 
     const bundleEntrySource = await readFile(bundleEntryPath, 'utf8');
-    assert.match(bundleEntrySource, /export \* from '\.\/core\/index\.js';/);
-    assert.match(
-      bundleEntrySource,
-      /export \* from '\.\/queryEngine\/runQueryWithEngine\.js';/,
-    );
+    assert.match(bundleEntrySource, /Frostpillar/);
 
     const manifestSource = await readFile(manifestPath, 'utf8');
     const manifestJson = JSON.parse(manifestSource);
@@ -100,7 +96,7 @@ test('build bundle script emits core profile entry files and manifest', async ()
     assert.equal(manifestJson.profiles[0]?.name, 'core');
     assert.equal(
       manifestJson.profiles[0]?.entry,
-      'dist/bundles/core/frostpillar-core.js',
+      'dist/bundles/core/frostpillar-core.min.js',
     );
   } finally {
     await rm(sandbox, { recursive: true, force: true });

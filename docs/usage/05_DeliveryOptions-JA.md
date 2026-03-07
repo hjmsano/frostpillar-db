@@ -52,9 +52,15 @@ pnpm build:bundle
 
 ### 生成アーティファクト
 
-- `dist/bundles/core/frostpillar-core.js`
+- `dist/bundles/core/frostpillar-core.min.js`
 - `dist/bundles/core/frostpillar-core.d.ts`
 - `dist/bundles/manifest.json`
+
+### ブラウザスクリプト契約
+
+- `frostpillar-core.min.js` は単一ファイルのブラウザ実行用アーティファクトです。
+- `<script src=".../frostpillar-core.min.js"></script>` で読み込めます。
+- 公開 API は `globalThis.Frostpillar`（例: `Frostpillar.Datastore`）で参照します。
 
 ### プロファイル方針
 
@@ -78,7 +84,7 @@ pnpm build:bundle
 
 | Profile | 公開状態 | 現在のバックエンド | 補足 |
 | :------ | :------- | :----------------- | :--- |
-| `core` | `published` | `memory` | 現在のリリース生成物は `dist/bundles/core/frostpillar-core.js` |
+| `core` | `published` | `memory` | 現在のリリース生成物は `dist/bundles/core/frostpillar-core.min.js` |
 | `core-indexeddb` | `planned`（計画中） | なし | runtime-slice で IndexedDB 対応が受理された後に有効化 |
 | `core-opfs` | `planned`（計画中） | なし | runtime-slice で OPFS 対応が受理された後に有効化 |
 | `core-localstorage` | `planned`（計画中） | なし | runtime-slice で localStorage 対応が受理された後に有効化 |
