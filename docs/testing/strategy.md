@@ -16,7 +16,9 @@ It is aligned with:
 
 1. Spec-Driven + TDD first
 
-- Step order is mandatory: spec update -> failing test -> implementation -> refactor -> full verification.
+- Step order is mandatory:
+  intent alignment -> spec update -> failing tests -> implementation -> verification.
+- Refactor is allowed only after targeted tests are green and before final full verification.
 
 2. Determinism over convenience
 
@@ -216,6 +218,13 @@ Merge gate (minimum):
 - full test suite green
 - no type/lint/format failures
 - docs/spec updates included when behavior changes
+
+Workflow alignment guardrails:
+
+- testing workflow order MUST stay aligned with `docs/specs/12_DevelopmentWorkflow.md`
+- verification command contract MUST stay aligned with:
+  - `pnpm test --run`
+  - `pnpm check`
 
 ## 9. Test Data and Fixtures
 

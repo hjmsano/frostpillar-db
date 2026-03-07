@@ -12,6 +12,39 @@ const REQUIRED_INPUT_FILES = [
   'dist/queryEngine/runQueryWithEngine.d.ts',
 ];
 
+const PROFILE_MATRIX = [
+  {
+    name: CORE_PROFILE_NAME,
+    availability: 'published',
+    backends: ['memory'],
+    note: 'Published baseline bundle with browser-safe core/query modules.',
+  },
+  {
+    name: 'core-indexeddb',
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for IndexedDB adapter once runtime-slice support is accepted.',
+  },
+  {
+    name: 'core-opfs',
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for OPFS adapter once runtime-slice support is accepted.',
+  },
+  {
+    name: 'core-localstorage',
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for localStorage adapter once runtime-slice support is accepted.',
+  },
+  {
+    name: 'full-browser',
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for all browser adapters after runtime-slice support expansion.',
+  },
+];
+
 const ensureFileExists = async (absolutePath, relativePathForMessage) => {
   try {
     await access(absolutePath);
@@ -109,8 +142,10 @@ export const buildBundleArtifacts = async (options = {}) => {
           .join('/'),
         types: path.relative(cwd, typeEntryPath).split(path.sep).join('/'),
         includes: ['core', 'queryEngine'],
+        supportedBackends: ['memory'],
       },
     ],
+    profileMatrix: PROFILE_MATRIX,
   };
 
   const manifestPath = path.resolve(bundleRootDirectory, 'manifest.json');

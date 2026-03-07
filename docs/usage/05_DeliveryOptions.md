@@ -33,6 +33,12 @@ const db = new Datastore({ location: 'memory' });
 await db.insert({ timestamp: Date.now(), payload: { temp: 25.3 } });
 ```
 
+### Package contract checkpoints
+
+- `package.json` uses named-export-only top-level `exports["."]` for runtime and type entries.
+- `npm pack` artifact includes `dist/core` and `dist/queryEngine` runtime and `.d.ts` files.
+- clean fixture install/import smoke path is validated by tests.
+
 ## 3. Browser Bundle Track
 
 Use this track when you need direct browser loading (for example script/CDN or static hosting scenarios).
@@ -43,6 +49,12 @@ Use this track when you need direct browser loading (for example script/CDN or s
 pnpm build
 pnpm build:bundle
 ```
+
+### Generated artifacts
+
+- `dist/bundles/core/frostpillar-core.js`
+- `dist/bundles/core/frostpillar-core.d.ts`
+- `dist/bundles/manifest.json`
 
 ### Bundle profile policy
 
@@ -60,14 +72,14 @@ pnpm build:bundle
 - Runtime backend support still follows datastore runtime-slice specs.
 - Browser backend support is phased; only declared runtime-supported backends can be claimed by bundle profiles.
 
-## 5. Profile Matrix Template
+## 5. Current Profile Matrix (2026-03-07)
 
-Use and publish a matrix like this in release notes:
+The profile matrix is published in `dist/bundles/manifest.json` (`profileMatrix` field).
 
-| Profile | Includes | Target |
-| :------ | :------- | :----- |
-| `core` | core API without browser-specific persistent adapters | browser baseline |
-| `core-indexeddb` | core + IndexedDB adapter | browser persistence (IndexedDB) |
-| `core-opfs` | core + OPFS adapter | browser persistence (OPFS) |
-| `core-localstorage` | core + localStorage adapter | compatibility fallback |
-| `full-browser` | core + all browser adapters supported in current runtime slice | convenience all-in-one |
+| Profile | Availability | Current backends | Notes |
+| :------ | :----------- | :--------------- | :---- |
+| `core` | `published` | `memory` | current release artifact is `dist/bundles/core/frostpillar-core.js` |
+| `core-indexeddb` | `planned` | none yet | enabled only after runtime-slice IndexedDB support is accepted |
+| `core-opfs` | `planned` | none yet | enabled only after runtime-slice OPFS support is accepted |
+| `core-localstorage` | `planned` | none yet | enabled only after runtime-slice localStorage support is accepted |
+| `full-browser` | `planned` | none yet | enabled only after browser adapter runtime support is expanded |

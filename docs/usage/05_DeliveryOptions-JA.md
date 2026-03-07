@@ -33,6 +33,12 @@ const db = new Datastore({ location: 'memory' });
 await db.insert({ timestamp: Date.now(), payload: { temp: 25.3 } });
 ```
 
+### パッケージ契約の確認ポイント
+
+- `package.json` の top-level `exports["."]` は runtime/type の named export エントリを定義します。
+- `npm pack` 生成物には `dist/core` と `dist/queryEngine` の runtime および `.d.ts` ファイルが含まれます。
+- クリーン fixture での install/import スモーク経路をテストで検証します。
+
 ## 3. ブラウザバンドル配布
 
 スクリプト配信や静的ホスティングなど、ブラウザで直接読み込む場合に使います。
@@ -43,6 +49,12 @@ await db.insert({ timestamp: Date.now(), payload: { temp: 25.3 } });
 pnpm build
 pnpm build:bundle
 ```
+
+### 生成アーティファクト
+
+- `dist/bundles/core/frostpillar-core.js`
+- `dist/bundles/core/frostpillar-core.d.ts`
+- `dist/bundles/manifest.json`
 
 ### プロファイル方針
 
@@ -60,14 +72,14 @@ pnpm build:bundle
 - 実行時バックエンド対応は datastore の runtime-slice spec に従います。
 - ブラウザバックエンド対応は段階導入のため、bundle プロファイルでサポートを宣言できるのは runtime-slice で対応済みのもののみです。
 
-## 5. プロファイル表テンプレート
+## 5. 現在のプロファイル行列（2026-03-07）
 
-リリースノートでは次のような表を公開してください。
+プロファイル行列は `dist/bundles/manifest.json` の `profileMatrix` として公開します。
 
-| Profile | 含まれるもの | 対象 |
-| :------ | :----------- | :--- |
-| `core` | ブラウザ永続化アダプタを除く core API | ブラウザ基盤 |
-| `core-indexeddb` | core + IndexedDB アダプタ | IndexedDB 永続化 |
-| `core-opfs` | core + OPFS アダプタ | OPFS 永続化 |
-| `core-localstorage` | core + localStorage アダプタ | 互換フォールバック |
-| `full-browser` | runtime-slice で対応済みの全ブラウザアダプタを含む core | 便利な all-in-one |
+| Profile | 公開状態 | 現在のバックエンド | 補足 |
+| :------ | :------- | :----------------- | :--- |
+| `core` | `published` | `memory` | 現在のリリース生成物は `dist/bundles/core/frostpillar-core.js` |
+| `core-indexeddb` | `planned`（計画中） | なし | runtime-slice で IndexedDB 対応が受理された後に有効化 |
+| `core-opfs` | `planned`（計画中） | なし | runtime-slice で OPFS 対応が受理された後に有効化 |
+| `core-localstorage` | `planned`（計画中） | なし | runtime-slice で localStorage 対応が受理された後に有効化 |
+| `full-browser` | `planned`（計画中） | なし | ブラウザアダプタの runtime 対応拡張後に有効化 |

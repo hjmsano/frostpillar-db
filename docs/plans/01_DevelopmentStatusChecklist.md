@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 3: Query and Capacity Hardening (completed)`
-- Active work item: `docs/plans/07_PhaseWorkItem_P3_SchedulerCoalescing_and_ErrorChannelRegression.md (completed)`
-- Scope note: Phase 4 (P4 dual delivery requirement: NPM + browser bundle profiles) is queued as next execution target.
+- Active phase: `Phase 0: Foundation Sync (completed)`
+- Active work item: `docs/plans/08_PhaseWorkItem_P0_FoundationSync_GovernanceClosure.md (completed)`
+- Scope note: Phase 0 governance closure and Phase 4 delivery closure are both complete; next scope requires explicit plan activation.
 
 ## 4. Phase Status Checklist
 
@@ -35,10 +35,10 @@ Use it to track progress across phases and the currently active work item.
 
 - [x] baseline toolchain commands are available
 - [x] workflow spec and templates are published
-- [ ] confirm `docs/specs` and `docs/adr` references are consistent in new changes
-- [ ] enforce phase-gate checklist in every feature PR
-- [ ] keep test strategy and workflow docs aligned
-- [ ] exit criteria met: every new work item follows intent -> spec -> tests -> implementation -> verification
+- [x] confirm `docs/specs` and `docs/adr` references are consistent in new changes
+- [x] enforce phase-gate checklist in every feature PR
+- [x] keep test strategy and workflow docs aligned
+- [x] exit criteria met: every new work item follows intent -> spec -> tests -> implementation -> verification
 
 ### Phase 1: Memory Vertical Slice
 
@@ -69,11 +69,11 @@ Use it to track progress across phases and the currently active work item.
 
 ### Phase 4: Distribution Delivery Tracks
 
-- [ ] define release-ready NPM delivery contract with smoke verification
-- [ ] produce browser bundle artifacts for mandatory `core` profile
-- [ ] define and verify bundle profile matrix for optional browser adapters
-- [ ] publish EN/JA usage guidance for delivery/profile selection
-- [ ] exit criteria met: dual delivery tracks are test-proven and documented
+- [x] define release-ready NPM delivery contract with smoke verification
+- [x] produce browser bundle artifacts for mandatory `core` profile
+- [x] define and verify bundle profile matrix for optional browser adapters
+- [x] publish EN/JA usage guidance for delivery/profile selection
+- [x] exit criteria met: dual delivery tracks are test-proven and documented
 
 ## 5. Active Work-Item Checklist (M1 Historical)
 
@@ -109,12 +109,12 @@ Use this section as the day-to-day completion board for the current work item.
 
 ## 8. Active Work-Item Checklist (P4 Distribution Delivery Tracks)
 
-- [ ] npm install/import smoke tests added first and confirmed red
-- [ ] browser bundle `core` profile smoke test added first and confirmed red
-- [ ] package artifact/export shape implemented and verified
-- [ ] bundle profile artifacts and metadata matrix implemented and verified
-- [ ] EN/JA usage docs updated for delivery choices
-- [ ] full verification green (`pnpm test --run`, `pnpm check`)
+- [x] npm install/import smoke tests added first and confirmed red
+- [x] browser bundle `core` profile smoke test added first and confirmed red
+- [x] package artifact/export shape implemented and verified
+- [x] bundle profile artifacts and metadata matrix implemented and verified
+- [x] EN/JA usage docs updated for delivery choices
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
 
 ## 9. Active Work-Item Checklist (M3 Query Scalability Index Hardening)
 
@@ -131,4 +131,13 @@ Use this section as the day-to-day completion board for the current work item.
 - [x] failing tests added first for coalescing and background-error propagation/retry
 - [x] file backend controller coalescing + in-flight close-wait behavior implemented
 - [x] background auto-commit failed-attempt event emission verified (`StorageEngineError`)
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 11. Active Work-Item Checklist (P0 Foundation Sync Governance Closure)
+
+- [x] scope/acceptance criteria aligned for remaining Phase 0 governance clauses
+- [x] failing tests added first for PR checklist, docs index consistency, and workflow/testing alignment
+- [x] feature PR template includes mandatory phase-gate checklist
+- [x] docs index consistency guardrails implemented and verified
+- [x] workflow/testing-strategy alignment clauses and usage guidance updated
 - [x] full verification green (`pnpm test --run`, `pnpm check`)

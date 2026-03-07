@@ -47,7 +47,7 @@ test('phase 3 scheduler work-item and ADR are indexed', async () => {
   );
   assert.match(
     status,
-    /Active work item: `docs\/plans\/07_PhaseWorkItem_P3_SchedulerCoalescing_and_ErrorChannelRegression\.md \(completed\)`/,
+    /- \[x\] add regression suites for scheduler coalescing and error-channel propagation/,
   );
   assert.match(workItem, /Plan: Phase Work Item \(P3 Scheduler Coalescing and Error-Channel Regression\)/i);
 

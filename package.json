@@ -5,6 +5,17 @@
   "type": "module",
   "main": "./dist/core/index.js",
   "types": "./dist/core/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/core/index.d.ts",
+      "default": "./dist/core/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc --build",
     "build:bundle": "node ./scripts/build-bundles.mjs",

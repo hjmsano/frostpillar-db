@@ -185,3 +185,35 @@ following code-organization policy for `src/**/*.ts`.
 - Structure-only refactors (split/rename/move without behavior change) MUST keep tests green.
 - A change that introduces or updates split rules SHOULD include module-structure tests
   or import-surface assertions where practical.
+
+## 9. Foundation Governance Enforcement
+
+To keep Phase 0 governance continuously enforceable, the repository MUST keep explicit,
+test-backed guardrails for PR execution and documentation consistency.
+
+### 9.1 Feature PR Phase-Gate Checklist
+
+- Repository MUST provide `.github/pull_request_template.md`.
+- The template MUST include explicit checklist items for:
+  - intent alignment
+  - spec update
+  - failing tests added first
+  - implementation after red tests
+  - verification (`pnpm test --run`, `pnpm check`)
+  - EN/JA usage updates when user-visible behavior changed
+  - ADR update when architectural/process consequences exist
+
+### 9.2 Documentation Index Consistency
+
+- `docs/specs/INDEX.md` and `docs/adr/INDEX.md` MUST list all corresponding markdown files
+  in their directories except each directory's own `INDEX.md`.
+- New or renamed spec/ADR files MUST update the corresponding index in the same change.
+
+### 9.3 Workflow and Testing-Strategy Alignment
+
+- `docs/specs/12_DevelopmentWorkflow.md` and `docs/testing/strategy.md` MUST keep
+  mandatory workflow order aligned:
+  - `intent alignment -> spec update -> failing tests -> implementation -> verification`
+- Both documents MUST keep the full verification command contract aligned:
+  - `pnpm test --run`
+  - `pnpm check`

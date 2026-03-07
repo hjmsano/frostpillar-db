@@ -37,9 +37,13 @@ For every publishable Frostpillar release, the project MUST provide an installab
 
 - Package name MUST be `frostpillar`.
 - Package artifacts MUST include JavaScript runtime files and matching `.d.ts` files for each public entry.
+- Package `package.json` MUST define an explicit top-level `exports` map for `"."` with both:
+  - runtime entry (for example `default` to `./dist/core/index.js`)
+  - type entry (for example `types` to `./dist/core/index.d.ts`)
 - Package exports MUST use named exports only.
 - Package behavior MUST match the runtime slice contract from `docs/specs/04_DatastoreAPI.md`.
 - Unsupported runtime backends remain invalid configuration and MUST fail with typed errors (for example `UnsupportedBackendError`) exactly as specified.
+- `npm pack` output MUST be installable from a clean fixture project, and `import { Datastore } from "frostpillar"` MUST load without additional build steps.
 
 ### 3.2 Browser Bundle Track
 
@@ -64,6 +68,26 @@ For optional profiles, this rule applies:
   - a dedicated profile for that backend, or
   - a `full-browser` profile that includes it.
 
+### 3.4 Browser Bundle Manifest and Profile Matrix Contract
+
+Browser bundle generation MUST emit deterministic profile metadata under `dist/bundles/manifest.json`.
+
+- manifest MUST include `schemaVersion`, `generatedAt`, and `profiles`.
+- each entry in `profiles` MUST include:
+  - `name`
+  - runtime entry path (`entry`)
+  - declaration entry path (`types`)
+  - included module groups (`includes`)
+- manifest MUST include `profileMatrix` with one entry per profile policy name:
+  - mandatory: `core`
+  - optional: `core-indexeddb`, `core-opfs`, `core-localstorage`, `full-browser`
+- each `profileMatrix` entry MUST declare:
+  - `name`
+  - `availability` (`published` or `planned`)
+  - `backends` (declared backend coverage for that profile)
+- profiles with `availability: "published"` MUST have a matching artifact in `profiles`.
+- profiles with `availability: "planned"` MUST NOT claim backend runtime support beyond current runtime-slice support.
+
 ## 4. Delivery Compatibility Contract
 
 Delivery track changes MUST NOT redefine Frostpillar feature semantics.
@@ -87,6 +111,8 @@ A delivery implementation work item is complete only when all are true:
 
 - NPM install/use smoke path is test-backed.
 - Browser bundle `core` profile load/use smoke path is test-backed.
+- package artifact/export shape is test-backed.
+- bundle profile metadata matrix is test-backed and consistent with produced artifacts.
 - EN/JA usage docs include install and profile-selection guidance.
 - release artifact list and supported profile matrix are explicit in docs.
 

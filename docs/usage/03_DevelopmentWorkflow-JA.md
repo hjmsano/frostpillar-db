@@ -91,3 +91,25 @@ TypeScript 実装では次の実務ポリシーを適用します。
 
 現時点のポリシーでは外部公開先へのアーティファクト配布は行いません。
 ビルド成果物はワークフロー内検証用としてのみ生成します。
+
+## 7. Feature PR チェックリストの強制
+
+機能開発の Pull Request では `.github/pull_request_template.md` を必ず使用します。
+テンプレート内のチェックリストは最小実行ゲートであり、マージ前に完了が必要です。
+
+- intent alignment
+- spec 先行更新
+- 失敗テスト先行（TDD Red）
+- Red テスト後に実装（TDD Green）
+- 全体検証（`pnpm test --run`, `pnpm check`）
+- ユーザー影響がある場合の EN/JA usage 更新
+- アーキテクチャ/プロセス判断時の ADR 更新
+
+## 8. docs index 整合ルール
+
+ファイル追加やリネーム時は次を同時更新します。
+
+- spec 変更時: `docs/specs/INDEX.md`
+- ADR 変更時: `docs/adr/INDEX.md`
+
+これらの整合チェックはテストで検証され、ガバナンスゲートとして扱います。
