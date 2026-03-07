@@ -146,7 +146,7 @@ Use this section as the day-to-day completion board for the current work item.
 
 - [x] M5 work-item plan activated and indexed
 - [x] ADR cleanup applied for current execution state and v0.2 direction
-- [ ] benchmark method and reproducible script draft defined
-- [ ] v0.1 limitations and non-goals documented in README and usage EN/JA
-- [ ] targeted M5 release-hardening docs/tests added and confirmed red before implementation
-- [ ] full verification green (`pnpm test --run`, `pnpm check`)
+- [x] benchmark method and reproducible script draft defined
+- [x] v0.1 limitations and non-goals documented in README and usage EN/JA
+- [x] targeted M5 release-hardening docs/tests added and confirmed red before implementation
+- [x] full verification green (`pnpm test --run`, `pnpm check`)

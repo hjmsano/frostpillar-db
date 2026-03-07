@@ -17,5 +17,6 @@ This directory contains the detailed technical specifications for each feature a
 | [**11_BTreeIndexInvariants.md**](./11_BTreeIndexInvariants.md) | Defines structural invariants and split/merge rules for the B+ Tree index.                                  |
 | [**12_DevelopmentWorkflow.md**](./12_DevelopmentWorkflow.md)   | Defines mandatory phase-gate collaboration workflow (intent, spec, tests, implementation, verification).   |
 | [**13_DistributionDeliveryTracks.md**](./13_DistributionDeliveryTracks.md) | Defines dual delivery track requirements for NPM module and browser bundle profile distribution. |
+| [**14_ReleaseHardening_v0.1.md**](./14_ReleaseHardening_v0.1.md) | Defines v0.1 release-hardening contract for benchmark reproducibility, limitations disclosure, and closure gates. |
 
 For phased/tasked execution plans, see [../plans/INDEX.md](../plans/INDEX.md).
