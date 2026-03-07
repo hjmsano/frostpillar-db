@@ -4,12 +4,6 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const CORE_PROFILE_NAME = 'core';
-const OPTIONAL_PROFILE_NAMES = [
-  'core-indexeddb',
-  'core-opfs',
-  'core-localstorage',
-  'full-browser',
-];
 
 const REQUIRED_INPUT_FILES = [
   'dist/core/index.js',
@@ -26,25 +20,25 @@ const PROFILE_MATRIX = [
     note: 'Published baseline bundle with browser-safe core/query modules.',
   },
   {
-    name: OPTIONAL_PROFILE_NAMES[0],
+    name: 'core-indexeddb',
     availability: 'planned',
     backends: [],
     note: 'Reserved for IndexedDB adapter once runtime-slice support is accepted.',
   },
   {
-    name: OPTIONAL_PROFILE_NAMES[1],
+    name: 'core-opfs',
     availability: 'planned',
     backends: [],
     note: 'Reserved for OPFS adapter once runtime-slice support is accepted.',
   },
   {
-    name: OPTIONAL_PROFILE_NAMES[2],
+    name: 'core-localstorage',
     availability: 'planned',
     backends: [],
     note: 'Reserved for localStorage adapter once runtime-slice support is accepted.',
   },
   {
-    name: OPTIONAL_PROFILE_NAMES[3],
+    name: 'full-browser',
     availability: 'planned',
     backends: [],
     note: 'Reserved for all browser adapters after runtime-slice support expansion.',
