@@ -1,4 +1,4 @@
-# ADR-42: GitHub Actions CI/CD Validation and Build Policy
+# ADR-44: GitHub Actions CI/CD Validation and Build Policy
 
 Status: Accepted  
 Date: 2026-03-07
