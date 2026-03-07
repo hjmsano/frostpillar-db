@@ -37,7 +37,7 @@ test('adr for ci cd workflow policy is recorded and indexed', async () => {
   );
   const adrIndex = await readFileUtf8('docs/adr/INDEX.md');
 
-  assert.match(adr, /ADR-42/i);
+  assert.match(adr, /ADR-44/i);
   assert.match(adr, /GitHub Actions CI\/CD Validation and Build Policy/i);
   assert.match(adr, /pull requests?[\s\S]*lint and test/i);
   assert.match(adr, /default branch[\s\S]*build/i);
