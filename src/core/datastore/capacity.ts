@@ -1,26 +1,12 @@
-import { QuotaExceededError } from '../errors/index.js';
-import { compareByLogicalOrder } from '../records/ordering.js';
-import type { PersistedTimeseriesRecord } from '../types.js';
 import type { CapacityState } from './types.js';
-
-const evictOldestRecord = (records: PersistedTimeseriesRecord[]): number => {
-  let oldestIndex = 0;
-  for (let index = 1; index < records.length; index += 1) {
-    if (compareByLogicalOrder(records[index], records[oldestIndex]) < 0) {
-      oldestIndex = index;
-    }
-  }
-
-  const removed = records[oldestIndex];
-  records.splice(oldestIndex, 1);
-  return removed.encodedBytes;
-};
+import { QuotaExceededError } from '../errors/index.js';
 
 export const enforceCapacityPolicy = (
-  records: PersistedTimeseriesRecord[],
   capacityState: CapacityState | null,
   currentSizeBytes: number,
   encodedBytes: number,
+  getRecordCount: () => number,
+  evictOldestRecord: () => number,
 ): number => {
   if (capacityState === null) {
     return currentSizeBytes;
@@ -43,13 +29,13 @@ export const enforceCapacityPolicy = (
 
   let nextSizeBytes = currentSizeBytes;
   while (nextSizeBytes + encodedBytes > capacityState.maxSizeBytes) {
-    if (records.length === 0) {
+    if (getRecordCount() === 0) {
       throw new QuotaExceededError(
         'Record cannot fit in turnover policy with empty datastore.',
       );
     }
 
-    nextSizeBytes -= evictOldestRecord(records);
+    nextSizeBytes -= evictOldestRecord();
   }
 
   return nextSizeBytes;

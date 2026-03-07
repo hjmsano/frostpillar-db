@@ -130,6 +130,13 @@ For `select({ start, end })`:
 
 Returned rows MUST be ordered exactly by logical key order.
 
+## 7.1 Query Path Requirement (M3)
+
+- M3 implementation of `select` MUST use index seek + linked-leaf forward scan.
+- `select` MUST NOT require full-dataset `filter + sort` execution for range reads.
+- Full scan fallback MAY exist only for explicit integrity-recovery modes, and such modes
+  MUST be outside normal runtime query path.
+
 ## 8. Turnover Oldest-Key Contract
 
 For retention turnover (`policy: "turnover"`), oldest record selection MUST be deterministic:
@@ -154,3 +161,24 @@ Required checks include:
 - broken branch routing range contract
 - broken `prev/next` leaf linkage
 - impossible occupancy state outside root exceptions
+
+## 11. Complexity Expectations (Normative)
+
+- point/range start seek: expected `O(log N)`
+- range materialization after seek: expected `O(K)` where `K` is returned row count
+- insert with possible split propagation: expected `O(log N)`
+- oldest-record lookup for turnover eviction: expected `O(1)` for leftmost-leaf head access
+  plus rebalance cost up to `O(log N)` when structural underflow occurs
+
+The above complexity expectations are part of M3 acceptance criteria.
+
+## 12. M3 Test Requirements Link
+
+M3 implementation MUST include:
+
+- property-style insertion/order invariants with deterministic pseudo-random streams
+- split/merge regression suite that validates:
+  - branch routing range contract
+  - linked-leaf consistency
+  - stable duplicate-timestamp tie-break ordering
+- turnover oldest-pop regression coverage through rebalance paths

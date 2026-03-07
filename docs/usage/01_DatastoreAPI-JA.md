@@ -81,6 +81,8 @@ const records = await db.select({
 - 同一 `timestamp` は挿入順で返ります
 - 挿入順は内部で永続化される `insertionOrder` キー（`Uint64`）で管理されるため、
   再起動・ページ分割・compaction・rewrite 後も順序は安定します
+- M3+ の範囲読み取り経路は B+ tree の lower-bound seek + linked-leaf scan を使用します
+  （期待計算量 `O(log N + K)`、`K` は返却行数）
 - 既存レコードの更新時は、同一 `timestamp` 内での元の順序位置を維持します
 - 将来の upsert でも、既存レコードに対する更新経路では元の順序位置を維持します
 - 返却される `timestamp` は Unix epoch ミリ秒 (`number`) です
@@ -119,6 +121,10 @@ const db = new Datastore({
 - 1分ごと: `"1m"`
 - サイズ閾値コミット: 未コミットの保留バイト数が `maxPendingBytes` に達した時点でコミット
 - 間隔トリガーとサイズ閾値を同時指定した場合は、先に満たした条件でコミット
+- scheduler は重複トリガーを coalescing します。1つのコミットが進行中に追加トリガーが来た場合、
+  保留変更が残っていれば終了後に 1 回だけ追従コミットを実行します
+- バックグラウンド auto-commit の失敗は「失敗試行ごとに 1 件」の error event を発火し、
+  未反映変更は次回トリガーで再試行できる状態を維持します
 
 バックグラウンド自動コミット（`"immediate"` 以外）で発生した失敗は、Datastore の error channel で受け取ります:
 

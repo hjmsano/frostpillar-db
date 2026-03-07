@@ -57,6 +57,8 @@ Rules:
 - Datastore MUST ensure at most one active commit execution at a time.
 - If a commit trigger fires while commit is in progress, datastore MUST coalesce triggers and run one additional commit after the in-flight commit completes (if pending changes remain).
 - Background commit failures MUST emit one `DatastoreErrorEvent` per failed commit attempt.
+- On background commit failure, pending dirty state MUST remain queued for retry by later periodic/size/manual trigger.
+- `close()` MUST wait for any active commit attempt to settle (success or failure) before lock/resource release.
 - `close()` MUST stop future scheduling before resource teardown.
 - `close()` MUST wait for active commit completion or failure before resolving.
 

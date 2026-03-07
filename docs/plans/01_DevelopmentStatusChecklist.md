@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 3: Query and Capacity Hardening (in progress)`
-- Active work item: `docs/plans/05_PhaseWorkItem_P4_DistributionDeliveryTracks.md (queued after Phase 3 exit)`
-- Scope note: dual delivery requirement (NPM + browser bundle profiles) is clarified in spec/ADR and queued for dedicated implementation planning.
+- Active phase: `Phase 3: Query and Capacity Hardening (completed)`
+- Active work item: `docs/plans/07_PhaseWorkItem_P3_SchedulerCoalescing_and_ErrorChannelRegression.md (completed)`
+- Scope note: Phase 4 (P4 dual delivery requirement: NPM + browser bundle profiles) is queued as next execution target.
 
 ## 4. Phase Status Checklist
 
@@ -62,8 +62,10 @@ Use it to track progress across phases and the currently active work item.
 
 - [x] add parity tests across native, SQL subset, and Lucene subset query paths
 - [x] strengthen capacity-boundary tests for strict/turnover policy edges
-- [ ] add regression suites for scheduler coalescing and error-channel propagation
-- [ ] exit criteria met: query and capacity behavior stays deterministic under mixed workloads
+- [x] implement M3 B+ tree index hardening (split/merge, linked leaves, duplicate ordering stability)
+- [x] add M3 property-style insertion/order invariants and split/merge regression suites
+- [x] add regression suites for scheduler coalescing and error-channel propagation
+- [x] exit criteria met: query and capacity behavior stays deterministic under mixed workloads
 
 ### Phase 4: Distribution Delivery Tracks
 
@@ -113,3 +115,20 @@ Use this section as the day-to-day completion board for the current work item.
 - [ ] bundle profile artifacts and metadata matrix implemented and verified
 - [ ] EN/JA usage docs updated for delivery choices
 - [ ] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 9. Active Work-Item Checklist (M3 Query Scalability Index Hardening)
+
+- [x] scope/acceptance criteria aligned with ADR-01 M3 and B+ tree spec updates
+- [x] failing tests added first for split/merge + linked-leaf + property-style invariants
+- [x] failing datastore-level regression added for index-based `select` path (no full scan dependency)
+- [x] B+ tree index module implemented with split/merge/rebalance and oldest-pop path
+- [x] datastore integrated with index for `select` and turnover eviction path
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 10. Active Work-Item Checklist (P3 Scheduler Coalescing and Error-Channel Regression)
+
+- [x] scope/acceptance criteria aligned for remaining Phase 3 scheduler/error-channel clauses
+- [x] failing tests added first for coalescing and background-error propagation/retry
+- [x] file backend controller coalescing + in-flight close-wait behavior implemented
+- [x] background auto-commit failed-attempt event emission verified (`StorageEngineError`)
+- [x] full verification green (`pnpm test --run`, `pnpm check`)

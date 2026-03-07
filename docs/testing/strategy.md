@@ -84,6 +84,7 @@ B+ tree:
 - split/merge invariants
 - duplicate timestamp handling
 - range scan correctness across multiple leaves
+- M3 regression that `select` uses index seek + leaf scan path (no full-dataset `filter + sort`)
 - equal-timestamp tie-break order must remain stable through split/merge/rebalance
 
 Datastore API:
