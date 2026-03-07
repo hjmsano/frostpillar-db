@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 0: Foundation Sync (completed)`
-- Active work item: `docs/plans/08_PhaseWorkItem_P0_FoundationSync_GovernanceClosure.md (completed)`
-- Scope note: Phase 0 governance closure and Phase 4 delivery closure are both complete; next scope requires explicit plan activation.
+- Active phase: `M5: Release Hardening (active)`
+- Active work item: `docs/plans/09_PhaseWorkItem_M5_ReleaseHardening_v0.1.md (active)`
+- Scope note: Phase 0-4 closure is preserved as completed history; active execution now targets release hardening and post-v0.1 direction alignment.
 
 ## 4. Phase Status Checklist
 
@@ -141,3 +141,12 @@ Use this section as the day-to-day completion board for the current work item.
 - [x] docs index consistency guardrails implemented and verified
 - [x] workflow/testing-strategy alignment clauses and usage guidance updated
 - [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 12. Active Work-Item Checklist (M5 Release Hardening v0.1)
+
+- [x] M5 work-item plan activated and indexed
+- [x] ADR cleanup applied for current execution state and v0.2 direction
+- [ ] benchmark method and reproducible script draft defined
+- [ ] v0.1 limitations and non-goals documented in README and usage EN/JA
+- [ ] targeted M5 release-hardening docs/tests added and confirmed red before implementation
+- [ ] full verification green (`pnpm test --run`, `pnpm check`)

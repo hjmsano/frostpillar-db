@@ -1,6 +1,6 @@
 # ADR-01: Development Plan (Execution-Focused)
 
-Status: Proposed  
+Status: Accepted  
 Date: 2026-03-06
 
 ## Context
@@ -14,6 +14,11 @@ To make Frostpillar successful quickly, we need a plan that is:
 - safe (Spec-Driven + TDD-first)
 
 The previous draft listed major components but did not define quality gates, delivery order risk, or a minimum shippable scope.
+
+Historical context update (2026-03-07):
+
+- Phases 0-4 are complete and recorded in `docs/plans/01_DevelopmentStatusChecklist.md`
+- this ADR remains the canonical milestone baseline for active M5 release hardening and post-v0.1 sequencing
 
 ## Decision
 

@@ -18,7 +18,7 @@ test('phase 0 governance closure docs are tracked and marked complete', async ()
 
   assert.match(
     checklist,
-    /Active work item: `docs\/plans\/08_PhaseWorkItem_P0_FoundationSync_GovernanceClosure\.md \(completed\)`/,
+    /## 11\. Active Work-Item Checklist \(P0 Foundation Sync Governance Closure\)/,
   );
 
   assert.match(
