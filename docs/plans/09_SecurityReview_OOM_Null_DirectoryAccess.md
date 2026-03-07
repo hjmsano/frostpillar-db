@@ -139,5 +139,6 @@ These controls reduce risk, but the above open items remain.
 
 1. Implement symlink-aware path containment hardening first (SEC-2026-01).
 2. Add payload aggregate/breadth guardrails (SEC-2026-03).
-3. Add query-depth and query-result guardrails (SEC-2026-04 then SEC-2026-02).
-4. Record implementation decisions in ADR and update specs/tests with each change.
+3. Add query-depth and query-result guardrails (SEC-2026-04 and part of SEC-2026-02).
+4. Implement query pipeline optimizations (remaining part of SEC-2026-02).
+5. Record implementation decisions in ADR and update specs/tests with each change.
