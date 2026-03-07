@@ -1,4 +1,5 @@
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { ConfigurationError } from '../errors/index.js';
 import type {
   AutoCommitConfig,
@@ -26,14 +27,39 @@ const isPathWithinBaseDirectory = (
   );
 };
 
-const ensurePathWithinWorkingDirectory = (
+const resolveNearestExistingAncestor = (targetPath: string): string => {
+  let currentPath = resolve(targetPath);
+
+  while (!existsSync(currentPath)) {
+    const parentPath = dirname(currentPath);
+    if (parentPath === currentPath) {
+      break;
+    }
+    currentPath = parentPath;
+  }
+
+  return currentPath;
+};
+
+const resolveCanonicalPathForContainment = (targetPath: string): string => {
+  const resolvedTargetPath = resolve(targetPath);
+  const nearestExistingAncestor = resolveNearestExistingAncestor(resolvedTargetPath);
+  const canonicalAncestor = realpathSync(nearestExistingAncestor);
+  const relativeSuffix = relative(nearestExistingAncestor, resolvedTargetPath);
+
+  return resolve(join(canonicalAncestor, relativeSuffix));
+};
+
+export const ensureCanonicalPathWithinWorkingDirectory = (
   targetPath: string,
   optionName: string,
 ): void => {
-  const workingDirectory = resolve(process.cwd());
-  if (!isPathWithinBaseDirectory(targetPath, workingDirectory)) {
+  const canonicalWorkingDirectory = realpathSync(resolve(process.cwd()));
+  const canonicalTargetPath = resolveCanonicalPathForContainment(targetPath);
+
+  if (!isPathWithinBaseDirectory(canonicalTargetPath, canonicalWorkingDirectory)) {
     throw new ConfigurationError(
-      `${optionName} must stay within process.cwd(): ${workingDirectory}`,
+      `${optionName} must stay within process.cwd(): ${canonicalWorkingDirectory}`,
     );
   }
 };
@@ -186,7 +212,7 @@ export const resolveFileDataPath = (config: FileDatastoreConfig): string => {
 
   if (config.filePath !== undefined) {
     const resolvedFilePath = resolve(config.filePath);
-    ensurePathWithinWorkingDirectory(resolvedFilePath, 'filePath');
+    ensureCanonicalPathWithinWorkingDirectory(resolvedFilePath, 'filePath');
     return resolvedFilePath;
   }
 
@@ -196,12 +222,12 @@ export const resolveFileDataPath = (config: FileDatastoreConfig): string => {
 
   if (config.target.kind === 'path') {
     const resolvedFilePath = resolve(config.target.filePath);
-    ensurePathWithinWorkingDirectory(resolvedFilePath, 'target.filePath');
+    ensureCanonicalPathWithinWorkingDirectory(resolvedFilePath, 'target.filePath');
     return resolvedFilePath;
   }
 
   const directoryPath = resolve(config.target.directory);
-  ensurePathWithinWorkingDirectory(directoryPath, 'target.directory');
+  ensureCanonicalPathWithinWorkingDirectory(directoryPath, 'target.directory');
   const filePrefix = config.target.filePrefix ?? '';
   const fileName = config.target.fileName ?? 'frostpillar';
   ensureSafeFileNameFragment(filePrefix, 'target.filePrefix');

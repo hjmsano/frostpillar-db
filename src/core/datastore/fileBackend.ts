@@ -12,7 +12,10 @@ import {
   StorageEngineError,
 } from '../errors/index.js';
 import type { FileDatastoreConfig } from '../types.js';
-import { resolveFileDataPath } from './config.js';
+import {
+  ensureCanonicalPathWithinWorkingDirectory,
+  resolveFileDataPath,
+} from './config.js';
 import type { FileBackendState } from './types.js';
 
 type NodeErrorWithCode = Error & { code?: string };
@@ -81,6 +84,10 @@ export const createFileBackend = (config: FileDatastoreConfig): FileBackendState
   const lockPath = `${dataFilePath}.lock`;
 
   mkdirSync(directoryPath, { recursive: true });
+  ensureCanonicalPathWithinWorkingDirectory(
+    dataFilePath,
+    'resolvedDataFilePath',
+  );
   acquireFileLock(lockPath);
 
   const backend: FileBackendState = {

@@ -87,6 +87,12 @@ The API boundary (`insert`) MUST normalize user input and enforce all rules belo
 - Payload object nesting depth MUST be `<= 64`.
 - Depth counting rule: payload root object is depth `0`; each nested plain object level increments depth by `1`.
 - Any payload exceeding max depth MUST be rejected at validation boundary.
+- One payload object level MUST contain at most `256` keys.
+- Total key count across full payload tree MUST be `<= 4096`.
+- Payload validation aggregate UTF-8 byte budget MUST be `<= 1048576` (`1 MiB`).
+  - budget includes UTF-8 bytes of payload keys and string values
+  - budget also includes fixed scalar costs for non-string primitive values
+  - payloads exceeding budget MUST fail validation before persistence
 
 ### 3.3 Insertion-Order Key (Internal, Persisted)
 
@@ -102,6 +108,8 @@ The API boundary (`insert`) MUST normalize user input and enforce all rules belo
 
 - Keys MUST be non-empty strings.
 - Each key MUST encode to UTF-8 byte length `<= 1024`.
+- Per-object key count MUST be `<= 256`.
+- Total key count across full payload tree MUST be `<= 4096`.
 - Keys are case-sensitive.
 - Duplicate keys are not possible in JavaScript objects and are therefore out of scope.
 - Key rules apply at every nested object level.

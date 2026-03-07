@@ -2,16 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileUtf8 } from '../shared/read-file-utf8.mjs';
 
-test('development status checklist activates M5 release hardening scope', async () => {
+test('development status checklist keeps M5 release hardening closure complete', async () => {
   const checklist = await readFileUtf8(
     'docs/plans/01_DevelopmentStatusChecklist.md',
   );
 
-  assert.match(checklist, /Active phase: `M5: Release Hardening \(active\)`/);
-  assert.match(
-    checklist,
-    /Active work item: `docs\/plans\/09_PhaseWorkItem_M5_ReleaseHardening_v0\.1\.md \(active\)`/,
-  );
   assert.match(
     checklist,
     /## 12\. Active Work-Item Checklist \(M5 Release Hardening v0\.1\)/,

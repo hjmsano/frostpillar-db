@@ -15,10 +15,10 @@ unsafe integration patterns, and accidental misconfiguration.
 
 | ID | Area | Severity | Status |
 | :-- | :--- | :------- | :----- |
-| SEC-2026-01 | Directory access (`location: "file"`) | High | Open |
-| SEC-2026-02 | OOM via unbounded in-memory records and query materialization | Medium | Open |
-| SEC-2026-03 | OOM via unbounded payload object width/total bytes | Medium | Open |
-| SEC-2026-04 | Null-pointer style runtime crash risk in query recursion input validation | Low | Open |
+| SEC-2026-01 | Directory access (`location: "file"`) | High | Closed (2026-03-07) |
+| SEC-2026-02 | OOM via unbounded in-memory records and query materialization | Medium | Closed (2026-03-07) |
+| SEC-2026-03 | OOM via unbounded payload object width/total bytes | Medium | Closed (2026-03-07) |
+| SEC-2026-04 | Null-pointer style runtime crash risk in query recursion input validation | Low | Closed (2026-03-07) |
 
 ---
 
@@ -37,12 +37,12 @@ If a caller supplies a directory inside `process.cwd()` that is itself a symlink
 external directory, the lexical checks pass while actual writes can escape the repository
 working directory policy.
 
-### Recommended remediation
+### Implemented remediation (2026-03-07)
 
-1. Resolve canonical paths for both base and target directories via `fs.realpathSync`.
-2. Enforce containment on canonical paths.
-3. Re-check canonical parent directory immediately before lock/data file creation.
-4. Add tests that construct a symlinked directory fixture and assert rejection.
+1. Canonicalized both base and target paths with `realpathSync`-based containment checks.
+2. Enforced canonical containment for `filePath`, `target.kind === "path"`, and `target.kind === "directory"`.
+3. Added immediate pre-lock canonical containment re-check in file backend open path.
+4. Added regression tests with symlinked directory fixture and rejection assertions.
 
 ---
 
@@ -65,13 +65,13 @@ amplify memory use during wide scans and high-cardinality distinct queries.
 Even without internet exposure, an internal script or accidental batch run can trigger
 heap pressure and process OOM termination.
 
-### Recommended remediation
+### Implemented remediation (2026-03-07)
 
-1. Add optional hard cap for total in-memory records (or require `capacity` for memory mode
-   in hardened profile).
-2. Add query execution guardrails (max scanned rows / max output rows / max distinct set size).
-3. Introduce streaming or iterator-based query pipeline for non-sort paths.
-4. Add stress tests that assert deterministic rejection before heap growth becomes critical.
+1. Added query execution guardrails:
+   - scanned-row limit (`10000`)
+   - output-row limit (`5000`)
+2. Refactored query projection/distinct flow to avoid duplicate full-size intermediate arrays.
+3. Added regression tests that assert deterministic `QueryValidationError` on guardrail overflow.
 
 ---
 
@@ -97,12 +97,15 @@ However, it does **not** enforce:
 Attackers are not required here; an internal producer can accidentally emit huge,
 shallow objects that pass current checks and still consume excessive heap/marshal costs.
 
-### Recommended remediation
+### Implemented remediation (2026-03-07)
 
-1. Add `MAX_PAYLOAD_KEYS_TOTAL` and `MAX_PAYLOAD_TOTAL_BYTES` limits.
-2. Track aggregate counters during validation traversal.
-3. Surface explicit validation errors when either bound is exceeded.
-4. Add regression tests for near-limit and over-limit payloads.
+1. Added payload guardrails:
+   - per-object key limit (`256`)
+   - total key limit (`4096`)
+   - aggregate validation byte budget (`1048576`)
+2. Added aggregate counters in payload validation traversal.
+3. Added explicit `ValidationError` failure paths for each guardrail.
+4. Added regression tests for over-limit payload width/key-count/byte-budget cases.
 
 ---
 
@@ -119,11 +122,11 @@ A deeply nested generated query may trigger stack overflow (`RangeError`) in JS 
 This is equivalent to a null-pointer-class runtime crash risk (unexpected process error)
 rather than data corruption.
 
-### Recommended remediation
+### Implemented remediation (2026-03-07)
 
-1. Add validation pass for expression depth with a strict max (for example 64).
-2. Reject too-deep expressions with `QueryValidationError`.
-3. Add tests covering valid boundary and overflow boundary.
+1. Added native filter-expression depth validation with max depth `64`.
+2. Too-deep expressions now fail with `QueryValidationError` before scan.
+3. Added regression tests covering overflow boundary.
 
 ---
 
@@ -135,10 +138,9 @@ rather than data corruption.
 
 These controls reduce risk, but the above open items remain.
 
-## Next Actions
+## Closure Notes
 
-1. Implement symlink-aware path containment hardening first (SEC-2026-01).
-2. Add payload aggregate/breadth guardrails (SEC-2026-03).
-3. Add query-depth and query-result guardrails (SEC-2026-04 and part of SEC-2026-02).
-4. Implement query pipeline optimizations (remaining part of SEC-2026-02).
-5. Record implementation decisions in ADR and update specs/tests with each change.
+This review's four tracked findings are closed by implementation and tests on 2026-03-07.
+Policy and rationale are recorded in:
+
+- `docs/adr/53_SecurityHardening_Execution_for_SymlinkPayload_and_QueryGuards.md`

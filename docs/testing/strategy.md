@@ -68,6 +68,9 @@ TLV codec:
 - nested object payload round-trip
 - reject arrays and cyclic payload graphs at encode/validation boundary
 - payload nesting depth boundary (`64` accepted, `65` rejected)
+- payload per-object key count boundary (`256` accepted, `257` rejected)
+- payload total key count boundary (`4096` accepted, `4097` rejected)
+- payload aggregate validation byte budget boundary (`1 MiB` accepted, overflow rejected)
 - timestamp conversion boundary tests (`number` safe integer <-> `Int64` `bigint`)
 - reject decode when `TIMESTAMP_I64` is outside JavaScript safe integer range
 - verify no precision loss at boundary values (`MIN_SAFE_INTEGER`, `MAX_SAFE_INTEGER`)
@@ -123,6 +126,7 @@ File backend:
 - incomplete/corrupt file failure behavior
 - `target` resolution tests (`filePath` shorthand vs `target.kind`)
 - directory target naming tests (`directory` + `filePrefix` + `fileName`)
+- canonical path containment tests against symlink escape paths
 - sidecar metadata file open/reopen consistency checks
 - sidecar `nextInsertionOrder` persistence and O(1) allocator recovery checks on reopen
 - crash-recovery behavior with interrupted commit temp files (must not become active state)
@@ -151,6 +155,9 @@ Query-engine modules (M6+):
 - canonical field-path escaping for keys containing dot/backslash
 - SQL text vs `QueryExecutionOptions` conflict rejection (`QueryValidationError`)
 - Lucene filter text + `QueryExecutionOptions` mapping correctness
+- native filter expression depth boundary (`64` accepted, `65` rejected)
+- native query scanned-row guardrail (`10000`) rejection behavior
+- native query output-row guardrail (`5000`) rejection behavior
 
 Capacity and retention:
 

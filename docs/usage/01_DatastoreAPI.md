@@ -42,6 +42,7 @@ Validation reminders:
 - maximum payload object nesting depth is 64 (payload root is depth 0).
 - payload key UTF-8 byte length limit is 1024.
 - payload string UTF-8 byte length limit is 65535.
+- payload per-object key count limit (`256`), total key count limit (`4096`), and aggregate payload byte budget (`1048576`) are enforced.
 - leaf values must be `string | number | boolean | null` (arrays are not supported).
 - payload `number` values must be finite (`Number.isFinite`); `NaN`, `Infinity`, and `-Infinity` are rejected.
 - payload `bigint` values are not supported in v0.2.
@@ -414,3 +415,4 @@ Notes:
 - `like`/`regexp` patterns are bounded to 256 UTF-16 code units and unsafe patterns raise `QueryValidationError`.
 - `like` matching keeps additional working memory proportional to pattern length.
 - each validated `regexp` predicate pattern is compiled once per native query execution and reused for all candidate records.
+- native query guardrails reject filter-expression depth over `64`, scanned rows over `10000`, and output rows over `5000`.

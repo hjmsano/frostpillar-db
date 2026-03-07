@@ -42,6 +42,7 @@ await db.insert({
 - payload の最大ネスト深さは 64 です（payload ルートを深さ 0 として数えます）。
 - payload キーの UTF-8 バイト長上限は 1024 です。
 - payload 文字列値の UTF-8 バイト長上限は 65535 です。
+- payload は「1オブジェクトあたり 256 キー」「全体 4096 キー」「集約バイト予算 1048576」を超えると拒否されます。
 - 末端の値は `string | number | boolean | null` である必要があります（配列は未対応）。
 - payload の `number` 値は有限値（`Number.isFinite`）である必要があります（`NaN`, `Infinity`, `-Infinity` は拒否されます）。
 - payload の `bigint` 値は v0.2 ではサポートされません。
@@ -407,6 +408,7 @@ Canonical field path のエスケープ規則:
 - `like`/`regexp` のパターン長は 256 UTF-16 code units に制限され、不正/危険パターンは `QueryValidationError` になります。
 - `like` の照合は、追加作業メモリをパターン長に比例する範囲へ制限します。
 - 検証済み `regexp` パターンは 1 回の native query 実行につき 1 回だけコンパイルし、候補レコード評価で再利用します。
+- native query は「式深さ 64」「走査行 10000」「出力行 5000」を超えると拒否されます。
 - 述語評価では暗黙の型変換（文字列→数値など）を行いません。
 - `field:*` は native `exists`、`NOT field:*` は native `not_exists` に対応します。
 - `field:*` は明示的な `null` 値にも一致します（exists はフィールドパスの存在判定です）。

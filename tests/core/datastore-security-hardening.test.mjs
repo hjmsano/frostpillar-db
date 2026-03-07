@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { loadCoreModule } from './load-core-module.mjs';
@@ -13,6 +13,20 @@ const createSandboxDirectory = async (name) => {
   const directory = path.join(baseDir, `${name}-${uniqueSuffix}`);
   await mkdir(directory, { recursive: true });
   return directory;
+};
+
+const buildNestedNotExpression = (depth) => {
+  let expression = {
+    field: 'event',
+    operator: '=',
+    value: 'ok',
+  };
+
+  for (let index = 0; index < depth; index += 1) {
+    expression = { not: expression };
+  }
+
+  return expression;
 };
 
 test('queryNative like/regexp enforce pattern safety guardrails', async () => {
@@ -181,4 +195,155 @@ test('file datastore rejects path traversal and path escape outside cwd', async 
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
+});
+
+test('file datastore rejects symlinked directory escapes outside cwd', async () => {
+  const { ConfigurationError, Datastore } = await loadCore();
+  const sandbox = await createSandboxDirectory('security-hardening-symlink');
+  const outsideDirectory = path.resolve(
+    '/tmp',
+    `frostpillar-security-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  const symlinkPath = path.join(sandbox, 'linked-outside');
+
+  try {
+    await mkdir(outsideDirectory, { recursive: true });
+    await symlink(outsideDirectory, symlinkPath, 'dir');
+
+    assert.throws(
+      () => {
+        new Datastore({
+          location: 'file',
+          target: {
+            kind: 'directory',
+            directory: symlinkPath,
+            fileName: 'events',
+          },
+        });
+      },
+      ConfigurationError,
+    );
+
+    assert.throws(
+      () => {
+        new Datastore({
+          location: 'file',
+          filePath: path.join(symlinkPath, 'escape.fpdb'),
+        });
+      },
+      ConfigurationError,
+    );
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+    await rm(outsideDirectory, { recursive: true, force: true });
+  }
+});
+
+test('payload validation enforces aggregate key-count and byte-budget guardrails', async () => {
+  const { Datastore, ValidationError } = await loadCore();
+  const datastore = new Datastore({ location: 'memory' });
+
+  const tooWideObject = {};
+  for (let index = 0; index < 257; index += 1) {
+    tooWideObject[`k${index}`] = index;
+  }
+
+  await assert.rejects(
+    async () => {
+      await datastore.insert({
+        timestamp: 1735689600100,
+        payload: { wide: tooWideObject },
+      });
+    },
+    ValidationError,
+  );
+
+  const tooManyKeysPayload = {};
+  for (let outer = 0; outer < 256; outer += 1) {
+    const child = {};
+    for (let inner = 0; inner < 16; inner += 1) {
+      child[`c${inner}`] = inner;
+    }
+    tooManyKeysPayload[`n${outer}`] = child;
+  }
+
+  await assert.rejects(
+    async () => {
+      await datastore.insert({
+        timestamp: 1735689600200,
+        payload: tooManyKeysPayload,
+      });
+    },
+    ValidationError,
+  );
+
+  const tooLargePayload = {};
+  for (let index = 0; index < 256; index += 1) {
+    tooLargePayload[`s${index}`] = 'a'.repeat(5000);
+  }
+
+  await assert.rejects(
+    async () => {
+      await datastore.insert({
+        timestamp: 1735689600300,
+        payload: tooLargePayload,
+      });
+    },
+    ValidationError,
+  );
+});
+
+test('queryNative enforces expression depth and row-budget guardrails', async () => {
+  const { Datastore, QueryValidationError } = await loadCore();
+
+  const depthDatastore = new Datastore({ location: 'memory' });
+  await depthDatastore.insert({
+    timestamp: 1735689600400,
+    payload: { event: 'ok' },
+  });
+
+  await assert.rejects(
+    async () => {
+      await depthDatastore.queryNative({
+        where: buildNestedNotExpression(65),
+      });
+    },
+    QueryValidationError,
+  );
+
+  await depthDatastore.close();
+
+  const outputDatastore = new Datastore({ location: 'memory' });
+  for (let index = 0; index < 5001; index += 1) {
+    await outputDatastore.insert({
+      timestamp: 1735689700000 + index,
+      payload: { event: 'out', value: index },
+    });
+  }
+
+  await assert.rejects(
+    async () => {
+      await outputDatastore.queryNative({});
+    },
+    QueryValidationError,
+  );
+
+  await outputDatastore.close();
+
+  const scannedDatastore = new Datastore({ location: 'memory' });
+  for (let index = 0; index < 10001; index += 1) {
+    await scannedDatastore.insert({
+      timestamp: 1735689800000 + index,
+      payload: { event: 'scan', value: index },
+    });
+  }
+
+  await assert.rejects(
+    async () => {
+      await scannedDatastore.queryNative({ limit: 1 });
+    },
+    QueryValidationError,
+  );
+
+  await scannedDatastore.close();
 });
