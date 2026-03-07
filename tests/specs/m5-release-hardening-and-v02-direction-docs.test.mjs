@@ -2,27 +2,30 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileUtf8 } from '../shared/read-file-utf8.mjs';
 
-test('development status checklist activates M5 release hardening scope', async () => {
+test('development status checklist keeps M5 release hardening closure complete', async () => {
   const checklist = await readFileUtf8(
     'docs/plans/01_DevelopmentStatusChecklist.md',
   );
 
-  assert.match(checklist, /Active phase: `M5: Release Hardening \(active\)`/);
-  assert.match(
-    checklist,
-    /Active work item: `docs\/plans\/09_PhaseWorkItem_M5_ReleaseHardening_v0\.1\.md \(active\)`/,
-  );
   assert.match(
     checklist,
     /## 12\. Active Work-Item Checklist \(M5 Release Hardening v0\.1\)/,
   );
   assert.match(
     checklist,
-    /- \[ \] benchmark method and reproducible script draft defined/,
+    /- \[x\] benchmark method and reproducible script draft defined/,
   );
   assert.match(
     checklist,
-    /- \[ \] v0\.1 limitations and non-goals documented in README and usage EN\/JA/,
+    /- \[x\] v0\.1 limitations and non-goals documented in README and usage EN\/JA/,
+  );
+  assert.match(
+    checklist,
+    /- \[x\] targeted M5 release-hardening docs\/tests added and confirmed red before implementation/,
+  );
+  assert.match(
+    checklist,
+    /- \[x\] full verification green \(`pnpm test --run`, `pnpm check`\)/,
   );
 });
 
@@ -33,12 +36,13 @@ test('m5 release hardening work-item is added and indexed', async () => {
   const plansIndex = await readFileUtf8('docs/plans/INDEX.md');
 
   assert.match(m5Plan, /Plan: Phase Work Item \(M5 Release Hardening v0\.1\)/i);
-  assert.match(m5Plan, /Status: Active/i);
+  assert.match(m5Plan, /Status: Completed/i);
   assert.match(m5Plan, /Version: v0\.1 hardening/i);
   assert.match(m5Plan, /performance baseline report/i);
   assert.match(m5Plan, /reproducible benchmark script/i);
   assert.match(m5Plan, /README.*limitations.*non-goals/i);
   assert.match(m5Plan, /Phase B: TDD Red/i);
+  assert.match(m5Plan, /## 7\. Completion Notes \(2026-03-07\)/i);
   assert.match(
     plansIndex,
     /09_PhaseWorkItem_M5_ReleaseHardening_v0\.1\.md/,

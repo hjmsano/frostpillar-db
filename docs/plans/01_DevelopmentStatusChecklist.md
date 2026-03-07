@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `M5: Release Hardening (active)`
-- Active work item: `docs/plans/09_PhaseWorkItem_M5_ReleaseHardening_v0.1.md (active)`
-- Scope note: Phase 0-4 closure is preserved as completed history; active execution now targets release hardening and post-v0.1 direction alignment.
+- Active phase: `M6: Browser Runtime Baseline (active)`
+- Active work item: `docs/plans/10_PhaseWorkItem_M6_BrowserRuntimeBaseline.md (active)`
+- Scope note: Post-v0.1 direction from ADR-51 is now active; execution starts with browser backend runtime support before mutation API expansion.
 
 ## 4. Phase Status Checklist
 
@@ -74,6 +74,15 @@ Use it to track progress across phases and the currently active work item.
 - [x] define and verify bundle profile matrix for optional browser adapters
 - [x] publish EN/JA usage guidance for delivery/profile selection
 - [x] exit criteria met: dual delivery tracks are test-proven and documented
+
+### Phase 5: Browser Runtime Baseline (Post-v0.1)
+
+- [x] phase declared active with explicit ADR-51 alignment
+- [ ] define initial browser runtime slice scope (`localStorage` baseline first)
+- [ ] add failing tests for browser runtime baseline open/commit/reopen behavior
+- [ ] implement browser runtime baseline with typed availability failures
+- [ ] publish EN/JA usage notes for browser runtime baseline behavior and limits
+- [ ] exit criteria met: at least one browser backend runtime path is test-proven and documented
 
 ## 5. Active Work-Item Checklist (M1 Historical)
 
@@ -146,7 +155,16 @@ Use this section as the day-to-day completion board for the current work item.
 
 - [x] M5 work-item plan activated and indexed
 - [x] ADR cleanup applied for current execution state and v0.2 direction
-- [ ] benchmark method and reproducible script draft defined
-- [ ] v0.1 limitations and non-goals documented in README and usage EN/JA
-- [ ] targeted M5 release-hardening docs/tests added and confirmed red before implementation
+- [x] benchmark method and reproducible script draft defined
+- [x] v0.1 limitations and non-goals documented in README and usage EN/JA
+- [x] targeted M5 release-hardening docs/tests added and confirmed red before implementation
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 13. Active Work-Item Checklist (M6 Browser Runtime Baseline)
+
+- [x] M6 work-item plan activated and indexed
+- [ ] scope/acceptance criteria aligned with ADR-51 browser-first direction
+- [ ] failing browser runtime baseline tests added and confirmed red before implementation
+- [ ] initial browser runtime baseline implementation completed (localStorage-first)
+- [ ] EN/JA usage docs updated for browser runtime status and guardrails
 - [ ] full verification green (`pnpm test --run`, `pnpm check`)

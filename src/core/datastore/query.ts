@@ -24,6 +24,10 @@ interface QueryEvaluationContext {
   regexpByPattern: Map<string, RegExp>;
 }
 
+const MAX_FILTER_EXPRESSION_DEPTH = 64;
+const MAX_QUERY_SCANNED_ROWS = 10000;
+const MAX_QUERY_OUTPUT_ROWS = 5000;
+
 const readOrCompileRegexp = (
   pattern: string,
   context: QueryEvaluationContext,
@@ -40,6 +44,35 @@ const readOrCompileRegexp = (
     return compiled;
   } catch {
     throw new QueryValidationError('Invalid regexp pattern.');
+  }
+};
+
+const validateFilterExpressionDepth = (
+  expression: NativeFilterExpression,
+  depth: number,
+): void => {
+  if (depth > MAX_FILTER_EXPRESSION_DEPTH) {
+    throw new QueryValidationError(
+      `Filter expression depth must be <= ${MAX_FILTER_EXPRESSION_DEPTH}.`,
+    );
+  }
+
+  if ('and' in expression) {
+    for (const item of expression.and) {
+      validateFilterExpressionDepth(item, depth + 1);
+    }
+    return;
+  }
+
+  if ('or' in expression) {
+    for (const item of expression.or) {
+      validateFilterExpressionDepth(item, depth + 1);
+    }
+    return;
+  }
+
+  if ('not' in expression) {
+    validateFilterExpressionDepth(expression.not, depth + 1);
   }
 };
 
@@ -173,23 +206,6 @@ const buildQueryRow = (
   return row;
 };
 
-const distinctRows = (rows: NativeQueryResultRow[]): NativeQueryResultRow[] => {
-  const output: NativeQueryResultRow[] = [];
-  const seen = new Set<string>();
-
-  for (const row of rows) {
-    const serialized = JSON.stringify(row);
-    if (seen.has(serialized)) {
-      continue;
-    }
-
-    seen.add(serialized);
-    output.push(row);
-  }
-
-  return output;
-};
-
 export const executeNativeQuery = (
   records: PersistedTimeseriesRecord[],
   request: NativeQueryRequest,
@@ -209,15 +225,29 @@ export const executeNativeQuery = (
   const evaluationContext: QueryEvaluationContext = {
     regexpByPattern: new Map<string, RegExp>(),
   };
+  if (request.where !== undefined) {
+    validateFilterExpressionDepth(request.where, 0);
+  }
 
-  const filtered = records.filter((record) => {
-    if (request.where === undefined) {
-      return true;
+  const filtered: PersistedTimeseriesRecord[] = [];
+  let scannedRows = 0;
+  for (const record of records) {
+    scannedRows += 1;
+    if (scannedRows > MAX_QUERY_SCANNED_ROWS) {
+      throw new QueryValidationError(
+        `Query scanned rows must be <= ${MAX_QUERY_SCANNED_ROWS}.`,
+      );
     }
-    return evaluateFilterExpression(record, request.where, evaluationContext);
-  });
 
-  const sorted = filtered.sort((left, right) => {
+    if (
+      request.where === undefined ||
+      evaluateFilterExpression(record, request.where, evaluationContext)
+    ) {
+      filtered.push(record);
+    }
+  }
+
+  filtered.sort((left, right) => {
     if (request.orderBy === undefined || request.orderBy.length === 0) {
       return compareByLogicalOrder(left, right);
     }
@@ -238,12 +268,31 @@ export const executeNativeQuery = (
     return compareByLogicalOrder(left, right);
   });
 
-  const rows = sorted.map((record) => buildQueryRow(record, request.select));
-  const deduplicated = request.distinct ? distinctRows(rows) : rows;
+  const output: NativeQueryResultRow[] = [];
+  const seenRows = request.distinct ? new Set<string>() : null;
 
-  if (request.limit === undefined) {
-    return deduplicated;
+  for (const record of filtered) {
+    const row = buildQueryRow(record, request.select);
+
+    if (seenRows !== null) {
+      const serialized = JSON.stringify(row);
+      if (seenRows.has(serialized)) {
+        continue;
+      }
+      seenRows.add(serialized);
+    }
+
+    output.push(row);
+    if (output.length > MAX_QUERY_OUTPUT_ROWS) {
+      throw new QueryValidationError(
+        `Query output rows must be <= ${MAX_QUERY_OUTPUT_ROWS}.`,
+      );
+    }
+
+    if (request.limit !== undefined && output.length >= request.limit) {
+      break;
+    }
   }
 
-  return deduplicated.slice(0, request.limit);
+  return output;
 };

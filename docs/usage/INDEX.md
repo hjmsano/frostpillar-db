@@ -14,3 +14,5 @@ This directory contains user-facing usage guides and examples in English and Jap
 | [**04_DevelopmentTemplates-JA.md**](./04_DevelopmentTemplates-JA.md) | Japanese | spec 更新、ADR 記述、段階別タスク分解の再利用テンプレート。 |
 | [**05_DeliveryOptions.md**](./05_DeliveryOptions.md) | English | Delivery-track guidance for NPM install and browser bundle profile selection. |
 | [**05_DeliveryOptions-JA.md**](./05_DeliveryOptions-JA.md) | Japanese | NPM 配布とブラウザバンドルプロファイル選択のガイド。 |
+| [**06_ReleaseHardening-v0.1.md**](./06_ReleaseHardening-v0.1.md) | English | v0.1 release-hardening guide for benchmark method, limitations, and readiness checks. |
+| [**06_ReleaseHardening-v0.1-JA.md**](./06_ReleaseHardening-v0.1-JA.md) | Japanese | v0.1 リリースハードニング向けのベンチマーク手法、制約、判定手順ガイド。 |

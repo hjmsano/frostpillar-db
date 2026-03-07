@@ -192,6 +192,9 @@ export class Datastore {
 - payload object max nesting depth is `64` (root depth `0`, +1 per nested object).
 - payload key UTF-8 byte length max is `1024` at every nested object level.
 - payload string UTF-8 byte length max is `65535` at every nested object level.
+- payload per-object key count max is `256` at every nested object level.
+- payload total key count max is `4096` across full payload tree.
+- payload aggregate validation byte budget max is `1048576` (`1 MiB`) across full payload tree.
 - user input record MUST NOT provide `insertionOrder`; if present, `insert` MUST reject with `ValidationError`.
 - datastore MUST assign one immutable internal `insertionOrder` key on first insert and
   persist it as `INSERTION_ORDER_U64` per `docs/specs/02_BinaryEncoding.md`.
@@ -320,6 +323,11 @@ Configuration resolution:
   - `fileName` default: `"frostpillar"`
 - File target security constraints:
   - resolved datastore path MUST stay within current working directory (`process.cwd()`).
+  - containment checks MUST use canonical filesystem paths (`realpath`) for both
+    base working directory and resolved target (or nearest existing ancestor).
+  - lexical containment checks alone (for example `..`/prefix checks without canonicalization)
+    are non-compliant.
+  - implementation MUST re-validate canonical containment immediately before lock/data file creation.
   - this containment rule applies to `filePath`, `target.kind === "path"` and
     `target.kind === "directory"` resolutions.
   - `target.filePrefix` and `target.fileName` MUST be file-name fragments and MUST NOT

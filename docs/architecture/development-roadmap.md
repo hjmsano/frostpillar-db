@@ -119,6 +119,27 @@ Exit criteria:
 - dual-track delivery artifacts are test-proven and documented in EN/JA usage docs
 - delivery policy and execution plan stay aligned with spec/ADR/plans artifacts
 
+## Phase 5: Browser Runtime Baseline (Post-v0.1)
+
+Goal: Convert post-v0.1 browser-first direction into test-proven runtime support.
+
+Entry criteria:
+
+- Phase 4 and M5 release-hardening baseline are complete
+- ADR-51 browser-first sequencing is accepted and active
+
+Expected activities:
+
+- define first browser runtime slice target and typed availability semantics
+- add failing tests for browser open/commit/reopen baseline and failure paths
+- implement first browser runtime backend baseline incrementally (localStorage-first)
+- publish EN/JA usage guidance for browser runtime status and constraints
+
+Exit criteria:
+
+- at least one browser runtime backend path is test-proven and documented
+- unsupported browser backend cases remain explicit typed failures
+
 ## Phase Governance
 
 For every phase:

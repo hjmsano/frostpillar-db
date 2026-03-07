@@ -169,6 +169,14 @@ Normative behavior:
     group forms (for example `(a+)+`) MUST be rejected with `QueryValidationError`
   - for one native query execution, each validated `regexp` predicate pattern MUST be
     compiled once and reused across candidate-record evaluation
+- Native filter expression nesting depth (combined `and` / `or` / `not`) MUST be `<= 64`.
+  - deeper expressions MUST fail with `QueryValidationError` before record scan.
+- Native query execution MUST enforce row-budget guardrails:
+  - max scanned candidate rows per query: `10000`
+  - max output rows per query (after filter/order/select/distinct/limit): `5000`
+  - exceeding either budget MUST fail with `QueryValidationError`
+- Native query implementation SHOULD avoid duplicate full-size intermediate arrays and
+  SHOULD stream row projection/distinct after sort where possible.
 - Missing field vs explicit `null` are distinct states.
 - `exists` is true iff field path exists (including explicit `null` value).
 - `not_exists` is true iff field path does not exist.

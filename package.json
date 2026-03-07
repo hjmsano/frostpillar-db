@@ -19,6 +19,7 @@
   "scripts": {
     "build": "tsc --build",
     "build:bundle": "node ./scripts/build-bundles.mjs",
+    "benchmark:v0.1": "node ./scripts/benchmark-v0.1.mjs",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
     "textlint": "textlint \"**/*.md\"",

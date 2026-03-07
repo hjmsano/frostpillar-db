@@ -1,106 +1,94 @@
 # Frostpillar
 
-**The ultra-lightweight, purely TypeScript timeseries database for ephemeral data.**
+The ultra-lightweight, purely TypeScript timeseries database for ephemeral data.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
+## Project Status (2026-03-07)
 
-## 1. Introduction
+Current status: M5 release hardening for `v0.1`.
 
-**Frostpillar** is a specialized database engine designed for **ephemeral timeseries data**.
+Core scope is stable for:
 
-It bridges the gap between simple JSON file stores (like `lowdb`) and heavy database servers (like `PostgreSQL` or `InfluxDB`). It is built entirely in TypeScript, has zero runtime dependencies, and runs identically in **Node.js** and **Browsers**.
+- `location: "memory"` runtime
+- `location: "file"` durability slice
 
-### Key Features
+Roadmap and decisions are tracked in:
 
-- **Zero Dependencies**: Pure TypeScript. No native bindings.
-- **Binary Storage**: Uses a custom TLV (Type-Length-Value) binary format and Paged storage, avoiding the performance pitfalls of `JSON.stringify` on large datasets.
-- **Async-Only**: Modern `Promise`-based API.
-- **Type-Safe**: Strict schemas and typed errors.
-- **Isomorphic**: Supports `fs` (Node.js), `OPFS`/`IndexedDB` (Browser), and In-Memory modes.
+- `docs/adr/01_DevelopmentPlan.md`
+- `docs/plans/01_DevelopmentStatusChecklist.md`
 
----
-
-## 2. Why Frostpillar?
-
-Why build another database?
-
-### The Problem with JSON Stores
-
-Simple libraries often read/write the entire dataset to a single JSON file. As your data grows to 100MB or 1GB, reading and writing becomes exponentially slower (O(N)).
-
-### The Problem with Full DBs
-
-Setting up a Docker container or a cloud instance for a simple CI/CD log collector or a browser-side telemetry buffer is overkill.
-
-### The Frostpillar Solution
-
-Frostpillar provides the **simplicity of a library** with the **internals of a real database**:
-
-1.  **O(1) Appends**: Writes are appended to the end of a binary file/buffer.
-2.  **O(log N) Reads**: Uses a B+ Tree index to find time ranges instantly.
-3.  **Predictable Memory**: Uses fixed-size pages (e.g., 4KB) to manage memory usage, preventing crashes.
-4.  **Ephemeral by Design**: Built-in support for retention policies (e.g., "Keep last 500MB" or "Keep last 24h") to handle data that "melts away."
-
----
-
-## 3. Documentation Guide
-
-We follow **Spec-Driven Development**. The documentation is the source of truth.
-
-### 📚 For Users
-
-- **Datastore API (EN)**: [`docs/usage/01_DatastoreAPI.md`](./docs/usage/01_DatastoreAPI.md)
-- **Datastore API (JA)**: [`docs/usage/01_DatastoreAPI-JA.md`](./docs/usage/01_DatastoreAPI-JA.md)
-- **Usage Index**: [`docs/usage/INDEX.md`](./docs/usage/INDEX.md)
-
-### 🏗️ For Contributors & Architects
-
-- **Architecture**: High-level vision and layered design.
-  - Start with Fundamentals.
-- **Specifications**: Detailed binary formats and protocols.
-  - Record Format & Binary Encoding.
-- **ADR (Decision Records)**: Why we made specific technical choices.
-
----
-
-## 4. Origin of the Name
-
-Why **"Frostpillar"**?
-
-The name reflects the dual nature of the data this system is designed to handle:
-
-- ❄️ **Frost (Ephemeral & Time)**:
-  Like frost, the data is granular and often temporary. It captures a specific "frozen" moment in time (a timestamp). The database is optimized for data that might eventually "melt away" (retention policies) but needs to be crisp and clear while it exists.
-
-- 🏛️ **Pillar (Structure & Support)**:
-  Even though the individual moments are fleeting, we stack them into a solid, ordered structure—a pillar of history. This represents the reliability and structural integrity (B+ Trees, Binary Pages) that supports your application's data needs.
-
----
-
-## Project Status
-
-**Current Status**: 🚧 **Pre-Alpha (M0/M1)**
-
-We are currently implementing the **Minimum Vertical Slice (M1)**.
-See ADR-01: Development Plan for the roadmap.
-
-### Runtime Requirements
+## Runtime Requirements
 
 - Node.js: `>=24.0.0 <25.0.0`
 - pnpm: `>=10.0.0`
 
-### Core Commands
+## Quick Start
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Run type checks, linting, and textlint
-pnpm check
-
-# Run tests
-pnpm test
+pnpm build
 ```
+
+```typescript
+import { Datastore } from 'frostpillar';
+
+const db = new Datastore({ location: 'memory' });
+await db.insert({
+  timestamp: Date.now(),
+  payload: { event: 'boot', value: 1 },
+});
+
+const rows = await db.select({
+  start: Date.now() - 1000,
+  end: Date.now() + 1000,
+});
+
+await db.close();
+```
+
+## Core Commands
+
+```bash
+# Full quality gate
+pnpm check
+pnpm test --run
+
+# Build runtime artifacts
+pnpm build
+pnpm build:bundle
+
+# Reproducible release baseline benchmark
+pnpm benchmark:v0.1
+```
+
+## v0.1 Limitations and Non-Goals
+
+This release intentionally constrains runtime and API scope.
+
+- Supported now: location: "memory" and location: "file".
+- `location: "browser" runtime backend is not implemented yet`.
+- Browser profile entries in bundle metadata can stay `planned` until runtime support is complete.
+- Public mutation APIs beyond current scope (`getById`, `updateById`, `deleteById`) are non-goals for `v0.1`.
+- External publish automation (registry credentials/process) is non-goal for this phase.
+
+Post-v0.1 direction is explicitly documented in ADR-51:
+
+- post-v0.1 direction: browser runtime backend support first, then mutation API expansion
+
+## Documentation Guide
+
+User docs:
+
+- Datastore API (EN): `docs/usage/01_DatastoreAPI.md`
+- Datastore API (JA): `docs/usage/01_DatastoreAPI-JA.md`
+- Release Hardening (EN): `docs/usage/06_ReleaseHardening-v0.1.md`
+- Release Hardening (JA): `docs/usage/06_ReleaseHardening-v0.1-JA.md`
+
+Contributor docs:
+
+- Architecture overview: `docs/architecture/overview.md`
+- Vision and principles: `docs/architecture/vision-and-principles.md`
+- Specifications index: `docs/specs/INDEX.md`
+- ADR index: `docs/adr/INDEX.md`
