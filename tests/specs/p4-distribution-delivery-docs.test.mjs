@@ -13,6 +13,10 @@ test('distribution delivery spec defines export and profile matrix contracts', a
   assert.match(spec, /`profileMatrix`/i);
   assert.match(spec, /frostpillar-core\.min\.js/i);
   assert.match(spec, /globalThis\.Frostpillar/i);
+  assert.match(
+    spec,
+    /swap Node-only datastore config entry to a browser profile module/i,
+  );
 });
 
 test('delivery usage docs publish explicit profile matrix in english and japanese', async () => {
@@ -37,6 +41,9 @@ test('distribution delivery ADR is recorded and indexed', async () => {
   const adrSingleFileBundle = await readFileUtf8(
     'docs/adr/54_CoreBrowserBundle_SingleFileMinifiedGlobalContract.md',
   );
+  const adrConfigSplit = await readFileUtf8(
+    'docs/adr/55_DatastoreConfig_SharedSplit_and_BrowserAliasSwap.md',
+  );
   const adrIndex = await readFileUtf8('docs/adr/INDEX.md');
 
   assert.match(adr, /ADR-49/i);
@@ -50,6 +57,12 @@ test('distribution delivery ADR is recorded and indexed', async () => {
   assert.match(
     adrIndex,
     /54_CoreBrowserBundle_SingleFileMinifiedGlobalContract\.md/,
+  );
+  assert.match(adrConfigSplit, /ADR-55/i);
+  assert.match(adrConfigSplit, /config\.shared\.ts/i);
+  assert.match(
+    adrIndex,
+    /55_DatastoreConfig_SharedSplit_and_BrowserAliasSwap\.md/,
   );
 });
 

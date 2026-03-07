@@ -8,6 +8,7 @@ const CORE_PROFILE_NAME = 'core';
 const REQUIRED_INPUT_FILES = [
   'dist/core/index.js',
   'dist/core/index.d.ts',
+  'dist/core/datastore/config.browser.js',
   'dist/queryEngine/runQueryWithEngine.js',
   'dist/queryEngine/runQueryWithEngine.d.ts',
 ];
@@ -89,9 +90,9 @@ const buildCoreRuntimeBundle = async (profileRoot) => {
     temporaryDirectory,
     'fileBackendController.browser.js',
   );
-  const datastoreConfigStubPath = path.join(
-    temporaryDirectory,
-    'config.browser.js',
+  const datastoreConfigBrowserModulePath = path.resolve(
+    profileRoot,
+    '../../core/datastore/config.browser.js',
   );
   const entrySource = ["export * from '../../../core/index.js';", ''].join('\n');
   const fileBackendControllerStubSource = [
@@ -112,132 +113,11 @@ const buildCoreRuntimeBundle = async (profileRoot) => {
     '}',
     '',
   ].join('\n');
-  const datastoreConfigStubSource = [
-    "import { ConfigurationError, UnsupportedBackendError } from '../../../core/errors/index.js';",
-    '',
-    'const normalizeByteSizeInput = (value) => {',
-    "  if (typeof value === 'number') {",
-    '    if (!Number.isSafeInteger(value) || value <= 0) {',
-    "      throw new ConfigurationError('capacity.maxSize must be a positive safe integer.');",
-    '    }',
-    '    return value;',
-    '  }',
-    '',
-    "  const matched = /^(\\d+)(B|KB|MB|GB)$/.exec(value);",
-    '  if (matched === null) {',
-    "    throw new ConfigurationError('capacity.maxSize string must be <positive><B|KB|MB|GB>.');",
-    '  }',
-    '',
-    '  const amount = Number(matched[1]);',
-    '  if (!Number.isSafeInteger(amount) || amount <= 0) {',
-    "    throw new ConfigurationError('capacity.maxSize must be positive.');",
-    '  }',
-    '',
-    '  const multiplierByUnit = {',
-    '    B: 1,',
-    '    KB: 1024,',
-    '    MB: 1024 * 1024,',
-    '    GB: 1024 * 1024 * 1024,',
-    '  };',
-    '  const multiplier = multiplierByUnit[matched[2]];',
-    '  const total = amount * multiplier;',
-    '  if (!Number.isSafeInteger(total) || total <= 0) {',
-    "    throw new ConfigurationError('capacity.maxSize exceeds safe integer range.');",
-    '  }',
-    '',
-    '  return total;',
-    '};',
-    '',
-    'export const parseCapacityConfig = (capacity) => {',
-    '  if (capacity === undefined) {',
-    '    return null;',
-    '  }',
-    '',
-    '  const maxSizeBytes = normalizeByteSizeInput(capacity.maxSize);',
-    "  const policy = capacity.policy ?? 'strict';",
-    "  if (policy !== 'strict' && policy !== 'turnover') {",
-    "    throw new ConfigurationError('capacity.policy must be \"strict\" or \"turnover\".');",
-    '  }',
-    '',
-    '  return { maxSizeBytes, policy };',
-    '};',
-    '',
-    'export const parseFileAutoCommitConfig = (autoCommit) => {',
-    "  if (autoCommit?.maxPendingBytes !== undefined) {",
-    '    if (!Number.isSafeInteger(autoCommit.maxPendingBytes) || autoCommit.maxPendingBytes <= 0) {',
-    "      throw new ConfigurationError('autoCommit.maxPendingBytes must be a positive safe integer.');",
-    '    }',
-    '  }',
-    '',
-    "  const frequency = autoCommit?.frequency;",
-    "  if (frequency === undefined || frequency === 'immediate') {",
-    '    return {',
-    "      frequency: 'immediate',",
-    '      intervalMs: null,',
-    '      maxPendingBytes: autoCommit?.maxPendingBytes ?? null,',
-    '    };',
-    '  }',
-    '',
-    "  if (typeof frequency === 'number') {",
-    '    if (!Number.isSafeInteger(frequency) || frequency <= 0) {',
-    "      throw new ConfigurationError('autoCommit.frequency number must be a positive safe integer.');",
-    '    }',
-    '',
-    '    return {',
-    "      frequency: 'scheduled',",
-    '      intervalMs: frequency,',
-    '      maxPendingBytes: autoCommit?.maxPendingBytes ?? null,',
-    '    };',
-    '  }',
-    '',
-    "  const matched = /^(\\d+)(ms|s|m|h)$/.exec(frequency);",
-    '  if (matched === null) {',
-    "    throw new ConfigurationError('autoCommit.frequency string must be one of: <positive>ms, <positive>s, <positive>m, <positive>h.');",
-    '  }',
-    '',
-    '  const amount = Number(matched[1]);',
-    '  if (!Number.isSafeInteger(amount) || amount <= 0) {',
-    "    throw new ConfigurationError('autoCommit.frequency string amount must be a positive safe integer.');",
-    '  }',
-    '',
-    '  const multiplierByUnit = {',
-    '    ms: 1,',
-    '    s: 1000,',
-    '    m: 60 * 1000,',
-    '    h: 60 * 60 * 1000,',
-    '  };',
-    '  const intervalMs = amount * multiplierByUnit[matched[2]];',
-    '',
-    '  if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {',
-    "    throw new ConfigurationError('autoCommit.frequency exceeds safe integer range.');",
-    '  }',
-    '',
-    '  return {',
-    "    frequency: 'scheduled',",
-    '    intervalMs,',
-    '    maxPendingBytes: autoCommit?.maxPendingBytes ?? null,',
-    '  };',
-    '};',
-    '',
-    'export const ensureCanonicalPathWithinWorkingDirectory = () => {',
-    '  throw new UnsupportedBackendError(',
-    "    'Path canonicalization is unavailable in browser bundle profile \"core\".',",
-    '  );',
-    '};',
-    '',
-    'export const resolveFileDataPath = () => {',
-    '  throw new UnsupportedBackendError(',
-    "    'File backend path resolution is unavailable in browser bundle profile \"core\".',",
-    '  );',
-    '};',
-    '',
-  ].join('\n');
   const build = await loadEsbuildBuild();
 
   await mkdir(temporaryDirectory, { recursive: true });
   await writeFile(temporaryEntryPath, entrySource, 'utf8');
   await writeFile(fileBackendControllerStubPath, fileBackendControllerStubSource, 'utf8');
-  await writeFile(datastoreConfigStubPath, datastoreConfigStubSource, 'utf8');
 
   try {
     await build({
@@ -268,7 +148,7 @@ const buildCoreRuntimeBundle = async (profileRoot) => {
                 args.path === './config.js' &&
                 args.importer.includes('/dist/core/datastore/')
               ) {
-                return { path: datastoreConfigStubPath };
+                return { path: datastoreConfigBrowserModulePath };
               }
               return null;
             });

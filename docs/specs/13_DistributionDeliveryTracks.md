@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-07
+Last Updated: 2026-03-08
 
 This specification defines how Frostpillar is delivered to users as installable artifacts.
 Runtime behavior semantics remain defined by feature specs (for example datastore API, durability, and capacity).
@@ -128,6 +128,7 @@ Repository tooling MUST provide a dedicated bundle build command:
 - `pnpm build:bundle` MUST generate browser bundle artifacts and profile metadata.
 - `pnpm build:bundle` MAY assume `pnpm build` has already produced TypeScript outputs under `dist/`.
 - If required input files are missing, `pnpm build:bundle` MUST fail with actionable error text.
+- Browser bundle build MUST swap Node-only datastore config entry to a browser profile module while keeping capacity/auto-commit parsing logic sourced from one shared module.
 
 ## 8. GitHub Actions CI/CD Contract
 

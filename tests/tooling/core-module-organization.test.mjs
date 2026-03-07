@@ -33,6 +33,9 @@ test('core entry is a thin barrel and split modules exist', async () => {
     'src/core/datastore/Datastore.ts',
     'src/core/datastore/autoCommit.ts',
     'src/core/datastore/capacity.ts',
+    'src/core/datastore/config.browser.ts',
+    'src/core/datastore/config.node.ts',
+    'src/core/datastore/config.shared.ts',
     'src/core/datastore/config.ts',
     'src/core/datastore/encoding.ts',
     'src/core/datastore/fileBackend.ts',
@@ -93,4 +96,38 @@ test('core entry is a thin barrel and split modules exist', async () => {
   assert.doesNotMatch(datastoreSource, /\breleaseFileLock\b/);
   assert.doesNotMatch(datastoreSource, /\bsetInterval\s*\(/);
   assert.match(datastoreSource, /fileBackendController/i);
+
+  const configSource = await readFile(
+    resolvePath('src/core/datastore/config.ts'),
+    'utf8',
+  );
+  assert.match(configSource, /export \* from '\.\/config\.node\.js';/);
+
+  const configSharedSource = await readFile(
+    resolvePath('src/core/datastore/config.shared.ts'),
+    'utf8',
+  );
+  assert.match(configSharedSource, /normalizeByteSizeInput/);
+  assert.match(configSharedSource, /export const parseCapacityConfig/);
+  assert.match(configSharedSource, /export const parseFileAutoCommitConfig/);
+
+  const configNodeSource = await readFile(
+    resolvePath('src/core/datastore/config.node.ts'),
+    'utf8',
+  );
+  assert.match(configNodeSource, /from '\.\/config\.shared\.js';/);
+  assert.match(
+    configNodeSource,
+    /export \{ parseCapacityConfig, parseFileAutoCommitConfig \}/,
+  );
+
+  const configBrowserSource = await readFile(
+    resolvePath('src/core/datastore/config.browser.ts'),
+    'utf8',
+  );
+  assert.match(configBrowserSource, /from '\.\/config\.shared\.js';/);
+  assert.match(
+    configBrowserSource,
+    /export \{ parseCapacityConfig, parseFileAutoCommitConfig \}/,
+  );
 });
