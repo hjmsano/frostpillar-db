@@ -1,6 +1,6 @@
 # ADR-32: Active Phase M1 and v0.1 Scope Lock
 
-Status: Accepted  
+Status: Superseded (Superseded by ADR-51)  
 Date: 2026-03-06
 
 ## Context
@@ -8,6 +8,9 @@ Date: 2026-03-06
 The repository contains mature draft specifications, but implementation has not started.
 Current docs include both `v0.1` short-term delivery commitments and `v0.2` planned API content.
 Before coding starts, the team needs one explicit execution focus to prevent scope drift.
+
+Superseded by ADR-51.
+This ADR remains as historical evidence for initial M1 scope-lock decisions.
 
 ## Decision
 

@@ -83,3 +83,11 @@ pnpm build:bundle
 | `core-opfs` | `planned`（計画中） | なし | runtime-slice で OPFS 対応が受理された後に有効化 |
 | `core-localstorage` | `planned`（計画中） | なし | runtime-slice で localStorage 対応が受理された後に有効化 |
 | `full-browser` | `planned`（計画中） | なし | ブラウザアダプタの runtime 対応拡張後に有効化 |
+
+## 6. 次の方向性（2026-03-07）
+
+次の方向性（v0.1 リリースハードニング後）: ブラウザバックエンド実装を先行。
+
+- runtime-slice のブラウザバックエンド（`indexedDB` / `opfs` / `localStorage`）から段階的に実装する
+- オプションプロファイルを `planned` から `published` へ移行するのは、tests/specs が green になった後だけに限定する
+- ネイティブ mutation API 拡張は、ブラウザ runtime 基盤の完了後に着手する

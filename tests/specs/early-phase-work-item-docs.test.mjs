@@ -21,8 +21,11 @@ test('phase work-item plan defines v0.1 scope and red-test plan', async () => {
   assert.match(source, /`tests\/core\/datastore-memory-contract\.test\.mjs`/);
 });
 
-test('active-phase ADR records the phase and scope-lock decision and is indexed', async () => {
+test('phase transition ADR history is preserved and supersession is explicit', async () => {
   const adr = await readDoc('docs/adr/32_ActivePhase_M1_and_v0.1_ScopeLock.md');
+  const adr51 = await readDoc(
+    'docs/adr/51_v0.2_Direction_BrowserBackendFirst_After_M5_ReleaseHardening.md',
+  );
   const adr37 = await readDoc(
     'docs/adr/37_Phase2_Phase3_Kickoff_and_IncrementalScope.md',
   );
@@ -34,10 +37,18 @@ test('active-phase ADR records the phase and scope-lock decision and is indexed'
   const roadmap = await readDoc('docs/architecture/development-roadmap.md');
 
   assert.match(adr, /ADR-32: Active Phase M1 and v0\.1 Scope Lock/i);
-  assert.match(adr, /Set the current active implementation phase to `Phase 1`/i);
+  assert.match(adr, /Status: Superseded/i);
+  assert.match(adr, /Superseded by ADR-51/i);
   assert.match(adr, /lock immediate implementation scope to `v0\.1` deliverables/i);
+  assert.match(adr51, /ADR-51:/i);
+  assert.match(adr51, /v0\.2 Direction/i);
+  assert.match(adr51, /browser backend/i);
 
   assert.match(adrIndex, /32_ActivePhase_M1_and_v0\.1_ScopeLock\.md/);
+  assert.match(
+    adrIndex,
+    /51_v0\.2_Direction_BrowserBackendFirst_After_M5_ReleaseHardening\.md/,
+  );
   assert.match(
     plansIndex,
     /02_PhaseWorkItem_M1_MemoryVerticalSlice\.md/,

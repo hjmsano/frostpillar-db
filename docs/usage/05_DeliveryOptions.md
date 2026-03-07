@@ -83,3 +83,11 @@ The profile matrix is published in `dist/bundles/manifest.json` (`profileMatrix`
 | `core-opfs` | `planned` | none yet | enabled only after runtime-slice OPFS support is accepted |
 | `core-localstorage` | `planned` | none yet | enabled only after runtime-slice localStorage support is accepted |
 | `full-browser` | `planned` | none yet | enabled only after browser adapter runtime support is expanded |
+
+## 6. Next Direction (2026-03-07)
+
+Next Direction (after v0.1 release hardening): browser backend runtime support first.
+
+- start with runtime-slice browser backends (`indexedDB`, `opfs`, `localStorage`)
+- move optional profile entries from `planned` to `published` only after tests/specs are green
+- schedule native mutation API expansion after browser runtime baseline is complete

@@ -128,7 +128,7 @@ File backend:
 - crash-recovery behavior with interrupted commit temp files (must not become active state)
 - `commitId` monotonicity across successful durable commits
 
-Browser backend (M3+):
+Browser backend (v0.2+):
 
 - `browserStorage: "auto"` resolution order correctness (`opfs` -> `indexedDB` -> `localStorage`)
 - explicit backend unavailability rejection with `UnsupportedBackendError`
