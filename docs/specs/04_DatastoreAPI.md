@@ -218,6 +218,12 @@ export class Datastore {
   - insertion order ascending for equal timestamps
 - Effective ordering key is logical `(timestamp, insertion-order key)` and MUST be
   independent from physical page/leaf placement.
+- M3+ runtime path MUST execute range read through B+ tree lower-bound seek and linked-leaf
+  forward traversal defined in `docs/specs/11_BTreeIndexInvariants.md`.
+- M3+ runtime path for normal `select` MUST NOT depend on full-dataset `filter + sort`.
+- Complexity expectation for M3+:
+  - seek start key: `O(log N)`
+  - scan/materialize matched range: `O(K)` (`K` = returned row count)
 - returned `timestamp` values are canonical epoch milliseconds (`number`).
 - internal insertion-order key is not exposed in v0.2 API response shape.
 
@@ -258,11 +264,15 @@ export class Datastore {
 - For non-`"immediate"` frequency, datastore MUST schedule periodic internal `commit()` calls.
 - When `maxPendingBytes` is configured, reaching or exceeding threshold MUST trigger internal commit.
 - If periodic frequency and size threshold are both configured, commit trigger is OR semantics.
+- If a periodic/size trigger fires while one commit is active, datastore MUST coalesce
+  triggers and run one additional commit attempt after in-flight completion if dirty state remains.
 - Invalid or non-positive frequency values MUST throw `ConfigurationError`.
 - Invalid `maxPendingBytes` MUST throw `ConfigurationError`.
 - Manual `commit()` MUST remain available even when auto-commit is enabled.
 - Auto-commit failure from scheduled background execution MUST surface through datastore error channel (`on("error", ...)`).
 - For background auto-commit failures, emitted `DatastoreErrorEvent.error` MUST be an instance of `StorageEngineError`.
+- After one failed background auto-commit attempt, pending dirty state MUST remain and be
+  eligible for retry by subsequent periodic/size/manual commit triggers.
 - Method-level promise rejection contract remains unchanged: foreground failures from explicit `insert`/`commit` still reject their returned `Promise`.
 - Detailed scheduler/coalescing behavior MUST follow `docs/specs/10_FlushAndDurability.md`.
 
@@ -286,8 +296,14 @@ export class Datastore {
 - Default `capacity.policy` is `"strict"`.
 - Under `"strict"`, overflow insert MUST reject with `QuotaExceededError` and MUST NOT mutate visible state.
 - Under `"turnover"`, datastore MUST evict oldest records deterministically before accepting new record.
+- Under `"turnover"`, oldest lookup in M3+ MUST use leftmost leaf head entry from B+ tree
+  logical order (`docs/specs/11_BTreeIndexInvariants.md` section 8).
+- Under `"turnover"` in M3+, per-eviction record-buffer removal MUST be expected `O(1)`
+  keyed by `insertionOrder`, and MUST NOT rely on linear search/removal of retained records.
 - Turnover eviction path uses internal deletion and is required for retention behavior.
 - This internal deletion path MUST NOT be exposed as a public delete API in v0.2.
+- For one insert causing `E` evictions against `N` retained records, turnover path complexity
+  MUST stay index-dominated (`O(E * log N)`) and MUST NOT regress to `O(E * N)`.
 - If one record cannot fit even when datastore is empty, insert MUST reject with `QuotaExceededError`.
 
 ## 5. Durable Storage Naming and Layout (Normative)

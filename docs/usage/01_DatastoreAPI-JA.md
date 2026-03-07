@@ -81,6 +81,8 @@ const records = await db.select({
 - 同一 `timestamp` は挿入順で返ります
 - 挿入順は内部で永続化される `insertionOrder` キー（`Uint64`）で管理されるため、
   再起動・ページ分割・compaction・rewrite 後も順序は安定します
+- M3+ の範囲読み取り経路は B+ tree の lower-bound seek + linked-leaf scan を使用します
+  （期待計算量 `O(log N + K)`、`K` は返却行数）
 - 既存レコードの更新時は、同一 `timestamp` 内での元の順序位置を維持します
 - 将来の upsert でも、既存レコードに対する更新経路では元の順序位置を維持します
 - 返却される `timestamp` は Unix epoch ミリ秒 (`number`) です
@@ -119,6 +121,10 @@ const db = new Datastore({
 - 1分ごと: `"1m"`
 - サイズ閾値コミット: 未コミットの保留バイト数が `maxPendingBytes` に達した時点でコミット
 - 間隔トリガーとサイズ閾値を同時指定した場合は、先に満たした条件でコミット
+- scheduler は重複トリガーを coalescing します。1つのコミットが進行中に追加トリガーが来た場合、
+  保留変更が残っていれば終了後に 1 回だけ追従コミットを実行します
+- バックグラウンド auto-commit の失敗は「失敗試行ごとに 1 件」の error event を発火し、
+  未反映変更は次回トリガーで再試行できる状態を維持します
 
 バックグラウンド自動コミット（`"immediate"` 以外）で発生した失敗は、Datastore の error channel で受け取ります:
 
@@ -164,6 +170,9 @@ const db = new Datastore({
 - `strict`: 上限超過時は `QuotaExceededError` で失敗（状態変更なし）
 - `turnover`: 最も古いレコードから決定的順序で削除し、新規レコードを挿入
 - `turnover` の退避削除は内部 delete 経路で実装され、v0.2 では公開 delete API は提供されません
+- M3+ では `turnover` の退避で保持バッファに対する線形探索/線形削除を避け、
+  1 回の insert 中に `E` 件退避が発生する場合の期待計算量を index 主体
+  （`O(E * log N)`）に保ちます
 - 単一レコードが `maxSize` を超える場合は `QuotaExceededError` で失敗
 - v0.2 では単一レコードのページ跨ぎ分割は行いません。1レコードのページ適合上限は
   `maxSingleRecordBytes = pageSize - 32 - 4` です

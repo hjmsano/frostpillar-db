@@ -23,6 +23,15 @@ export interface FileBackendControllerCreateOptions {
   onAutoCommitError: (error: unknown) => void;
 }
 
+export interface FileBackendControllerTestHooks {
+  beforeCommit?: () => void | Promise<void>;
+  afterCommit?: () => void | Promise<void>;
+}
+
+interface FileDatastoreConfigWithTestHooks extends FileDatastoreConfig {
+  __testHooks?: FileBackendControllerTestHooks;
+}
+
 export interface FileBackendControllerCreateResult {
   controller: FileBackendController;
   initialRecords: PersistedTimeseriesRecord[];
@@ -35,8 +44,12 @@ export class FileBackendController {
   private readonly autoCommit: FileAutoCommitState;
   private readonly getSnapshot: () => FileBackendControllerSnapshot;
   private readonly onAutoCommitError: (error: unknown) => void;
+  private readonly testHooks: FileBackendControllerTestHooks | null;
   private pendingAutoCommitBytes: number;
   private autoCommitTimer: IntervalTimerHandle | null;
+  private commitInFlight: Promise<void> | null;
+  private pendingForegroundCommitRequest: boolean;
+  private pendingBackgroundCommitRequest: boolean;
   private closed: boolean;
 
   private constructor(
@@ -44,13 +57,18 @@ export class FileBackendController {
     autoCommit: FileAutoCommitState,
     getSnapshot: () => FileBackendControllerSnapshot,
     onAutoCommitError: (error: unknown) => void,
+    testHooks: FileBackendControllerTestHooks | null,
   ) {
     this.backend = backend;
     this.autoCommit = autoCommit;
     this.getSnapshot = getSnapshot;
     this.onAutoCommitError = onAutoCommitError;
+    this.testHooks = testHooks;
     this.pendingAutoCommitBytes = 0;
     this.autoCommitTimer = null;
+    this.commitInFlight = null;
+    this.pendingForegroundCommitRequest = false;
+    this.pendingBackgroundCommitRequest = false;
     this.closed = false;
     this.startAutoCommitSchedule();
   }
@@ -74,11 +92,14 @@ export class FileBackendController {
       initialNextInsertionOrder = loaded.nextInsertionOrder;
     }
 
+    const configWithTestHooks = options.config as FileDatastoreConfigWithTestHooks;
+
     const controller = new FileBackendController(
       backend,
       autoCommit,
       options.getSnapshot,
       options.onAutoCommitError,
+      configWithTestHooks.__testHooks ?? null,
     );
     return {
       controller,
@@ -88,10 +109,9 @@ export class FileBackendController {
     };
   }
 
-  public handleRecordAppended(encodedBytes: number): void {
+  public handleRecordAppended(encodedBytes: number): Promise<void> {
     if (this.autoCommit.frequency === 'immediate') {
-      this.commitNow();
-      return;
+      return this.commitNow();
     }
 
     this.pendingAutoCommitBytes += encodedBytes;
@@ -99,34 +119,124 @@ export class FileBackendController {
       this.autoCommit.maxPendingBytes !== null &&
       this.pendingAutoCommitBytes >= this.autoCommit.maxPendingBytes
     ) {
-      this.commitNow();
+      return this.queueCommitRequest('foreground');
     }
+
+    return Promise.resolve();
   }
 
-  public commitNow(): void {
-    const snapshot = this.getSnapshot();
-    commitFileBackendSnapshot(
-      this.backend,
-      snapshot.records,
-      snapshot.nextInsertionOrder,
-    );
-    this.pendingAutoCommitBytes = 0;
+  public commitNow(): Promise<void> {
+    return this.queueCommitRequest('foreground');
   }
 
-  public close(): void {
-    if (this.closed) {
-      return;
+  public close(): Promise<void> {
+    return Promise.resolve().then(async (): Promise<void> => {
+      if (this.closed) {
+        return;
+      }
+
+      this.closed = true;
+      this.stopAutoCommitSchedule();
+      await this.waitForCommitSettlement();
+      if (this.backend.lockAcquired) {
+        releaseFileLock(this.backend);
+      }
+    });
+  }
+
+  private waitForCommitSettlement(): Promise<void> {
+    if (this.commitInFlight === null) {
+      return Promise.resolve();
     }
 
-    this.stopAutoCommitSchedule();
-    if (this.backend.lockAcquired) {
-      releaseFileLock(this.backend);
+    return this.commitInFlight
+      .then((): void => undefined)
+      .catch((): void => undefined);
+  }
+
+  private queueCommitRequest(
+    requestType: 'foreground' | 'background',
+  ): Promise<void> {
+    if (requestType === 'foreground') {
+      this.pendingForegroundCommitRequest = true;
+    } else {
+      this.pendingBackgroundCommitRequest = true;
     }
-    this.closed = true;
+
+    if (this.commitInFlight === null) {
+      this.commitInFlight = this.runCommitLoop().finally((): void => {
+        this.commitInFlight = null;
+      });
+    }
+
+    if (requestType === 'background') {
+      return Promise.resolve();
+    }
+
+    return this.commitInFlight;
+  }
+
+  private runCommitLoop(): Promise<void> {
+    return Promise.resolve().then(async (): Promise<void> => {
+      let shouldContinue = true;
+      while (shouldContinue) {
+        const runForeground = this.pendingForegroundCommitRequest;
+        const runBackground = this.pendingBackgroundCommitRequest;
+        this.pendingForegroundCommitRequest = false;
+        this.pendingBackgroundCommitRequest = false;
+
+        const shouldRunCommit =
+          runForeground || (runBackground && this.pendingAutoCommitBytes > 0);
+        if (!shouldRunCommit) {
+          shouldContinue = false;
+          continue;
+        }
+
+        try {
+          const committedPendingBytes = await this.executeSingleCommit();
+          this.pendingAutoCommitBytes = Math.max(
+            0,
+            this.pendingAutoCommitBytes - committedPendingBytes,
+          );
+        } catch (error) {
+          if (runForeground) {
+            throw error;
+          }
+          this.onAutoCommitError(error);
+        }
+
+        if (
+          !this.pendingForegroundCommitRequest &&
+          !this.pendingBackgroundCommitRequest
+        ) {
+          shouldContinue = false;
+        }
+      }
+    });
+  }
+
+  private executeSingleCommit(): Promise<number> {
+    return Promise.resolve().then(async (): Promise<number> => {
+      await this.testHooks?.beforeCommit?.();
+
+      const committedPendingBytes = this.pendingAutoCommitBytes;
+      const snapshot = this.getSnapshot();
+      commitFileBackendSnapshot(
+        this.backend,
+        snapshot.records,
+        snapshot.nextInsertionOrder,
+      );
+
+      await this.testHooks?.afterCommit?.();
+      return committedPendingBytes;
+    });
   }
 
   private startAutoCommitSchedule(): void {
-    if (this.autoCommit.frequency !== 'scheduled' || this.autoCommit.intervalMs === null) {
+    if (
+      this.autoCommit.frequency !== 'scheduled' ||
+      this.autoCommit.intervalMs === null
+    ) {
       return;
     }
 
@@ -145,14 +255,12 @@ export class FileBackendController {
   }
 
   private handleAutoCommitTick(): void {
-    if (this.closed || this.pendingAutoCommitBytes <= 0) {
+    if (this.closed) {
       return;
     }
-
-    try {
-      this.commitNow();
-    } catch (error) {
-      this.onAutoCommitError(error);
+    if (this.pendingAutoCommitBytes <= 0) {
+      return;
     }
+    void this.queueCommitRequest('background');
   }
 }

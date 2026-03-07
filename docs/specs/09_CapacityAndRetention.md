@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-06
+Last Updated: 2026-03-07
 
 This document defines bounded-size behavior for Frostpillar.
 It complements `docs/specs/04_DatastoreAPI.md` and closes the gap between vision goals and API contract.
@@ -88,8 +88,17 @@ If record encoded size alone is larger than `maxSize`:
   - tie-breaker: insertion-order key ascending
 - Turnover eviction MUST be executed via internal deletion of existing records.
 - This internal deletion path MUST NOT be interpreted as public delete API support in v0.2.
+- M3+ turnover eviction MUST NOT perform linear search/removal against the retained-record
+  buffer for each evicted record.
+- M3+ implementations MUST keep an internal record buffer keyed by `insertionOrder` and
+  remove evicted records from that buffer in expected `O(1)` after oldest-pop lookup.
 - Eviction repeats until `currentSize + newRecordSize <= maxSize`.
 - Then new record insertion proceeds.
+
+Complexity expectation for one insert under turnover:
+
+- for `E` evictions against `N` retained records, expected complexity is index-dominated
+  (`O(E * log N)`), and MUST NOT regress to `O(E * N)` due to linear buffer scans.
 
 If the datastore becomes empty and `newRecordSize > maxSize`:
 

@@ -81,6 +81,8 @@ Behavior:
 - duplicate timestamps are ordered by insertion order
 - insertion order is backed by an internal persisted `insertionOrder` key (`Uint64`)
   so ordering remains stable after restart, page split, compaction, or rewrite
+- M3+ range read path uses B+ tree lower-bound seek + linked-leaf scan
+  (expected `O(log N + K)`, `K` = returned rows)
 - updating an existing record must preserve its original tie-break position
 - future upsert on existing record must preserve original tie-break position
 - returned `timestamp` values are epoch milliseconds (`number`)
@@ -119,6 +121,8 @@ const db = new Datastore({
 - every 1 minute: `"1m"`
 - size-threshold flush: commit triggers when pending bytes reach `maxPendingBytes`
 - if both interval and size-threshold are configured, whichever occurs first triggers commit
+- scheduler coalesces overlapping triggers: while one commit is in flight, additional triggers are merged and one follow-up commit runs if pending changes remain
+- background auto-commit failures emit one error event per failed attempt and pending changes remain queued for later retry
 
 Background auto-commit errors (for non-`"immediate"` schedules) are delivered through datastore error channel:
 
@@ -164,6 +168,8 @@ Behavior:
 - `strict`: overflow insert fails with `QuotaExceededError` (no mutation)
 - `turnover`: oldest records are evicted deterministically, then new record is inserted
 - `turnover` eviction is handled by an internal delete path; a public delete API is not available in v0.2
+- in M3+, turnover eviction avoids linear retained-buffer search/removal and keeps
+  expected index-dominated complexity (`O(E * log N)` for `E` evictions in one insert)
 - if one record is larger than `maxSize`, insert fails with `QuotaExceededError`
 - v0.2 does not split one record across multiple pages; per-page fit boundary is
   `maxSingleRecordBytes = pageSize - 32 - 4`

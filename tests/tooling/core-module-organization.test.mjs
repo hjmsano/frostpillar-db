@@ -38,6 +38,11 @@ test('core entry is a thin barrel and split modules exist', async () => {
     'src/core/datastore/fileBackend.ts',
     'src/core/datastore/fileBackendController.ts',
     'src/core/datastore/fileBackendSnapshot.ts',
+    'src/core/datastore/timeIndexBTree.ts',
+    'src/core/datastore/timeIndexBTreeTypes.ts',
+    'src/core/datastore/timeIndexBTreeNavigation.ts',
+    'src/core/datastore/timeIndexBTreeMutations.ts',
+    'src/core/datastore/timeIndexBTreeIntegrity.ts',
     'src/core/datastore/query.ts',
     'src/core/datastore/types.ts',
   ];

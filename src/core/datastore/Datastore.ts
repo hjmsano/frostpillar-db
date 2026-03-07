@@ -1,12 +1,13 @@
 import {
   ClosedDatastoreError,
   ConfigurationError,
+  IndexCorruptionError,
   InvalidQueryRangeError,
   QueryEngineNotRegisteredError,
   UnsupportedBackendError,
   ValidationError,
 } from '../errors/index.js';
-import { compareByLogicalOrder, toPublicRecord } from '../records/ordering.js';
+import { toPublicRecord } from '../records/ordering.js';
 import type {
   DatastoreConfig,
   DatastoreErrorListener,
@@ -32,11 +33,13 @@ import {
 } from './fileBackendController.js';
 import { executeNativeQuery } from './query.js';
 import type { CapacityState } from './types.js';
+import { TimeIndexBTree } from './timeIndexBTree.js';
 
 export class Datastore {
   private readonly errorListeners: Set<DatastoreErrorListener>;
   private readonly queryEngines: Map<QueryLanguage, QueryEngineModule>;
-  private readonly records: PersistedTimeseriesRecord[];
+  private readonly recordsByInsertionOrder: Map<bigint, PersistedTimeseriesRecord>;
+  private readonly timeIndex: TimeIndexBTree;
   private readonly capacityState: CapacityState | null;
   private nextInsertionOrder: bigint;
   private currentSizeBytes: number;
@@ -46,7 +49,8 @@ export class Datastore {
   constructor(config: DatastoreConfig) {
     this.errorListeners = new Set<DatastoreErrorListener>();
     this.queryEngines = new Map<QueryLanguage, QueryEngineModule>();
-    this.records = [];
+    this.recordsByInsertionOrder = new Map<bigint, PersistedTimeseriesRecord>();
+    this.timeIndex = new TimeIndexBTree();
     this.capacityState = parseCapacityConfig(config.capacity);
     this.nextInsertionOrder = 0n;
     this.currentSizeBytes = 0;
@@ -66,14 +70,14 @@ export class Datastore {
       const fileBackendCreateResult = FileBackendController.create({
         config,
         getSnapshot: (): FileBackendControllerSnapshot => ({
-          records: this.records,
+          records: this.getRecordsSnapshot(),
           nextInsertionOrder: this.nextInsertionOrder,
         }),
         onAutoCommitError: (error: unknown): void => {
           emitAutoCommitErrorToListeners(this.errorListeners, error);
         },
       });
-      this.records.push(...fileBackendCreateResult.initialRecords);
+      this.seedTimeIndex(fileBackendCreateResult.initialRecords);
       this.currentSizeBytes = fileBackendCreateResult.initialCurrentSizeBytes;
       this.nextInsertionOrder = fileBackendCreateResult.initialNextInsertionOrder;
       this.fileBackendController = fileBackendCreateResult.controller;
@@ -86,7 +90,7 @@ export class Datastore {
   }
 
   public insert(record: InputTimeseriesRecord): Promise<void> {
-    return Promise.resolve().then((): void => {
+    return Promise.resolve().then(async (): Promise<void> => {
       this.ensureOpen();
 
       const rawRecord = record as Record<string, unknown>;
@@ -105,23 +109,29 @@ export class Datastore {
         normalizedTimestamp,
         normalizedPayload,
       );
-
-      this.currentSizeBytes = enforceCapacityPolicy(
-        this.records,
-        this.capacityState,
-        this.currentSizeBytes,
-        encodedBytes,
-      );
-
-      this.records.push({
+      const persistedRecord: PersistedTimeseriesRecord = {
         timestamp: normalizedTimestamp,
         payload: normalizedPayload,
         insertionOrder: this.nextInsertionOrder,
         encodedBytes,
-      });
+      };
+
+      this.currentSizeBytes = enforceCapacityPolicy(
+        this.capacityState,
+        this.currentSizeBytes,
+        encodedBytes,
+        (): number => this.recordsByInsertionOrder.size,
+        (): number => this.evictOldestRecordAndReturnBytes(),
+      );
+
+      this.recordsByInsertionOrder.set(
+        persistedRecord.insertionOrder,
+        persistedRecord,
+      );
+      this.timeIndex.insert(persistedRecord);
       this.currentSizeBytes += encodedBytes;
       this.nextInsertionOrder += 1n;
-      this.fileBackendController?.handleRecordAppended(encodedBytes);
+      await this.fileBackendController?.handleRecordAppended(encodedBytes);
     });
   }
 
@@ -135,10 +145,7 @@ export class Datastore {
         throw new InvalidQueryRangeError('start must be <= end.');
       }
 
-      return this.records
-        .filter((record) => record.timestamp >= start && record.timestamp <= end)
-        .sort(compareByLogicalOrder)
-        .map(toPublicRecord);
+      return this.timeIndex.rangeQuery(start, end).map(toPublicRecord);
     });
   }
 
@@ -164,7 +171,7 @@ export class Datastore {
   public queryNative(request: NativeQueryRequest): Promise<NativeQueryResultRow[]> {
     return Promise.resolve().then((): NativeQueryResultRow[] => {
       this.ensureOpen();
-      return executeNativeQuery(this.records, request);
+      return executeNativeQuery(this.getRecordsSnapshot(), request);
     });
   }
 
@@ -179,9 +186,9 @@ export class Datastore {
   }
 
   public commit(): Promise<void> {
-    return Promise.resolve().then((): void => {
+    return Promise.resolve().then(async (): Promise<void> => {
       this.ensureOpen();
-      this.fileBackendController?.commitNow();
+      await this.fileBackendController?.commitNow();
     });
   }
 
@@ -205,12 +212,12 @@ export class Datastore {
   }
 
   public close(): Promise<void> {
-    return Promise.resolve().then((): void => {
+    return Promise.resolve().then(async (): Promise<void> => {
       if (this.closed) {
         return;
       }
 
-      this.fileBackendController?.close();
+      await this.fileBackendController?.close();
       this.fileBackendController = null;
 
       this.closed = true;
@@ -223,5 +230,37 @@ export class Datastore {
     if (this.closed) {
       throw new ClosedDatastoreError('Datastore has been closed.');
     }
+  }
+
+  private seedTimeIndex(records: PersistedTimeseriesRecord[]): void {
+    for (const record of records) {
+      if (this.recordsByInsertionOrder.has(record.insertionOrder)) {
+        throw new IndexCorruptionError(
+          'Duplicate insertionOrder detected while seeding datastore state.',
+        );
+      }
+      this.recordsByInsertionOrder.set(record.insertionOrder, record);
+      this.timeIndex.insert(record);
+    }
+  }
+
+  private getRecordsSnapshot(): PersistedTimeseriesRecord[] {
+    return Array.from(this.recordsByInsertionOrder.values());
+  }
+
+  private evictOldestRecordAndReturnBytes(): number {
+    const oldestRecord = this.timeIndex.popOldest();
+    if (oldestRecord === null) {
+      throw new IndexCorruptionError(
+        'Time index reported empty state during turnover eviction.',
+      );
+    }
+
+    if (!this.recordsByInsertionOrder.delete(oldestRecord.insertionOrder)) {
+      throw new IndexCorruptionError(
+        'Time index and record buffer are out of sync during turnover eviction.',
+      );
+    }
+    return oldestRecord.encodedBytes;
   }
 }
