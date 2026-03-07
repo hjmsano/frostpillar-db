@@ -52,9 +52,15 @@ pnpm build:bundle
 
 ### Generated artifacts
 
-- `dist/bundles/core/frostpillar-core.js`
+- `dist/bundles/core/frostpillar-core.min.js`
 - `dist/bundles/core/frostpillar-core.d.ts`
 - `dist/bundles/manifest.json`
+
+### Browser script contract
+
+- `frostpillar-core.min.js` is a single-file browser runtime artifact.
+- it can be loaded via `<script src=".../frostpillar-core.min.js"></script>`.
+- public API is exposed on `globalThis.Frostpillar` (for example `Frostpillar.Datastore`).
 
 ### Bundle profile policy
 
@@ -78,7 +84,7 @@ The profile matrix is published in `dist/bundles/manifest.json` (`profileMatrix`
 
 | Profile | Availability | Current backends | Notes |
 | :------ | :----------- | :--------------- | :---- |
-| `core` | `published` | `memory` | current release artifact is `dist/bundles/core/frostpillar-core.js` |
+| `core` | `published` | `memory` | current release artifact is `dist/bundles/core/frostpillar-core.min.js` |
 | `core-indexeddb` | `planned` | none yet | enabled only after runtime-slice IndexedDB support is accepted |
 | `core-opfs` | `planned` | none yet | enabled only after runtime-slice OPFS support is accepted |
 | `core-localstorage` | `planned` | none yet | enabled only after runtime-slice localStorage support is accepted |

@@ -2,7 +2,7 @@
 
 Status: Draft  
 Version: 0.2  
-Last Updated: 2026-03-07
+Last Updated: 2026-03-08
 
 This specification defines how Frostpillar is delivered to users as installable artifacts.
 Runtime behavior semantics remain defined by feature specs (for example datastore API, durability, and capacity).
@@ -47,10 +47,14 @@ For every publishable Frostpillar release, the project MUST provide an installab
 
 ### 3.2 Browser Bundle Track
 
-For every publishable Frostpillar release, the project MUST provide browser-consumable bundle artifacts in one or more files.
+For every publishable Frostpillar release, the project MUST provide browser-consumable bundle artifacts.
 
 - At least one `core` browser bundle profile MUST be published.
 - `core` profile MUST contain browser-safe Frostpillar core API behavior that does not require Node-only APIs.
+- `core` profile runtime artifact MUST be emitted as a single minified JavaScript file:
+  - `dist/bundles/core/frostpillar-core.min.js`
+- The `core` single-file bundle MUST be executable in browsers without additional module fetches.
+- The `core` single-file bundle MUST expose Frostpillar public API through a deterministic global object contract (`globalThis.Frostpillar`).
 - Bundle filenames or release manifest metadata MUST identify profile names deterministically.
 - A bundle profile MUST NOT claim support for a backend that is outside current runtime slice support.
 - If a backend is selected at runtime but excluded from the bundle profile, behavior MUST fail with the same typed error class used by unsupported backend selection.
@@ -78,6 +82,7 @@ Browser bundle generation MUST emit deterministic profile metadata under `dist/b
   - runtime entry path (`entry`)
   - declaration entry path (`types`)
   - included module groups (`includes`)
+- for published `core`, `entry` MUST point to `dist/bundles/core/frostpillar-core.min.js`.
 - manifest MUST include `profileMatrix` with one entry per profile policy name:
   - mandatory: `core`
   - optional: `core-indexeddb`, `core-opfs`, `core-localstorage`, `full-browser`
@@ -123,6 +128,7 @@ Repository tooling MUST provide a dedicated bundle build command:
 - `pnpm build:bundle` MUST generate browser bundle artifacts and profile metadata.
 - `pnpm build:bundle` MAY assume `pnpm build` has already produced TypeScript outputs under `dist/`.
 - If required input files are missing, `pnpm build:bundle` MUST fail with actionable error text.
+- Browser bundle build MUST swap Node-only datastore config entry to a browser profile module while keeping capacity/auto-commit parsing logic sourced from one shared module.
 
 ## 8. GitHub Actions CI/CD Contract
 

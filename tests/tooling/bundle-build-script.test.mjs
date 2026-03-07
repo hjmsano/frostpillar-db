@@ -33,6 +33,8 @@ const writeFixtureDist = async (sandboxRoot) => {
     'dist/core/types.js': "export const FROSTPILLAR_FIXTURE = true;\n",
     'dist/core/index.d.ts': "export * from './types.js';\n",
     'dist/core/types.d.ts': 'export declare const FROSTPILLAR_FIXTURE: boolean;\n',
+    'dist/core/datastore/config.browser.js':
+      'export const parseCapacityConfig = () => null;\n',
     'dist/queryEngine/runQueryWithEngine.js':
       'export const runQueryWithEngine = () => [];\n',
     'dist/queryEngine/runQueryWithEngine.d.ts':
@@ -56,7 +58,7 @@ test('package.json defines build:bundle script wiring', async () => {
   assert.equal(scripts['build:bundle'], 'node ./scripts/build-bundles.mjs');
 });
 
-test('build bundle script emits core profile entry files and manifest', async () => {
+test('build bundle script emits core single-file min bundle and manifest', async () => {
   const bundleScriptHref = pathToFileURL(
     path.resolve(process.cwd(), 'scripts/build-bundles.mjs'),
   ).href;
@@ -75,7 +77,7 @@ test('build bundle script emits core profile entry files and manifest', async ()
 
     const bundleEntryPath = path.resolve(
       sandbox,
-      'dist/bundles/core/frostpillar-core.js',
+      'dist/bundles/core/frostpillar-core.min.js',
     );
     const bundleEntryTypesPath = path.resolve(
       sandbox,
@@ -88,11 +90,7 @@ test('build bundle script emits core profile entry files and manifest', async ()
     assert.equal(await pathExists(manifestPath), true);
 
     const bundleEntrySource = await readFile(bundleEntryPath, 'utf8');
-    assert.match(bundleEntrySource, /export \* from '\.\/core\/index\.js';/);
-    assert.match(
-      bundleEntrySource,
-      /export \* from '\.\/queryEngine\/runQueryWithEngine\.js';/,
-    );
+    assert.match(bundleEntrySource, /Frostpillar/);
 
     const manifestSource = await readFile(manifestPath, 'utf8');
     const manifestJson = JSON.parse(manifestSource);
@@ -100,7 +98,7 @@ test('build bundle script emits core profile entry files and manifest', async ()
     assert.equal(manifestJson.profiles[0]?.name, 'core');
     assert.equal(
       manifestJson.profiles[0]?.entry,
-      'dist/bundles/core/frostpillar-core.js',
+      'dist/bundles/core/frostpillar-core.min.js',
     );
   } finally {
     await rm(sandbox, { recursive: true, force: true });
@@ -127,4 +125,15 @@ test('build bundle script fails with actionable error when dist input is missing
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
+});
+
+test('build bundle script uses browser config module swap instead of duplicated parser source', async () => {
+  const bundleScriptPath = path.resolve(process.cwd(), 'scripts/build-bundles.mjs');
+  const bundleScriptSource = await readFile(bundleScriptPath, 'utf8');
+
+  assert.match(bundleScriptSource, /config\.browser\.js/);
+  assert.doesNotMatch(
+    bundleScriptSource,
+    /capacity\.maxSize string must be <positive><B\|KB\|MB\|GB>\./,
+  );
 });

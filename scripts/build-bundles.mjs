@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -8,6 +8,7 @@ const CORE_PROFILE_NAME = 'core';
 const REQUIRED_INPUT_FILES = [
   'dist/core/index.js',
   'dist/core/index.d.ts',
+  'dist/core/datastore/config.browser.js',
   'dist/queryEngine/runQueryWithEngine.js',
   'dist/queryEngine/runQueryWithEngine.d.ts',
 ];
@@ -55,56 +56,119 @@ const ensureFileExists = async (absolutePath, relativePathForMessage) => {
   }
 };
 
-const copyDirectoryRecursive = async (sourceDirectory, targetDirectory) => {
-  await mkdir(targetDirectory, { recursive: true });
-  const entries = await readdir(sourceDirectory, { withFileTypes: true });
-
-  await Promise.all(
-    entries.map(async (entry) => {
-      const sourcePath = path.join(sourceDirectory, entry.name);
-      const targetPath = path.join(targetDirectory, entry.name);
-
-      if (entry.isDirectory()) {
-        await copyDirectoryRecursive(sourcePath, targetPath);
-        return;
-      }
-
-      if (entry.isFile()) {
-        await copyFile(sourcePath, targetPath);
-      }
-    }),
-  );
+const loadEsbuildBuild = async () => {
+  try {
+    const esbuild = await import('esbuild');
+    return esbuild.build;
+  } catch {
+    throw new Error(
+      'Bundle build requires "esbuild". Please run `pnpm add -D esbuild`.',
+    );
+  }
 };
 
-const writeCoreProfileEntryFiles = async (profileRoot) => {
-  const runtimeEntryPath = path.join(profileRoot, 'frostpillar-core.js');
+const writeCoreProfileTypeEntryFile = async (profileRoot) => {
   const typeEntryPath = path.join(profileRoot, 'frostpillar-core.d.ts');
 
-  const runtimeSource = [
-    "export * from './core/index.js';",
-    "export * from './queryEngine/runQueryWithEngine.js';",
-    '',
-  ].join('\n');
-
   const typesSource = [
-    "export * from './core/index.js';",
-    "export * from './queryEngine/runQueryWithEngine.js';",
+    "export * from '../../core/index.js';",
     '',
   ].join('\n');
 
-  await writeFile(runtimeEntryPath, runtimeSource, 'utf8');
   await writeFile(typeEntryPath, typesSource, 'utf8');
 
   return {
-    runtimeEntryPath,
     typeEntryPath,
+  };
+};
+
+const buildCoreRuntimeBundle = async (profileRoot) => {
+  const runtimeEntryPath = path.join(profileRoot, 'frostpillar-core.min.js');
+  const temporaryDirectory = path.join(profileRoot, '.bundle-temp');
+  const temporaryEntryPath = path.join(temporaryDirectory, 'entry.js');
+  const fileBackendControllerStubPath = path.join(
+    temporaryDirectory,
+    'fileBackendController.browser.js',
+  );
+  const datastoreConfigBrowserModulePath = path.resolve(
+    profileRoot,
+    '../../core/datastore/config.browser.js',
+  );
+  const entrySource = ["export * from '../../../core/index.js';", ''].join('\n');
+  const fileBackendControllerStubSource = [
+    "import { UnsupportedBackendError } from '../../../core/errors/index.js';",
+    '',
+    'export class FileBackendController {',
+    '  static create() {',
+    '    throw new UnsupportedBackendError(',
+    `      'Backend "file" is not available in browser bundle profile "${CORE_PROFILE_NAME}".',`,
+    '    );',
+    '  }',
+    '',
+    '  async handleRecordAppended() {}',
+    '',
+    '  async commitNow() {}',
+    '',
+    '  async close() {}',
+    '}',
+    '',
+  ].join('\n');
+  const build = await loadEsbuildBuild();
+
+  await mkdir(temporaryDirectory, { recursive: true });
+  await writeFile(temporaryEntryPath, entrySource, 'utf8');
+  await writeFile(fileBackendControllerStubPath, fileBackendControllerStubSource, 'utf8');
+
+  try {
+    await build({
+      bundle: true,
+      entryPoints: [temporaryEntryPath],
+      format: 'iife',
+      globalName: 'Frostpillar',
+      legalComments: 'none',
+      minify: true,
+      outfile: runtimeEntryPath,
+      platform: 'browser',
+      plugins: [
+        {
+          name: 'frostpillar-browser-bundle-stubs',
+          setup(buildContext) {
+            buildContext.onResolve(
+              { filter: /fileBackendController\.js$/ },
+              (args) => {
+                if (args.path.endsWith('fileBackendController.js')) {
+                  return { path: fileBackendControllerStubPath };
+                }
+                return null;
+              },
+            );
+
+            buildContext.onResolve({ filter: /config\.js$/ }, (args) => {
+              if (
+                args.path === './config.js' &&
+                args.importer.includes('/dist/core/datastore/')
+              ) {
+                return { path: datastoreConfigBrowserModulePath };
+              }
+              return null;
+            });
+          },
+        },
+      ],
+      target: ['es2020'],
+    });
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+
+  return {
+    runtimeEntryPath,
   };
 };
 
 export const buildBundleArtifacts = async (options = {}) => {
   const cwd =
     typeof options.cwd === 'string' ? path.resolve(options.cwd) : process.cwd();
-  const distDirectory = path.resolve(cwd, 'dist');
   const bundleRootDirectory = path.resolve(cwd, 'dist/bundles');
   const coreProfileDirectory = path.resolve(bundleRootDirectory, CORE_PROFILE_NAME);
 
@@ -117,18 +181,8 @@ export const buildBundleArtifacts = async (options = {}) => {
   await rm(bundleRootDirectory, { recursive: true, force: true });
   await mkdir(coreProfileDirectory, { recursive: true });
 
-  await copyDirectoryRecursive(
-    path.resolve(distDirectory, 'core'),
-    path.resolve(coreProfileDirectory, 'core'),
-  );
-  await copyDirectoryRecursive(
-    path.resolve(distDirectory, 'queryEngine'),
-    path.resolve(coreProfileDirectory, 'queryEngine'),
-  );
-
-  const { runtimeEntryPath, typeEntryPath } = await writeCoreProfileEntryFiles(
-    coreProfileDirectory,
-  );
+  const { runtimeEntryPath } = await buildCoreRuntimeBundle(coreProfileDirectory);
+  const { typeEntryPath } = await writeCoreProfileTypeEntryFile(coreProfileDirectory);
 
   const manifest = {
     schemaVersion: 1,
