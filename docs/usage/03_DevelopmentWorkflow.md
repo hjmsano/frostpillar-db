@@ -91,3 +91,25 @@ Repository automation follows this trigger split:
 
 Current policy does not publish artifacts to external destinations.
 Build outputs are generated only as workflow-local validation artifacts.
+
+## 7. Feature PR Checklist Enforcement
+
+Feature pull requests must use `.github/pull_request_template.md`.
+The template checklist is the minimum execution gate and must be completed before merge:
+
+- intent alignment
+- spec update first
+- failing tests first (TDD Red)
+- implementation after red tests (TDD Green)
+- full verification (`pnpm test --run`, `pnpm check`)
+- EN/JA usage updates when user-visible behavior changes
+- ADR updates for architecture/process decisions
+
+## 8. Docs Index Consistency Rule
+
+When adding or renaming files:
+
+- update `docs/specs/INDEX.md` for spec files
+- update `docs/adr/INDEX.md` for ADR files
+
+These consistency checks are test-backed and treated as governance gates.

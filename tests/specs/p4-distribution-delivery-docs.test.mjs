@@ -52,10 +52,6 @@ test('phase 4 checklist is marked complete with p4 work-item closure', async () 
 
   assert.match(
     checklist,
-    /Active phase: `Phase 4: Distribution Delivery Tracks \(completed\)`/,
-  );
-  assert.match(
-    checklist,
     /define release-ready NPM delivery contract with smoke verification/,
   );
   assert.match(checklist, /- \[x\] produce browser bundle artifacts for mandatory `core` profile/);

@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 4: Distribution Delivery Tracks (completed)`
-- Active work item: `docs/plans/05_PhaseWorkItem_P4_DistributionDeliveryTracks.md (completed)`
-- Scope note: all currently defined Phase 4 delivery obligations are complete; next roadmap scope is pending explicit planning activation.
+- Active phase: `Phase 0: Foundation Sync (completed)`
+- Active work item: `docs/plans/08_PhaseWorkItem_P0_FoundationSync_GovernanceClosure.md (completed)`
+- Scope note: Phase 0 governance closure and Phase 4 delivery closure are both complete; next scope requires explicit plan activation.
 
 ## 4. Phase Status Checklist
 
@@ -35,10 +35,10 @@ Use it to track progress across phases and the currently active work item.
 
 - [x] baseline toolchain commands are available
 - [x] workflow spec and templates are published
-- [ ] confirm `docs/specs` and `docs/adr` references are consistent in new changes
-- [ ] enforce phase-gate checklist in every feature PR
-- [ ] keep test strategy and workflow docs aligned
-- [ ] exit criteria met: every new work item follows intent -> spec -> tests -> implementation -> verification
+- [x] confirm `docs/specs` and `docs/adr` references are consistent in new changes
+- [x] enforce phase-gate checklist in every feature PR
+- [x] keep test strategy and workflow docs aligned
+- [x] exit criteria met: every new work item follows intent -> spec -> tests -> implementation -> verification
 
 ### Phase 1: Memory Vertical Slice
 
@@ -131,4 +131,13 @@ Use this section as the day-to-day completion board for the current work item.
 - [x] failing tests added first for coalescing and background-error propagation/retry
 - [x] file backend controller coalescing + in-flight close-wait behavior implemented
 - [x] background auto-commit failed-attempt event emission verified (`StorageEngineError`)
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
+
+## 11. Active Work-Item Checklist (P0 Foundation Sync Governance Closure)
+
+- [x] scope/acceptance criteria aligned for remaining Phase 0 governance clauses
+- [x] failing tests added first for PR checklist, docs index consistency, and workflow/testing alignment
+- [x] feature PR template includes mandatory phase-gate checklist
+- [x] docs index consistency guardrails implemented and verified
+- [x] workflow/testing-strategy alignment clauses and usage guidance updated
 - [x] full verification green (`pnpm test --run`, `pnpm check`)
