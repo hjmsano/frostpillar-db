@@ -4,12 +4,51 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const CORE_PROFILE_NAME = 'core';
+const OPTIONAL_PROFILE_NAMES = [
+  'core-indexeddb',
+  'core-opfs',
+  'core-localstorage',
+  'full-browser',
+];
 
 const REQUIRED_INPUT_FILES = [
   'dist/core/index.js',
   'dist/core/index.d.ts',
   'dist/queryEngine/runQueryWithEngine.js',
   'dist/queryEngine/runQueryWithEngine.d.ts',
+];
+
+const PROFILE_MATRIX = [
+  {
+    name: CORE_PROFILE_NAME,
+    availability: 'published',
+    backends: ['memory'],
+    note: 'Published baseline bundle with browser-safe core/query modules.',
+  },
+  {
+    name: OPTIONAL_PROFILE_NAMES[0],
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for IndexedDB adapter once runtime-slice support is accepted.',
+  },
+  {
+    name: OPTIONAL_PROFILE_NAMES[1],
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for OPFS adapter once runtime-slice support is accepted.',
+  },
+  {
+    name: OPTIONAL_PROFILE_NAMES[2],
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for localStorage adapter once runtime-slice support is accepted.',
+  },
+  {
+    name: OPTIONAL_PROFILE_NAMES[3],
+    availability: 'planned',
+    backends: [],
+    note: 'Reserved for all browser adapters after runtime-slice support expansion.',
+  },
 ];
 
 const ensureFileExists = async (absolutePath, relativePathForMessage) => {
@@ -109,8 +148,10 @@ export const buildBundleArtifacts = async (options = {}) => {
           .join('/'),
         types: path.relative(cwd, typeEntryPath).split(path.sep).join('/'),
         includes: ['core', 'queryEngine'],
+        supportedBackends: ['memory'],
       },
     ],
+    profileMatrix: PROFILE_MATRIX,
   };
 
   const manifestPath = path.resolve(bundleRootDirectory, 'manifest.json');

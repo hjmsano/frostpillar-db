@@ -25,9 +25,9 @@ Use it to track progress across phases and the currently active work item.
 
 ## 3. Current Snapshot (2026-03-07)
 
-- Active phase: `Phase 3: Query and Capacity Hardening (completed)`
-- Active work item: `docs/plans/07_PhaseWorkItem_P3_SchedulerCoalescing_and_ErrorChannelRegression.md (completed)`
-- Scope note: Phase 4 (P4 dual delivery requirement: NPM + browser bundle profiles) is queued as next execution target.
+- Active phase: `Phase 4: Distribution Delivery Tracks (completed)`
+- Active work item: `docs/plans/05_PhaseWorkItem_P4_DistributionDeliveryTracks.md (completed)`
+- Scope note: all currently defined Phase 4 delivery obligations are complete; next roadmap scope is pending explicit planning activation.
 
 ## 4. Phase Status Checklist
 
@@ -69,11 +69,11 @@ Use it to track progress across phases and the currently active work item.
 
 ### Phase 4: Distribution Delivery Tracks
 
-- [ ] define release-ready NPM delivery contract with smoke verification
-- [ ] produce browser bundle artifacts for mandatory `core` profile
-- [ ] define and verify bundle profile matrix for optional browser adapters
-- [ ] publish EN/JA usage guidance for delivery/profile selection
-- [ ] exit criteria met: dual delivery tracks are test-proven and documented
+- [x] define release-ready NPM delivery contract with smoke verification
+- [x] produce browser bundle artifacts for mandatory `core` profile
+- [x] define and verify bundle profile matrix for optional browser adapters
+- [x] publish EN/JA usage guidance for delivery/profile selection
+- [x] exit criteria met: dual delivery tracks are test-proven and documented
 
 ## 5. Active Work-Item Checklist (M1 Historical)
 
@@ -109,12 +109,12 @@ Use this section as the day-to-day completion board for the current work item.
 
 ## 8. Active Work-Item Checklist (P4 Distribution Delivery Tracks)
 
-- [ ] npm install/import smoke tests added first and confirmed red
-- [ ] browser bundle `core` profile smoke test added first and confirmed red
-- [ ] package artifact/export shape implemented and verified
-- [ ] bundle profile artifacts and metadata matrix implemented and verified
-- [ ] EN/JA usage docs updated for delivery choices
-- [ ] full verification green (`pnpm test --run`, `pnpm check`)
+- [x] npm install/import smoke tests added first and confirmed red
+- [x] browser bundle `core` profile smoke test added first and confirmed red
+- [x] package artifact/export shape implemented and verified
+- [x] bundle profile artifacts and metadata matrix implemented and verified
+- [x] EN/JA usage docs updated for delivery choices
+- [x] full verification green (`pnpm test --run`, `pnpm check`)
 
 ## 9. Active Work-Item Checklist (M3 Query Scalability Index Hardening)
 
