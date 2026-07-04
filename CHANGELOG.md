@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.0.3](https://github.com/hjmsano/frostpillar-db/compare/v0.0.2...v0.0.3) (2026-07-04)
+
+
+### Bug Fixes
+
+* add publishConfig and update issue template for scoped package ([b1be16f](https://github.com/hjmsano/frostpillar-db/commit/b1be16f2e0df64789161f1a283400c7896c90a11))
+* Rename npm package scope and publish settings ([8e524fc](https://github.com/hjmsano/frostpillar-db/commit/8e524fc09b898e357d460693a4e81629b49c73f2))
+* scope npm package under [@frostpillar](https://github.com/frostpillar) organization ([d5e74f9](https://github.com/hjmsano/frostpillar-db/commit/d5e74f969261afe79bd581eec65edcfba9badbad))
+* update npm badge references to scoped package name ([6d4a084](https://github.com/hjmsano/frostpillar-db/commit/6d4a0840b7a2fa75bb1837636ee9c6440283a8e7))
+
 ## [0.0.2](https://github.com/hjmsano/frostpillar-db/compare/v0.0.1...v0.0.2) (2026-07-04)
 
 
