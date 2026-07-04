@@ -1,0 +1,33 @@
+# Dependencies
+/node_modules
+/.pnpm-store
+
+# Build artifacts
+/dist
+.tmp-test-dist
+.tmp-bench-dist
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS generated files
+.DS_Store
+
+# Test reports
+coverage
+
+# Temporary files
+tmp
+.tmp
+.tmp-test-autocommit
+.tmp-test-immutable-createdat
+
+# Agent files
+*.claude
+.claude/
+AGENTS.md
+CLAUDE.md

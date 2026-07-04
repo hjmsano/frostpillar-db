@@ -1,0 +1,222 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { Database, ValidationError } from '../../src/index.js';
+
+// Regression coverage for bug-01: runtime filter validation at Collection
+// entry points. Previously these calls threw raw TypeErrors or, worse,
+// silently matched every document in the collection.
+
+void test('find throws ValidationError when filter is null', async () => {
+  const database = new Database({});
+  const col = database.collection('t');
+  try {
+    assert.throws(
+      () => col.find(null as unknown as Record<string, unknown>),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('find throws ValidationError when filter is a primitive', async () => {
+  const database = new Database({});
+  const col = database.collection('t');
+  try {
+    assert.throws(
+      () => col.find('x' as unknown as Record<string, unknown>),
+      ValidationError,
+    );
+    assert.throws(
+      () => col.find(42 as unknown as Record<string, unknown>),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('find throws ValidationError when filter is an array', async () => {
+  const database = new Database({});
+  const col = database.collection('t');
+  try {
+    assert.throws(
+      () => col.find([] as unknown as Record<string, unknown>),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('find accepts undefined and matches all documents', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; v: number }>('t');
+  try {
+    await col.insert({ _id: 'a', v: 1 });
+    await col.insert({ _id: 'b', v: 2 });
+    const all = await col.find().toArray();
+    assert.equal(all.length, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('findOne throws ValidationError when filter is null', async () => {
+  const database = new Database({});
+  const col = database.collection('t');
+  try {
+    await assert.rejects(
+      () => col.findOne(null as unknown as Record<string, unknown>),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('remove throws ValidationError when filter is omitted', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; v: number }>('t');
+  try {
+    await col.insert({ _id: 'a', v: 1 });
+    await assert.rejects(
+      () => (col as { remove: (f?: unknown) => Promise<number> }).remove(),
+      ValidationError,
+    );
+    // The document must still exist — remove() must not match-all on invalid input.
+    assert.equal((await col.findOne({ _id: 'a' })) !== null, true);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('remove throws ValidationError when filter is null', async () => {
+  const database = new Database({});
+  const col = database.collection('t');
+  try {
+    await assert.rejects(
+      () => col.remove(null as unknown as Record<string, unknown>),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update throws ValidationError when filter is undefined and does NOT match all', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; v: number; z?: number }>('t');
+  try {
+    await col.insert({ _id: 'a', v: 1 });
+    await col.insert({ _id: 'b', v: 2 });
+
+    await assert.rejects(
+      () =>
+        col.update(undefined as unknown as Record<string, unknown>, {
+          $set: { z: 1 },
+        }),
+      ValidationError,
+    );
+
+    // Neither document should have been touched.
+    const docs = await col.find().sort({ _id: 1 }).toArray();
+    assert.equal(docs.length, 2);
+    assert.equal(docs[0]?.z, undefined);
+    assert.equal(docs[1]?.z, undefined);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update throws ValidationError when filter is null', async () => {
+  const database = new Database({});
+  const col = database.collection('t');
+  try {
+    await assert.rejects(
+      () =>
+        col.update(null as unknown as Record<string, unknown>, {
+          $set: { z: 1 },
+        }),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update accepts empty object filter and matches all documents', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; v: number; z?: number }>('t');
+  try {
+    await col.insert({ _id: 'a', v: 1 });
+    await col.insert({ _id: 'b', v: 2 });
+    const result = await col.update({}, { $set: { z: 9 } });
+    assert.equal(result.modifiedCount, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('invalid filters throw even on empty collections (all query paths)', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; x: number }>('empty');
+  const reserved = { constructor: 1 } as unknown as Record<string, unknown>;
+  const badOp = { x: { $nope: 1 } } as unknown as Record<string, unknown>;
+
+  try {
+    // Collection is empty: candidate record set is empty, yet structural
+    // validation must still run.
+    await assert.rejects(() => col.find(reserved).toArray(), ValidationError);
+    await assert.rejects(() => col.findOne(reserved), ValidationError);
+    await assert.rejects(() => col.find(reserved).count(), ValidationError);
+    await assert.rejects(
+      () => col.update(reserved, { $set: { x: 1 } }),
+      ValidationError,
+    );
+    await assert.rejects(() => col.remove(reserved), ValidationError);
+
+    await assert.rejects(() => col.find(badOp).toArray(), ValidationError);
+    await assert.rejects(() => col.remove(badOp), ValidationError);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('$and/$or reject non-object operands instead of matching all', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; x: number }>('t');
+  try {
+    await col.insert({ _id: 'a', x: 1 });
+
+    await assert.rejects(
+      () =>
+        col.find({ $and: [1] } as unknown as Record<string, unknown>).toArray(),
+      ValidationError,
+    );
+    await assert.rejects(
+      () =>
+        col
+          .find({ $or: ['x'] } as unknown as Record<string, unknown>)
+          .toArray(),
+      ValidationError,
+    );
+    await assert.rejects(
+      () =>
+        col
+          .find({ $and: [[]] } as unknown as Record<string, unknown>)
+          .toArray(),
+      ValidationError,
+    );
+    await assert.rejects(
+      () =>
+        col
+          .find({ $or: [null] } as unknown as Record<string, unknown>)
+          .toArray(),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.pnpm-store/
+_OLD_code_and_docs/
+.tmp-test-dist/
+AGENTS.md
+CLAUDE.md

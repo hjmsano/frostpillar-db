@@ -1,0 +1,108 @@
+{
+  "name": "frostpillar-db",
+  "version": "0.0.2",
+  "description": "A tiny, light and fast flexible database for TypeScript, Node.js, and browser JavaScript, with no third-party runtime dependencies.",
+  "type": "module",
+  "author": "Hajime Sano",
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js",
+      "require": "./dist/core.cjs"
+    },
+    "./drivers/file": {
+      "types": "./dist/drivers/file.d.ts",
+      "import": "./dist/drivers/file.js",
+      "require": "./dist/drivers/file.cjs"
+    },
+    "./drivers/localStorage": {
+      "types": "./dist/drivers/localStorage.d.ts",
+      "import": "./dist/drivers/localStorage.js",
+      "require": "./dist/drivers/localStorage.cjs"
+    },
+    "./drivers/indexedDB": {
+      "types": "./dist/drivers/indexedDB.d.ts",
+      "import": "./dist/drivers/indexedDB.js",
+      "require": "./dist/drivers/indexedDB.cjs"
+    },
+    "./drivers/opfs": {
+      "types": "./dist/drivers/opfs.d.ts",
+      "import": "./dist/drivers/opfs.js",
+      "require": "./dist/drivers/opfs.cjs"
+    },
+    "./drivers/syncStorage": {
+      "types": "./dist/drivers/syncStorage.d.ts",
+      "import": "./dist/drivers/syncStorage.js",
+      "require": "./dist/drivers/syncStorage.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/frostpillar-db.min.js",
+    "!dist/frostpillar-db-core.min.js",
+    "README.md",
+    "README-JA.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && node scripts/build.mjs",
+    "build:bundle": "node scripts/build.mjs bundle",
+    "build:bundle:core": "node scripts/build.mjs bundle:core",
+    "build:all": "pnpm clean && node scripts/build.mjs all",
+    "prepack": "pnpm build",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "textlint": "textlint \"**/*.md\"",
+    "textlint:fix": "textlint \"**/*.md\" --fix",
+    "format:md": "pnpm textlint:fix",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm textlint",
+    "test": "node ./scripts/run-tests.mjs",
+    "test:coverage": "node ./scripts/run-tests.mjs --coverage",
+    "bench": "node ./scripts/run-benchmarks.mjs",
+    "typecheck": "tsc --project tsconfig.typecheck.json"
+  },
+  "keywords": [
+    "key-value",
+    "typescript",
+    "lightweight",
+    "database"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hjmsano/frostpillar-db.git"
+  },
+  "bugs": "https://github.com/hjmsano/frostpillar-db/issues",
+  "homepage": "https://github.com/hjmsano/frostpillar-db#readme",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.0.3",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.2.5",
+    "textlint": "^15.5.2",
+    "textlint-rule-preset-ja-technical-writing": "^12.0.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "dependencies": {
+    "@frostpillar/frostpillar-storage-engine": "^0.1.8"
+  }
+}
