@@ -2,7 +2,7 @@
 
 [English/英語](./README.md) | [Japanese/日本語](./README-JA.md)
 
-[![npm version](https://img.shields.io/npm/v/frostpillar-db)](https://www.npmjs.com/package/frostpillar-db)
+[![npm version](https://img.shields.io/npm/v/@frostpillar/frostpillar-db)](https://www.npmjs.com/package/@frostpillar/frostpillar-db)
 [![Node.js >=24](https://img.shields.io/badge/Node.js-%3E%3D24-green.svg)](https://nodejs.org/)
 [![CI](https://github.com/hjmsano/frostpillar-db/actions/workflows/ci.yml/badge.svg)](https://github.com/hjmsano/frostpillar-db/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
