@@ -77,6 +77,9 @@
   ],
   "sideEffects": false,
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/hjmsano/frostpillar-db.git"

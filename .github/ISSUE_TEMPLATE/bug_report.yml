@@ -22,7 +22,7 @@ body:
       description: Minimal code or steps to reproduce the issue.
       placeholder: |
         ```ts
-        import { Database } from 'frostpillar-db';
+        import { Database } from '@frostpillar/frostpillar-db';
 
         const db = new Database({});
         const users = db.collection('users');
