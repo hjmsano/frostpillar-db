@@ -194,6 +194,44 @@ Returns the maximum numeric value for the field. Returns `null` if no numeric va
 const oldest = await users.find({}).max('age');
 ```
 
+#### `.percentile(field: string, p: number): Promise<number | null>`
+
+#### `.percentile(field: string, p: number[]): Promise<(number | null)[]>`
+
+Returns the `p`-th percentile of the specified numeric field. `p` is a fraction in `[0, 1]` (`p = 0.95` means the 95th percentile) — not the 0–100 percent scale. Like the other numeric terminals, operates on the **filtered** set (sort/skip/limit/projection not applied, §1.4), skips non-numeric and non-finite values via `extractNumericValues`, and returns `null` when no numeric values exist.
+
+`p` must be a finite number with `0 <= p <= 1`; otherwise `ValidationError` is thrown **eagerly, before any document is fetched**.
+
+**Computation — linear interpolation (`PERCENTILE_CONT`):** sort a copy of the extracted numeric values `v[0..n-1]` ascending, then:
+
+```
+rank = p * (n - 1)
+lo = floor(rank), frac = rank - lo
+result = v[lo] + frac * (v[lo + 1] - v[lo])   // v[lo] when frac == 0
+```
+
+Properties: `percentile(f, 0) === min(f)`; `percentile(f, 1) === max(f)`; a single value is returned unchanged for every `p`; the median of an even-count set is the average of the two middle values.
+
+```ts
+const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
+```
+
+**Array form (`p: number[]`):** fetches and sorts the filtered set **once**, then computes each requested percentile positionally against that shared sorted set. The array must be non-empty; every element is validated by the same `[0, 1]` rule as the scalar form. Duplicates are allowed. The array is defensively copied synchronously before the fetch `await` (the same pattern used by `validateGroupByField`), so caller mutation during the await cannot change the computed set. When no numeric values exist, every position is `null`.
+
+```ts
+const [p50, p95, p99] = await requests
+  .find({ route: '/api' })
+  .percentile('latencyMs', [0.5, 0.95, 0.99]);
+```
+
+#### `.median(field: string): Promise<number | null>`
+
+Returns the median of the specified numeric field. Defined as exactly `percentile(field, 0.5)` — same value selection, same interpolation, same `null`-on-empty behavior.
+
+```ts
+const medianAge = await users.find({ status: 'active' }).median('age');
+```
+
 #### `.distinct(field: string): Promise<unknown[]>`
 
 Returns an array of unique values for the specified field across all matching documents. Supports dot notation for nested fields. Documents where the field is missing or `undefined` are skipped; `null` is a valid distinct value. Values are returned in order of first occurrence. Deep equality is used for objects/arrays; strict equality for primitives.
@@ -218,6 +256,8 @@ interface GroupAccumulator {
   $avg?: string; // field path
   $min?: string; // field path
   $max?: string; // field path
+  $median?: string; // field path
+  $percentile?: { field: string; p: number }; // field path + fraction in [0, 1]
 }
 
 type GroupAccumulators = Record<string, GroupAccumulator>;
@@ -248,6 +288,9 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
   - `$avg: 'fieldPath'` — average of numeric values (`null` if none).
   - `$min: 'fieldPath'` — minimum numeric value (`null` if none).
   - `$max: 'fieldPath'` — maximum numeric value (`null` if none).
+  - `$median: 'fieldPath'` — median of numeric values, i.e. the 50th percentile (`null` if none).
+  - `$percentile: { field: 'fieldPath', p: 0.95 }` — the `p`-th percentile of numeric values, same interpolation as `.percentile()` (`null` if none). `p` is **scalar-only** inside `groupBy`; multiple percentiles of the same group are expressed as multiple output fields (see example below).
+- **`$percentile` operand validation:** the operand must be a plain object with **exactly** the keys `field` (a valid field path, same eager validation as the other accumulators' field-path operands) and `p` (the same `[0, 1]` finite-number rule as the `.percentile()` terminal). Extra or missing keys throw `ValidationError`. The existing "exactly one accumulator key per entry" rule is unchanged — `$percentile` still occupies exactly one key of its `GroupAccumulator` entry.
 - Groups are returned in order of first occurrence of each key value (unchanged for both forms).
 - Like other aggregation terminals, operates on filtered set (sort/skip/limit not applied).
 - Throws `ValidationError` if `field` is an empty string (string form), `accumulators` is empty object, or any accumulator entry does not contain exactly one key.
@@ -270,6 +313,20 @@ const result = await users.find({}).groupBy('department', {
 // ]
 ```
 
+**Example (`$median` / `$percentile`, multiple output fields):**
+
+```ts
+const result = await requests.find({}).groupBy('route', {
+  p50: { $percentile: { field: 'latencyMs', p: 0.5 } },
+  p95: { $percentile: { field: 'latencyMs', p: 0.95 } },
+  p99: { $percentile: { field: 'latencyMs', p: 0.99 } },
+  medianLatency: { $median: 'latencyMs' },
+});
+// → [
+//   { _key: '/api', p50: 12, p95: 48, p99: 90, medianLatency: 12 },
+// ]
+```
+
 **Example (multi-dimension):**
 
 ```ts
@@ -286,7 +343,7 @@ const result = await users.find({}).groupBy(['department', 'address.city'], {
 
 ### 1.4 Aggregation Terminal Methods — Scope
 
-Aggregation methods (`sum`, `avg`, `min`, `max`, `distinct`, `groupBy`) operate on the **filtered** result set (after applying the filter from `find()`). Sort, skip, limit, and projection are **not applied** to the dataset before aggregation — they only affect `.toArray()`, `.cursor()`, and `.count()`.
+Aggregation methods (`sum`, `avg`, `min`, `max`, `percentile`, `median`, `distinct`, `groupBy`) operate on the **filtered** result set (after applying the filter from `find()`). Sort, skip, limit, and projection are **not applied** to the dataset before aggregation — they only affect `.toArray()`, `.cursor()`, and `.count()`.
 
 `.count()` is an exception among terminal methods: it applies `skip` and `limit` so that it returns the same number of documents that `.toArray()` would return. This makes `.count()` useful for pagination scenarios. Sort and projection do not affect `.count()`.
 
@@ -304,7 +361,7 @@ When a terminal method is called, the `ResultChain` executes the following pipel
    See Spec 02 §2 (Find) for the full fast-path rules including
    Range Query Optimization.
 2. Filter: Apply filter predicates (Spec 02 §8)
-3. Aggregate: If terminal is sum/avg/min/max/distinct/groupBy → compute and return
+3. Aggregate: If terminal is sum/avg/min/max/percentile/median/distinct/groupBy → compute and return
 4. Count: If terminal is count → apply skip/limit to filtered count and return
 5. Sort: Apply sort specification
 6. Skip: Discard first N documents
@@ -336,11 +393,11 @@ Each terminal call triggers a fresh execution of the pipeline.
 
 ## 4. Empty Results
 
-| Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.distinct(f)` | `.groupBy(f, acc)` |
-| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | -------------- | ------------------ |
-| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `[]`           | `[]`               |
-| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `[]`           | (grouped)          |
-| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | (values)       | (grouped)          |
+| Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.percentile(f,p)` | `.percentile(f,p[])` | `.median(f)` | `.distinct(f)` | `.groupBy(f, acc)` |
+| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------- | --------------------- | ------------ | -------------- | ------------------ |
+| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`               | all-`null` array       | `null`       | `[]`           | `[]`               |
+| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`               | all-`null` array       | `null`       | `[]`           | (grouped)          |
+| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`               | all-`null` array       | `null`       | (values)       | (grouped)          |
 
 ## 5. Error Handling
 
@@ -357,4 +414,7 @@ Each terminal call triggers a fresh execution of the pipeline.
 | `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max` operands) fail the same eager validation                                                                                                         |
 | `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
 | `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
+| `ValidationError`     | `percentile` / `$percentile` `p` is not a finite number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                               |
+| `ValidationError`     | `percentile` array-form `p` is an empty array                                                                                                                                                                      |
+| `ValidationError`     | `groupBy` `$percentile` operand is not a plain object, or does not contain exactly the keys `field` and `p`                                                                                                       |
 | `ClosedDatabaseError` | Terminal method called on a closed database (for `.cursor()`, thrown when iteration starts)                                                                                                                        |

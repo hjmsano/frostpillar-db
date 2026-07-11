@@ -4,8 +4,10 @@ import test from 'node:test';
 import { ValidationError } from '../../src/errors.js';
 import {
   computeDistinct,
+  computePercentile,
   extractNumericValues,
   validateAggregationField,
+  validatePercentile,
 } from '../../src/internal/aggregationUtils.js';
 import {
   MAX_DISTINCT_COUNT,
@@ -229,4 +231,143 @@ void test('extractNumericValues returns only finite numeric values', () => {
     doc('6', {}),
   ];
   assert.deepEqual(extractNumericValues(docs, 'score', pathCache), [10, -3.5]);
+});
+
+// ---------------------------------------------------------------------------
+// computePercentile
+// ---------------------------------------------------------------------------
+
+void test('computePercentile returns null for an empty array', () => {
+  assert.equal(computePercentile([], 0.5), null);
+});
+
+void test('computePercentile returns the single value unchanged for every p', () => {
+  assert.equal(computePercentile([42], 0), 42);
+  assert.equal(computePercentile([42], 0.5), 42);
+  assert.equal(computePercentile([42], 1), 42);
+});
+
+void test('computePercentile p=0 returns the min and p=1 returns the max', () => {
+  const values = [5, 1, 9, 3, 7];
+  assert.equal(computePercentile(values, 0), 1);
+  assert.equal(computePercentile(values, 1), 9);
+});
+
+void test('computePercentile computes the median for odd-count sets', () => {
+  assert.equal(computePercentile([3, 1, 2], 0.5), 2);
+});
+
+void test('computePercentile computes the median as the average of the two middle values for even-count sets', () => {
+  assert.equal(computePercentile([1, 2, 3, 4], 0.5), 2.5);
+});
+
+void test('computePercentile does not mutate the input array (sorts a copy)', () => {
+  const values = [3, 1, 2];
+  const copy = [...values];
+  computePercentile(values, 0.5);
+  assert.deepEqual(values, copy);
+});
+
+void test('computePercentile interpolates linearly between closest ranks', () => {
+  // v = [10, 20, 30, 40], n=4, p=0.25 -> rank = 0.25*3 = 0.75, lo=0, frac=0.75
+  // result = 10 + 0.75*(20-10) = 17.5
+  assert.equal(computePercentile([40, 10, 30, 20], 0.25), 17.5);
+});
+
+void test('computePercentile handles duplicate values', () => {
+  assert.equal(computePercentile([5, 5, 5, 5], 0.5), 5);
+  assert.equal(computePercentile([1, 1, 2, 2], 0.5), 1.5);
+});
+
+void test('computePercentile handles extreme p on a small set', () => {
+  // n=3, p=0.999 -> rank = 0.999*2 = 1.998, lo=1, frac=0.998
+  // result = v[1] + 0.998*(v[2]-v[1])
+  const result = computePercentile([1, 2, 3], 0.999);
+  assert.ok(result !== null);
+  assert.ok(Math.abs(result - (2 + 0.998 * (3 - 2))) < 1e-9);
+});
+
+// ---------------------------------------------------------------------------
+// validatePercentile
+// ---------------------------------------------------------------------------
+
+void test('validatePercentile accepts 0 and 1 (boundary values)', () => {
+  assert.equal(validatePercentile(0), 0);
+  assert.equal(validatePercentile(1), 1);
+});
+
+void test('validatePercentile accepts a mid-range fraction', () => {
+  assert.equal(validatePercentile(0.95), 0.95);
+});
+
+void test('validatePercentile rejects non-number input', () => {
+  assert.throws(
+    () => validatePercentile('0.5' as unknown as number),
+    ValidationError,
+  );
+  assert.throws(
+    () => validatePercentile(null as unknown as number),
+    ValidationError,
+  );
+  assert.throws(
+    () => validatePercentile(undefined as unknown as number),
+    ValidationError,
+  );
+});
+
+void test('validatePercentile rejects NaN', () => {
+  assert.throws(() => validatePercentile(Number.NaN), ValidationError);
+});
+
+void test('validatePercentile rejects Infinity and -Infinity', () => {
+  assert.throws(
+    () => validatePercentile(Number.POSITIVE_INFINITY),
+    ValidationError,
+  );
+  assert.throws(
+    () => validatePercentile(Number.NEGATIVE_INFINITY),
+    ValidationError,
+  );
+});
+
+void test('validatePercentile rejects out-of-range values', () => {
+  assert.throws(() => validatePercentile(-0.1), ValidationError);
+  assert.throws(() => validatePercentile(1.1), ValidationError);
+});
+
+void test('validatePercentile rejects an empty array', () => {
+  assert.throws(() => validatePercentile([]), ValidationError);
+});
+
+void test('validatePercentile validates every element of an array', () => {
+  assert.throws(() => validatePercentile([0.5, 1.1]), ValidationError);
+  assert.throws(() => validatePercentile([-0.1, 0.5]), ValidationError);
+  assert.throws(
+    () => validatePercentile([0.5, Number.NaN]),
+    ValidationError,
+  );
+});
+
+void test('validatePercentile accepts an array with duplicate values', () => {
+  assert.deepEqual(validatePercentile([0.5, 0.5, 0.95]), [0.5, 0.5, 0.95]);
+});
+
+void test('validatePercentile array form returns a defensive copy', () => {
+  const input = [0.5, 0.95];
+  const validated = validatePercentile(input) as number[];
+
+  assert.notEqual(validated, input);
+  assert.deepEqual(validated, [0.5, 0.95]);
+
+  // Mutating the input afterwards must not affect the returned copy.
+  input[0] = 0.1;
+  input.length = 1;
+  assert.deepEqual(validated, [0.5, 0.95]);
+
+  // Mutating the returned copy must not affect a fresh call using the same
+  // original input reference semantics (defensive both ways).
+  const secondInput = [0.5, 0.95];
+  const secondValidated = validatePercentile(secondInput) as number[];
+  secondValidated[0] = 0.99;
+  assert.deepEqual(secondInput, [0.5, 0.95]);
 });

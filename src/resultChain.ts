@@ -2,9 +2,11 @@ import { ValidationError } from './errors.js';
 import {
   computeDistinct,
   computeGroupBy,
+  computePercentile,
   extractNumericValues,
   validateAggregationField,
   validateGroupByField,
+  validatePercentile,
 } from './internal/aggregationUtils.js';
 import { cloneDocument } from './internal/objectUtils.js';
 import {
@@ -232,6 +234,33 @@ export class ResultChain<
     return values.reduce((currentMax, value) =>
       value > currentMax ? value : currentMax,
     );
+  }
+
+  /**
+   * `p` (and `field`) are validated synchronously, before `getNumericValues`'s
+   * internal fetch `await` — for the array form, `validatePercentile` returns
+   * a defensive copy taken before that await, so a caller mutating `p` during
+   * the pending promise cannot change the set of percentiles computed.
+   */
+  public async percentile(field: string, p: number): Promise<number | null>;
+  public async percentile(
+    field: string,
+    p: number[],
+  ): Promise<(number | null)[]>;
+  public async percentile(
+    field: string,
+    p: number | number[],
+  ): Promise<number | null | (number | null)[]> {
+    const validatedP = validatePercentile(p);
+    const values = await this.getNumericValues(field);
+    if (Array.isArray(validatedP)) {
+      return validatedP.map((element) => computePercentile(values, element));
+    }
+    return computePercentile(values, validatedP);
+  }
+
+  public async median(field: string): Promise<number | null> {
+    return this.percentile(field, 0.5);
   }
 
   public async distinct(field: string): Promise<unknown[]> {

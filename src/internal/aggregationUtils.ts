@@ -4,7 +4,7 @@ import {
   PATH_NOT_FOUND,
   validateFieldPath,
 } from './documentPath.js';
-import { hasOwn } from './objectUtils.js';
+import { hasOwn, isObjectRecord } from './objectUtils.js';
 import {
   MAX_DISTINCT_COUNT,
   MAX_GROUP_COUNT,
@@ -185,13 +185,125 @@ export const extractNumericValues = <TDocument extends FrostpillarDocument>(
   return values;
 };
 
+/**
+ * Computes the `p`-th percentile of `values` using linear interpolation
+ * between closest ranks (`PERCENTILE_CONT` semantics — the definition used by
+ * SQL, numpy, and pandas). `values` is sorted ascending into a fresh array;
+ * the caller's array is never mutated. `p` must already be validated (see
+ * `validatePercentile`) — a fraction in `[0, 1]`.
+ *
+ * `rank = p * (n - 1)`; `lo = floor(rank)`, `frac = rank - lo`;
+ * `result = v[lo] + frac * (v[lo + 1] - v[lo])` (`v[lo]` when `frac === 0`).
+ * Returns `null` for an empty `values` array, mirroring `$avg`/`$min`/`$max`.
+ */
+export const computePercentile = (
+  values: number[],
+  p: number,
+): number | null => {
+  if (values.length === 0) {
+    return null;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 1) {
+    return sorted[0];
+  }
+
+  const rank = p * (sorted.length - 1);
+  const lo = Math.floor(rank);
+  const frac = rank - lo;
+
+  if (frac === 0) {
+    return sorted[lo];
+  }
+
+  return sorted[lo] + frac * (sorted[lo + 1] - sorted[lo]);
+};
+
+const validateScalarPercentile = (p: unknown): number => {
+  if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) {
+    throw new ValidationError(
+      'percentile p must be a finite number between 0 and 1 (inclusive).',
+    );
+  }
+  return p;
+};
+
+/**
+ * Validates the `p` argument of `.percentile()`, which accepts either a
+ * single fraction (scalar form) or an array of fractions (multi-percentile
+ * form). Every element must independently satisfy `0 <= p <= 1` and be
+ * finite; anything else throws `ValidationError` eagerly.
+ *
+ * Array form: the array must be non-empty (duplicates are allowed) and is
+ * defensively copied before returning — the same pattern as
+ * `validateGroupByField` — so a caller mutating the original array during a
+ * pending `await` cannot change the set of percentiles actually computed.
+ */
+export const validatePercentile = (p: number | number[]): number | number[] => {
+  if (Array.isArray(p)) {
+    if (p.length === 0) {
+      throw new ValidationError('percentile p array must not be empty.');
+    }
+
+    const copy = [...p];
+    for (const element of copy) {
+      validateScalarPercentile(element);
+    }
+    return copy;
+  }
+
+  return validateScalarPercentile(p);
+};
+
 const VALID_ACCUMULATOR_KEYS = new Set([
   '$count',
   '$sum',
   '$avg',
   '$min',
   '$max',
+  '$median',
+  '$percentile',
 ]);
+
+/**
+ * Validates the operand of a `$percentile` accumulator entry: it must be a
+ * plain object with exactly the keys `field` (a valid field path, same eager
+ * validation as every other accumulator's field-path operand) and `p` (the
+ * same `[0, 1]` scalar rule as the `.percentile()` terminal — array `p` is
+ * rejected, since `$percentile` is scalar-only inside `groupBy`).
+ */
+const validatePercentileOperand = (
+  operand: unknown,
+  outputField: string,
+): void => {
+  if (!isObjectRecord(operand)) {
+    throw new ValidationError(
+      `groupBy accumulator "${outputField}" operand for "$percentile" must be an object with "field" and "p".`,
+    );
+  }
+
+  const keys = Object.keys(operand);
+  if (
+    keys.length !== 2 ||
+    !hasOwn(operand, 'field') ||
+    !hasOwn(operand, 'p')
+  ) {
+    throw new ValidationError(
+      `groupBy accumulator "${outputField}" operand for "$percentile" must contain exactly the keys "field" and "p".`,
+    );
+  }
+
+  const field = operand.field;
+  if (typeof field !== 'string') {
+    throw new ValidationError(
+      `groupBy accumulator "${outputField}" operand "field" for "$percentile" must be a field path string.`,
+    );
+  }
+  validateFieldPath(field);
+
+  validateScalarPercentile(operand.p);
+};
 
 const validateAccumulators = (accumulators: GroupAccumulators): void => {
   const entries = Object.entries(accumulators);
@@ -214,32 +326,34 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
       );
     }
 
-    if (key !== '$count') {
-      const fieldPath = accumulator[key as keyof GroupAccumulator];
-      if (typeof fieldPath !== 'string') {
-        throw new ValidationError(
-          `groupBy accumulator "${outputField}" operand for "${key}" must be a field path string.`,
-        );
-      }
-      validateFieldPath(fieldPath);
+    if (key === '$count') {
+      continue;
     }
+
+    if (key === '$percentile') {
+      validatePercentileOperand(accumulator.$percentile, outputField);
+      continue;
+    }
+
+    const fieldPath = accumulator[key as keyof GroupAccumulator];
+    if (typeof fieldPath !== 'string') {
+      throw new ValidationError(
+        `groupBy accumulator "${outputField}" operand for "${key}" must be a field path string.`,
+      );
+    }
+    validateFieldPath(fieldPath);
   }
 };
 
-const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
-  groupDocs: FrostpillarStoredDocument<TDocument>[],
-  accumulator: GroupAccumulator,
-  pathCache: Map<string, string[]>,
+/**
+ * Reduces the extracted numeric values for the field-path accumulators
+ * (`$sum`/`$avg`/`$min`/`$max`/`$median`). Split out of `computeAccumulatorValue`
+ * so each function stays under the project's max-lines-per-function budget.
+ */
+const computeNumericAccumulator = (
+  key: keyof GroupAccumulator,
+  numericValues: number[],
 ): unknown => {
-  const key = Object.keys(accumulator)[0] as keyof GroupAccumulator;
-
-  if (key === '$count') {
-    return groupDocs.length;
-  }
-
-  const fieldPath = accumulator[key]!;
-  const numericValues = extractNumericValues(groupDocs, fieldPath, pathCache);
-
   switch (key) {
     case '$sum':
       return numericValues.reduce((total, value) => total + value, 0);
@@ -265,9 +379,37 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
       return numericValues.reduce((currentMax, value) =>
         value > currentMax ? value : currentMax,
       );
+    case '$median':
+      return computePercentile(numericValues, 0.5);
     default:
       return null;
   }
+};
+
+const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  accumulator: GroupAccumulator,
+  pathCache: Map<string, string[]>,
+): unknown => {
+  const key = Object.keys(accumulator)[0] as keyof GroupAccumulator;
+
+  if (key === '$count') {
+    return groupDocs.length;
+  }
+
+  if (key === '$percentile') {
+    const operand = accumulator.$percentile!;
+    const numericValues = extractNumericValues(
+      groupDocs,
+      operand.field,
+      pathCache,
+    );
+    return computePercentile(numericValues, operand.p);
+  }
+
+  const fieldPath = accumulator[key]!;
+  const numericValues = extractNumericValues(groupDocs, fieldPath, pathCache);
+  return computeNumericAccumulator(key, numericValues);
 };
 
 const serializeGroupKey = (key: unknown): string => {

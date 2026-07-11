@@ -1,6 +1,6 @@
 # ADR-018: Percentile and Median Aggregation
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-11
 - **Deciders:** Hajime Sano
 
