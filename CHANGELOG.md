@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/hjmsano/frostpillar-db/compare/v1.0.0...v1.1.0) (2026-07-11)
+
+
+### Features
+
+* add $first and $last groupBy accumulators ([fdfece2](https://github.com/hjmsano/frostpillar-db/commit/fdfece25ded074e3e36ed1c0f69a2cb225a60ddf))
+* add $first and $last groupBy accumulators ([6514331](https://github.com/hjmsano/frostpillar-db/commit/65143317f39e94eff2ee7d49d69f7ecf738c58c3))
+
 ## [1.0.0](https://github.com/hjmsano/frostpillar-db/compare/v0.3.0...v1.0.0) (2026-07-11)
 
 
