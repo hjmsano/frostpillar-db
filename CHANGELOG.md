@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/hjmsano/frostpillar-db/compare/v0.2.0...v0.3.0) (2026-07-11)
+
+
+### Features
+
+* add standard deviation and variance aggregation ([eccece7](https://github.com/hjmsano/frostpillar-db/commit/eccece72a4ddbf8295cd457e87ca37a7b7afb457))
+* add standard deviation and variance aggregation ([ea5e23a](https://github.com/hjmsano/frostpillar-db/commit/ea5e23a41c180c16917c5fa245506825db8e7b87))
+
 ## [0.2.0](https://github.com/hjmsano/frostpillar-db/compare/v0.1.0...v0.2.0) (2026-07-11)
 
 
