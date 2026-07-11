@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/hjmsano/frostpillar-db/compare/v1.1.0...v1.2.0) (2026-07-11)
+
+
+### Features
+
+* add countDistinct terminal and $countDistinct accumulator ([7ba68f4](https://github.com/hjmsano/frostpillar-db/commit/7ba68f4f423fbda68f3398ec28e350f022f9419b))
+* add countDistinct terminal and $countDistinct accumulator ([deb3067](https://github.com/hjmsano/frostpillar-db/commit/deb30674cd634038c56d9994017eb6bbef16c656))
+
 ## [1.1.0](https://github.com/hjmsano/frostpillar-db/compare/v1.0.0...v1.1.0) (2026-07-11)
 
 
