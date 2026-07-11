@@ -27,7 +27,7 @@ frostpillar-cli         ← Command-line interface (planned)
 - **Fluent query API** — method chaining with `$`-operator filters and lazy execution (`find`, `sort`, `skip`, `limit`, `project`, `toArray`, `count`)
 - **CRUD + update operators** — `insert`, `insertMany`, `find`, `findOne`, `update`, `remove`, `count` with `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet`
 - **Upsert support** — `update` with `{ upsert: true }` inserts when no document matches
-- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy` (single- or multi-field, with `$first`/`$last` per-group value accumulators) on filtered result sets
+- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `countDistinct`, `groupBy` (single- or multi-field, with `$first`/`$last`/`$countDistinct` per-group value accumulators) on filtered result sets
 - **Change events** — `watch()` listeners for insert, update, and remove operations
 - **TTL (Time-To-Live)** — automatic document expiration per collection
 - **Async cursor** — iterate results with `for await...of`
@@ -619,7 +619,7 @@ const max = await users.find({ dept: 'eng' }).max('salary');
 
 `sum`, `avg`, `min`, and `max` operate on the full filtered set and are order-independent — skip, limit, and projection are not applied. `count()` is an exception: it applies skip and limit so it matches what `.toArray()` would return. See [ResultChain](#resultchain) for `count()`.
 
-**Aggregation input order (ADR-020):** aggregation input is storage order, or `.sort()` order when a `.sort()` precedes the terminal on the chain. `sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp` are mathematically order-independent, so they return identical results with or without a preceding `.sort()`. `distinct()` and `groupBy()` are order-sensitive: `distinct()`'s first-occurrence order and `groupBy()`'s group order (plus each group's internal document order) follow the `.sort()` order when one is present. `skip`/`limit`/`projection` are still never applied to aggregation input.
+**Aggregation input order (ADR-020):** aggregation input is storage order, or `.sort()` order when a `.sort()` precedes the terminal on the chain. `sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp`/`countDistinct` are mathematically order-independent, so they return identical results with or without a preceding `.sort()`. `distinct()` and `groupBy()` are order-sensitive: `distinct()`'s first-occurrence order and `groupBy()`'s group order (plus each group's internal document order) follow the `.sort()` order when one is present. `skip`/`limit`/`projection` are still never applied to aggregation input.
 
 > **Migration note:** Aggregation now honors a preceding `.sort()`. If you relied on storage-ordered `distinct`/`groupBy` results while also calling `.sort()` on the same chain, remove the `.sort()` to keep storage order.
 
@@ -658,6 +658,15 @@ const departments = await users.find().distinct('dept');
 
 Returned values follow first occurrence in aggregation input order (ADR-020): storage order, or `.sort()` order when a `.sort()` precedes `distinct()` on the chain.
 
+#### Count Distinct
+
+```ts
+const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+// 2
+```
+
+`.countDistinct(field)` ([ADR-022](docs/adr/022-count-distinct.md)) returns the count of unique values for `field` — exactly the cardinality `distinct(field)` would return, without materializing that array: `countDistinct(f) === (await distinct(f)).length` always holds. Semantics are identical to `.distinct()` (missing/`undefined` skipped, `null` counted, deep equality for objects/arrays, strict equality for primitives, capped at `MAX_DISTINCT_COUNT`), except `.countDistinct()` returns **`0`** on empty (a count, like `.count()`/`.sum()`) rather than `.distinct()`'s `[]`. It is order-insensitive — a cardinality does not depend on input order, so it is unaffected by a preceding `.sort()`.
+
 ### Grouping
 
 `groupBy` groups filtered documents by a field and computes accumulators per group. Pass a single field path to group by one dimension, or an array of field paths to group by a composite key across multiple dimensions. Group order (first occurrence of each key) and each group's internal document order follow the aggregation input order (ADR-020): storage order, or `.sort()` order when a `.sort()` precedes `groupBy()` on the chain.
@@ -689,7 +698,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 A document missing one of the requested fields contributes `null` for that dimension. A single-element array (e.g. `['dept']`) still produces an object `_key` — it is not collapsed to the scalar form used by the single-field form.
 
-Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`.
+Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct`.
 
 `$median: 'fieldPath'` and `$percentile: { field: 'fieldPath', p: 0.95 }` mirror `.median()` / `.percentile()`: same interpolation, same `null`-when-empty behavior. `p` is **scalar-only** inside `groupBy` — request multiple percentiles as multiple output fields:
 
@@ -717,6 +726,15 @@ const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
   latestStatus: { $first: 'status' },
 });
 // [{ _key: 'u1', latestStatus: 'shipped' }, ...]
+```
+
+`$countDistinct: 'fieldPath'` ([ADR-022](docs/adr/022-count-distinct.md)) is the per-group counterpart of `.countDistinct()`: the count of unique values of `fieldPath` within the group, following the identical equality and `MAX_DISTINCT_COUNT` cap rules — the cap applies **per group**. Returns `0` for a group with no present values, never `null`:
+
+```ts
+const result = await users.find().groupBy('dept', {
+  uniqueCities: { $countDistinct: 'address.city' },
+});
+// [{ _key: 'engineering', uniqueCities: 2 }, { _key: 'design', uniqueCities: 1 }]
 ```
 
 > **Object key ordering:** When grouping by a field whose value is an object or array, keys are serialized via `JSON.stringify`. Objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) become **different** groups. Normalize property order before insertion if consistent grouping is required. This applies independently to each dimension in the multi-dimension form.
@@ -949,6 +967,7 @@ In addition to per-document payload limits, frostpillar-db enforces fixed operat
 | Max `groupBy` group count       | 100,000 | Distinct group keys produced by a single `groupBy()`              |
 | Max `groupBy` docs per group    | 100,000 | Documents collected into a single `groupBy()` group               |
 | Max `distinct` value count      | 100,000 | Distinct values returned by a single `distinct()`                 |
+| Max `countDistinct` value count | 100,000 | Unique values counted by a single `countDistinct()`, or by a single `$countDistinct` group |
 
 `$regex` patterns are additionally screened for catastrophic-backtracking shapes and rejected with `ValidationError` before compilation. Exceeding any of the limits above throws `ValidationError` at operation time. Three mechanisms cover this:
 
@@ -1091,6 +1110,7 @@ try {
 | `.variancePop(field)`           | `Promise<number \| null>`     | Population variance (`n=0`→`null`, `n=1`→`0`)                  |
 | `.varianceSamp(field)`          | `Promise<number \| null>`     | Sample variance (`n<2`→`null`)                                 |
 | `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
+| `.countDistinct(field)`         | `Promise<number>`             | Count of unique values for a field (`=== distinct(field).length`; `0` on empty) |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |
 
 ---

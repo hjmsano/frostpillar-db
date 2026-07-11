@@ -6,7 +6,10 @@ import {
   computeGroupBy,
   validateGroupByField,
 } from '../../src/internal/aggregationUtils.js';
-import { MAX_FIELD_PATH_DEPTH } from '../../src/internal/limits.js';
+import {
+  MAX_DISTINCT_COUNT,
+  MAX_FIELD_PATH_DEPTH,
+} from '../../src/internal/limits.js';
 import type {
   FrostpillarDocument,
   FrostpillarStoredDocument,
@@ -1104,6 +1107,238 @@ void test('computeGroupBy $first entry still enforces exactly-one-accumulator-ke
       ),
     ValidationError,
   );
+});
+
+// ---------------------------------------------------------------------------
+// computeGroupBy — $countDistinct accumulator (ADR-022)
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy $countDistinct counts unique values per group', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+    flDoc('3', { category: 'a', value: 'x' }),
+    flDoc('4', { category: 'b', value: 'x' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { uniqueValues: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  const a = result.find((entry) => entry._key === 'a')!;
+  const b = result.find((entry) => entry._key === 'b')!;
+  assert.equal(a.uniqueValues, 2);
+  assert.equal(b.uniqueValues, 1);
+});
+
+void test('computeGroupBy $countDistinct skips missing/undefined and counts null as a value, per group', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: null }),
+    flDoc('2', { category: 'a' }), // missing
+    flDoc('3', { category: 'a', value: undefined }),
+    flDoc('4', { category: 'a', value: null }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { uniqueValues: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  // Only `null` is a present value here; it counts as exactly one distinct value.
+  assert.equal(result[0].uniqueValues, 1);
+});
+
+void test('computeGroupBy $countDistinct returns 0 for a group with no present values', () => {
+  const docs = [
+    flDoc('1', { category: 'a' }),
+    flDoc('2', { category: 'a', value: undefined }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { uniqueValues: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  assert.equal(result[0].uniqueValues, 0);
+});
+
+void test('computeGroupBy $countDistinct dedupes object values by deep equality within a group', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: { x: 1, y: 2 } }),
+    flDoc('2', { category: 'a', value: { y: 2, x: 1 } }),
+    flDoc('3', { category: 'a', value: { x: 1, y: 3 } }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { uniqueValues: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  assert.equal(result[0].uniqueValues, 2);
+});
+
+void test('computeGroupBy $countDistinct counts unique values independently per group across three groups', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+    flDoc('3', { category: 'a', value: 'x' }),
+    flDoc('4', { category: 'b', value: 1 }),
+    flDoc('5', { category: 'b', value: 2 }),
+    flDoc('6', { category: 'b', value: 1 }),
+    flDoc('7', { category: 'b', value: 3 }),
+    flDoc('8', { category: 'c', value: 'only' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { uniqueCount: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  const a = result.find((entry) => entry._key === 'a')!;
+  const b = result.find((entry) => entry._key === 'b')!;
+  const c = result.find((entry) => entry._key === 'c')!;
+  assert.equal(a.uniqueCount, 2);
+  assert.equal(b.uniqueCount, 3);
+  assert.equal(c.uniqueCount, 1);
+});
+
+void test('computeGroupBy $countDistinct with dot-notation field path', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: { nested: { deep: 'v1' } } }),
+    flDoc('2', { category: 'a', value: { nested: { deep: 'v2' } } }),
+    flDoc('3', { category: 'a', value: { nested: { deep: 'v1' } } }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { uniqueDeep: { $countDistinct: 'value.nested.deep' } },
+    pathCache,
+  );
+  assert.equal(result[0].uniqueDeep, 2);
+});
+
+void test('computeGroupBy $countDistinct (array groupBy form)', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+    flDoc('3', { category: 'b', value: 'x' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { uniqueValues: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  const a = result.find(
+    (entry) => (entry._key as Record<string, unknown>).category === 'a',
+  )!;
+  assert.equal(a.uniqueValues, 2);
+});
+
+void test('computeGroupBy throws ValidationError when $countDistinct operand is not a string', () => {
+  const badOperands: [string, unknown][] = [
+    ['numeric', 123],
+    ['null', null],
+    ['boolean', true],
+    ['object', { field: 'value' }],
+  ];
+  for (const [label, operand] of badOperands) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          {
+            result: { $countDistinct: operand },
+          } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for $countDistinct with ${label} operand`,
+    );
+  }
+});
+
+void test('computeGroupBy rejects reserved/bad field path for $countDistinct accumulator', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        { result: { $countDistinct: '__proto__.x' } } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+    'Expected ValidationError for $countDistinct with reserved field path',
+  );
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        { result: { $countDistinct: '' } } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+    'Expected ValidationError for $countDistinct with empty field path',
+  );
+});
+
+void test('computeGroupBy $countDistinct entry still enforces exactly-one-accumulator-key rule', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $countDistinct: 'value', $first: 'value' },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy $countDistinct throws when a single group exceeds MAX_DISTINCT_COUNT unique values (per-group cap)', () => {
+  // All documents land in one group ('a'); MAX_DISTINCT_COUNT + 1 unique
+  // `value`s within that single group must breach the per-group cap.
+  const docs = Array.from({ length: MAX_DISTINCT_COUNT + 1 }, (_, i) =>
+    flDoc(String(i), { category: 'a', value: i }),
+  );
+  assert.throws(
+    () =>
+      computeGroupBy(
+        docs,
+        'category',
+        { uniqueValues: { $countDistinct: 'value' } },
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy $countDistinct does not throw when different groups each stay within MAX_DISTINCT_COUNT, even though the combined total exceeds it', () => {
+  // Two groups, each with MAX_DISTINCT_COUNT unique values -- the cap is
+  // per-group, so this must succeed even though total unique values across
+  // both groups (2 * MAX_DISTINCT_COUNT) exceeds MAX_DISTINCT_COUNT.
+  const half = 2000; // keep the unit test fast; boundary-exactness is covered above
+  const docsA = Array.from({ length: half }, (_, i) =>
+    flDoc(`a${String(i)}`, { category: 'a', value: i }),
+  );
+  const docsB = Array.from({ length: half }, (_, i) =>
+    flDoc(`b${String(i)}`, { category: 'b', value: i }),
+  );
+  const result = computeGroupBy(
+    [...docsA, ...docsB],
+    'category',
+    { uniqueValues: { $countDistinct: 'value' } },
+    pathCache,
+  );
+  const a = result.find((entry) => entry._key === 'a')!;
+  const b = result.find((entry) => entry._key === 'b')!;
+  assert.equal(a.uniqueValues, half);
+  assert.equal(b.uniqueValues, half);
 });
 
 void test('validateGroupByField returns a defensive copy for the array form', () => {

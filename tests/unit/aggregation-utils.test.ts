@@ -4,6 +4,7 @@ import test from 'node:test';
 import { ValidationError } from '../../src/errors.js';
 import {
   clampVariance,
+  computeCountDistinct,
   computeDistinct,
   computePercentile,
   computeStdDev,
@@ -219,6 +220,200 @@ void test('computeDistinct distinguishes object with undefined value from empty 
   const docs = [doc('1', { value: { a: undefined } }), doc('2', { value: {} })];
   const result = computeDistinct(docs, 'value', pathCache);
   assert.equal(result.length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// computeCountDistinct (ADR-022) — dedup parity with computeDistinct
+// ---------------------------------------------------------------------------
+
+void test('computeCountDistinct rejects reserved field path even with zero documents', () => {
+  assert.throws(
+    () => computeCountDistinct([], '__proto__.x', pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeCountDistinct returns 0 for an empty document set', () => {
+  assert.equal(computeCountDistinct([], 'value', pathCache), 0);
+});
+
+void test('computeCountDistinct counts deduped primitive values', () => {
+  const docs = [
+    doc('1', { value: 'a' }),
+    doc('2', { value: 'b' }),
+    doc('3', { value: 'a' }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 2);
+});
+
+void test('computeCountDistinct skips documents where the field is missing or undefined', () => {
+  const docs = [
+    doc('1', { value: 1 }),
+    doc('2', {}),
+    doc('3', { value: undefined }),
+    doc('4', { value: 2 }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 2);
+});
+
+void test('computeCountDistinct counts null as one distinct value', () => {
+  const docs = [
+    doc('1', { value: null }),
+    doc('2', { value: null }),
+    doc('3', { value: 1 }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 2);
+});
+
+void test('computeCountDistinct counts object values deduped by deep equality, including reordered keys', () => {
+  const docs = [
+    doc('1', { value: { x: 1, y: 2 } }),
+    doc('2', { value: { y: 2, x: 1 } }),
+    doc('3', { value: { x: 1, y: 3 } }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 2);
+});
+
+void test('computeCountDistinct distinguishes null from "null" (string) from missing', () => {
+  const docs = [
+    doc('1', { value: null }),
+    doc('2', { value: 'null' }),
+    doc('3', {}),
+    doc('4', { value: null }),
+    doc('5', { value: 'null' }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 2);
+});
+
+void test('computeCountDistinct counts array values, treating element order as significant', () => {
+  const docs = [
+    doc('1', { value: [1, 2] }),
+    doc('2', { value: [2, 1] }),
+    doc('3', { value: [1, 2] }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 2);
+});
+
+void test('computeCountDistinct mixes primitives and objects', () => {
+  const docs = [
+    doc('1', { value: 'a' }),
+    doc('2', { value: { k: 1 } }),
+    doc('3', { value: 'a' }),
+    doc('4', { value: { k: 1 } }),
+    doc('5', { value: null }),
+  ];
+  assert.equal(computeCountDistinct(docs, 'value', pathCache), 3);
+});
+
+void test('computeCountDistinct throws when primitive values exceed MAX_DISTINCT_COUNT', () => {
+  const docs = Array.from({ length: MAX_DISTINCT_COUNT + 1 }, (_, i) =>
+    doc(String(i), { value: i }),
+  );
+  assert.throws(
+    () => computeCountDistinct(docs, 'value', pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeCountDistinct throws at the identical boundary as computeDistinct (exactly MAX_DISTINCT_COUNT is fine, +1 throws)', () => {
+  const atLimit = Array.from({ length: MAX_DISTINCT_COUNT }, (_, i) =>
+    doc(String(i), { value: i }),
+  );
+  assert.equal(computeCountDistinct(atLimit, 'value', pathCache), MAX_DISTINCT_COUNT);
+
+  const overLimit = [...atLimit, doc('extra', { value: 'one-too-many' })];
+  assert.throws(
+    () => computeCountDistinct(overLimit, 'value', pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeCountDistinct throws when object values exceed MAX_DISTINCT_COUNT', () => {
+  // Same technique as the computeDistinct cap test: fill to the limit with
+  // cheap primitives, then push one extra object, avoiding an O(n^2) scan.
+  const primitiveDocs = Array.from({ length: MAX_DISTINCT_COUNT }, (_, i) =>
+    doc(String(i), { value: i }),
+  );
+  const objectDocs = [doc('obj-0', { value: { n: 0 } })];
+  assert.throws(
+    () =>
+      computeCountDistinct(
+        [...primitiveDocs, ...objectDocs],
+        'value',
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// computeCountDistinct === computeDistinct(...).length — the ADR-022 core
+// equivalence guarantee, proven by shared-core refactor non-regression.
+// ---------------------------------------------------------------------------
+
+void test('computeCountDistinct equals computeDistinct(docs, field, cache).length across varied datasets (ADR-022 equivalence guarantee)', () => {
+  const datasets: {
+    docs: FrostpillarStoredDocument<Doc>[];
+    field: string;
+  }[] = [
+    { docs: [], field: 'value' },
+    {
+      docs: [doc('1', { value: 'a' }), doc('2', { value: 'b' }), doc('3', { value: 'a' })],
+      field: 'value',
+    },
+    {
+      docs: [doc('1', { value: 1 }), doc('2', {}), doc('3', { value: undefined }), doc('4', { value: 2 })],
+      field: 'value',
+    },
+    {
+      docs: [
+        doc('1', { value: { x: 1, y: 2 } }),
+        doc('2', { value: { y: 2, x: 1 } }),
+        doc('3', { value: { x: 1, y: 3 } }),
+      ],
+      field: 'value',
+    },
+    {
+      docs: [
+        doc('1', { value: [1, 2, 3] }),
+        doc('2', { value: [1, 2, 3] }),
+        doc('3', { value: [4, 5] }),
+      ],
+      field: 'value',
+    },
+    {
+      docs: [
+        doc('1', { value: 'a' }),
+        doc('2', { value: { k: 1 } }),
+        doc('3', { value: 'a' }),
+        doc('4', { value: { k: 1 } }),
+        doc('5', { value: null }),
+      ],
+      field: 'value',
+    },
+    {
+      docs: Array.from({ length: 500 }, (_, i) =>
+        doc(String(i), { value: i % 50 }),
+      ),
+      field: 'value',
+    },
+    {
+      docs: Array.from({ length: 200 }, (_, i) =>
+        doc(String(i), { value: { n: i % 20 } }),
+      ),
+      field: 'value',
+    },
+  ];
+
+  for (const { docs, field } of datasets) {
+    const distinctLength = computeDistinct(docs, field, pathCache).length;
+    const count = computeCountDistinct(docs, field, pathCache);
+    assert.equal(
+      count,
+      distinctLength,
+      `computeCountDistinct must equal computeDistinct(...).length for dataset of size ${String(docs.length)}`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
