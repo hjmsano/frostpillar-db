@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/hjmsano/frostpillar-db/compare/v0.1.0...v0.2.0) (2026-07-11)
+
+
+### Features
+
+* add percentile and median aggregation ([19d7d4d](https://github.com/hjmsano/frostpillar-db/commit/19d7d4d296c4ffc96a13c3c83756779100c838fe))
+* add percentile and median aggregation ([ab179dd](https://github.com/hjmsano/frostpillar-db/commit/ab179dd9c0d33a035f23e87ff9a606c0c993745f))
+
+
+### Bug Fixes
+
+* simplify percentile terminal API ([08d59e0](https://github.com/hjmsano/frostpillar-db/commit/08d59e0a05b038462924d5ebb308989eeab12067))
+
 ## [0.1.0](https://github.com/hjmsano/frostpillar-db/compare/v0.0.3...v0.1.0) (2026-07-11)
 
 
