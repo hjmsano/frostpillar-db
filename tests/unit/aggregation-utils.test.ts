@@ -311,7 +311,29 @@ void test('computeCountDistinct throws when primitive values exceed MAX_DISTINCT
   );
   assert.throws(
     () => computeCountDistinct(docs, 'value', pathCache),
-    ValidationError,
+    {
+      constructor: ValidationError,
+      message: `countDistinct() result exceeds maximum of ${String(MAX_DISTINCT_COUNT)} unique values.`,
+    },
+  );
+});
+
+void test('computeCountDistinct uses a custom cap error context when provided', () => {
+  const docs = Array.from({ length: MAX_DISTINCT_COUNT + 1 }, (_, i) =>
+    doc(String(i), { value: i }),
+  );
+  assert.throws(
+    () =>
+      computeCountDistinct(
+        docs,
+        'value',
+        pathCache,
+        '$countDistinct accumulator',
+      ),
+    {
+      constructor: ValidationError,
+      message: `$countDistinct accumulator exceeds maximum of ${String(MAX_DISTINCT_COUNT)} unique values.`,
+    },
   );
 });
 

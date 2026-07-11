@@ -200,10 +200,16 @@ export const computeCountDistinct = <TDocument extends FrostpillarDocument>(
   documents: FrostpillarStoredDocument<TDocument>[],
   field: string,
   pathCache: Map<string, string[]>,
+  context?: string,
 ): number => {
   validateFieldPath(field);
 
-  return scanDistinctValues(documents, field, pathCache, 'countDistinct() result');
+  return scanDistinctValues(
+    documents,
+    field,
+    pathCache,
+    context ?? 'countDistinct() result',
+  );
 };
 
 export const extractNumericValues = <TDocument extends FrostpillarDocument>(
@@ -567,7 +573,12 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
 
   if (key === '$countDistinct') {
     const fieldPath = accumulator.$countDistinct!;
-    return computeCountDistinct(groupDocs, fieldPath, pathCache);
+    return computeCountDistinct(
+      groupDocs,
+      fieldPath,
+      pathCache,
+      '$countDistinct accumulator',
+    );
   }
 
   const fieldPath = accumulator[key]!;

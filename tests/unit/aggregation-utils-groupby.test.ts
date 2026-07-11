@@ -7,8 +7,8 @@ import {
   validateGroupByField,
 } from '../../src/internal/aggregationUtils.js';
 import {
-  MAX_DISTINCT_COUNT,
   MAX_FIELD_PATH_DEPTH,
+  MAX_GROUP_DOCUMENTS,
 } from '../../src/internal/limits.js';
 import type {
   FrostpillarDocument,
@@ -1300,10 +1300,8 @@ void test('computeGroupBy $countDistinct entry still enforces exactly-one-accumu
   );
 });
 
-void test('computeGroupBy $countDistinct throws when a single group exceeds MAX_DISTINCT_COUNT unique values (per-group cap)', () => {
-  // All documents land in one group ('a'); MAX_DISTINCT_COUNT + 1 unique
-  // `value`s within that single group must breach the per-group cap.
-  const docs = Array.from({ length: MAX_DISTINCT_COUNT + 1 }, (_, i) =>
+void test('computeGroupBy reaches MAX_GROUP_DOCUMENTS before the equal $countDistinct cap', () => {
+  const docs = Array.from({ length: MAX_GROUP_DOCUMENTS + 1 }, (_, i) =>
     flDoc(String(i), { category: 'a', value: i }),
   );
   assert.throws(
@@ -1314,7 +1312,10 @@ void test('computeGroupBy $countDistinct throws when a single group exceeds MAX_
         { uniqueValues: { $countDistinct: 'value' } },
         pathCache,
       ),
-    ValidationError,
+    {
+      constructor: ValidationError,
+      message: `groupBy group exceeds maximum of ${String(MAX_GROUP_DOCUMENTS)} documents per group.`,
+    },
   );
 });
 

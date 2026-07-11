@@ -45,7 +45,7 @@ A distinct *count* does not depend on order, so `countDistinct` is unaffected by
 
 ### 5. `MAX_DISTINCT_COUNT` cap applies — including per group
 
-The 100,000-unique-value cap that guards `distinct` applies identically to `countDistinct`, and to `$countDistinct` **per group**. Exceeding it throws `ValidationError` with the same failure behavior as `distinct` — the count is bounded by the same memory ceiling (the seen-sets grow the same way whether or not the values are also collected).
+The 100,000-unique-value cap that guards `distinct` applies identically to `countDistinct`, and to `$countDistinct` **per group**. Exceeding it throws `ValidationError` with the same failure behavior as `distinct` — the count is bounded by the same memory ceiling (the seen-sets grow the same way whether or not the values are also collected). The diagnostic identifies the actual caller: `countDistinct() result` for the terminal and `$countDistinct accumulator` for the group accumulator. Because `MAX_GROUP_DOCUMENTS` and `MAX_DISTINCT_COUNT` are both currently 100,000 and each document contributes at most one resolved field value, groupBy reaches the document cap before its `$countDistinct` accumulator can exceed the distinct cap; the accumulator-specific context remains correct if those limits diverge.
 
 ### 6. Implementation: shared distinct-scan core
 
