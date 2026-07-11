@@ -24,6 +24,8 @@ export type {
   CollectionDuplicateKeyPolicy,
   CollectionOptions,
   DatabaseConfig,
+  DatabaseDriverFactory,
+  DatastoreDriver,
   DatastoreKeyDefinition,
   DatabaseErrorEvent,
   DatabaseErrorListener,

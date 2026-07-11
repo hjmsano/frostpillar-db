@@ -874,6 +874,8 @@ for await (const user of users
 
 frostpillar-db はすべての永続化を frostpillar-storage-engine に委譲します。`Database` コンストラクタにドライバーを渡してください。
 
+各コレクションは専用のデータストアで管理されるため、永続化するコレクションごとに独立した物理名前空間（ファイルパス、キープレフィックス、IndexedDB データベースなど）が必要です。コレクション名を受け取ってドライバーを返す**ドライバーファクトリ**を渡すことで、コレクションごとに分離された名前空間を割り当てられます。
+
 **Node.js / TypeScript:**
 
 ```ts
@@ -881,7 +883,10 @@ import { Database } from '@frostpillar/frostpillar-db';
 import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
-  driver: fileDriver({ filePath: './data/myapp.fpdb' }),
+  driver: (name) =>
+    fileDriver({
+      target: { kind: 'directory', directory: './data', fileName: name },
+    }),
   autoCommit: { frequency: '5s', maxPendingBytes: 1024 * 1024 },
 });
 ```
@@ -892,14 +897,17 @@ const db = new Database({
 const { Database, indexedDBDriver } = window.FrostpillarDB;
 
 const db = new Database({
-  driver: indexedDBDriver({
-    databaseName: 'my-app',
-    objectStoreName: 'records',
-    version: 1,
-  }),
+  driver: (name) =>
+    indexedDBDriver({
+      databaseName: `my-app-${name}`,
+      objectStoreName: 'records',
+      version: 1,
+    }),
   autoCommit: { frequency: '5s' },
 });
 ```
+
+単一のドライバーインスタンス（例: `driver: fileDriver({ filePath: './data/myapp.fpdb' })`）は、コレクションが **1 つだけ**のデータベースで引き続き使用できます。1 つのドライバーインスタンスは 1 つの物理名前空間に対応するため、この形式で 2 つ目のコレクションを作成すると `ConfigurationError` がスローされます。その場合はファクトリ形式に切り替えてください。
 
 利用可能なドライバーと設定オプションの詳細は [frostpillar-storage-engine のドキュメント](https://github.com/hjmsano/frostpillar-storage-engine) を参照してください。
 

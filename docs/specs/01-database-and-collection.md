@@ -41,7 +41,7 @@ new Database(config?: DatabaseConfig)
 
 | Field                   | Type                    | Description                                                                                                                                                                                                        |
 | ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `driver`                | `DatastoreDriver`       | Optional. Storage driver (file, localStorage, IndexedDB, etc.)                                                                                                                                                     |
+| `driver`                | `DatastoreDriver \| DatabaseDriverFactory` | Optional. Storage driver, or a collection-aware factory `(collectionName: string) => DatastoreDriver` (see §1.6)                                                                                                   |
 | `autoCommit`            | `AutoCommitConfig`      | Optional. Auto-commit configuration                                                                                                                                                                                |
 | `capacity`              | `CapacityConfig`        | Optional. Capacity control                                                                                                                                                                                         |
 | `index`                 | `IndexConfig`           | Optional. B+ tree index configuration (see §1.5)                                                                                                                                                                   |
@@ -250,6 +250,38 @@ const db = new Database({
 
 - Setting `maxLeafEntries` or `maxBranchChildren` while `autoScale` is `true` throws `ConfigurationError`.
 - Values must be safe integers between 3 and 16,384 (inclusive).
+
+### 1.6 Durable Drivers and Collection Namespacing
+
+Each collection is backed by its own `Datastore` ([ADR-012](../adr/012-per-collection-datastore-isolation.md)), so each durable collection needs its own physical namespace (file path, key prefix, IndexedDB database, OPFS directory, etc.). A single `DatastoreDriver` instance is bound to exactly one physical namespace and therefore cannot back more than one collection.
+
+`DatabaseConfig.driver` accepts either form:
+
+```ts
+type DatabaseDriverFactory = (collectionName: string) => DatastoreDriver;
+
+interface DatabaseConfig {
+  driver?: DatastoreDriver | DatabaseDriverFactory;
+  // ...
+}
+```
+
+- **`DatabaseDriverFactory` (recommended for durable storage):** called once per collection when its `Datastore` is created lazily by `collection()`. The factory derives a per-collection namespace from the collection name:
+
+  ```ts
+  const db = new Database({
+    driver: (name) =>
+      fileDriver({
+        target: { kind: 'directory', directory: './data', fileName: `${name}.fpdb` },
+      }),
+  });
+  ```
+
+  Collection names are validated by `collection()` before the factory is invoked (letters, digits, `_`, `.`, `-`; no leading `_`; no `..`), so they are safe to embed in file names and storage keys.
+
+- **Plain `DatastoreDriver`:** supported for single-collection databases. Creating a **second** collection while another driver-backed collection exists throws `ConfigurationError`, because sharing one driver instance across collections would target the same lock/file (`DatabaseLockedError` on the file driver) or silently overwrite snapshots (last-writer-wins data loss on browser drivers). After `dropCollection()` closes the only driver-backed collection, a new collection may reuse the plain driver.
+
+Databases without a `driver` (in-memory) are unaffected: any number of collections may coexist.
 
 ## 2. Collection
 

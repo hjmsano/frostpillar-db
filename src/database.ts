@@ -1,4 +1,5 @@
 import { Datastore } from '@frostpillar/frostpillar-storage-engine';
+import type { DatastoreDriver } from '@frostpillar/frostpillar-storage-engine';
 
 import { Collection } from './collection.js';
 import { ClosedDatabaseError, ConfigurationError } from './errors.js';
@@ -87,15 +88,45 @@ export class Database {
     this.closed = false;
   }
 
+  // Resolves the driver for a new collection's datastore. A factory yields an
+  // isolated physical namespace per collection; a plain DatastoreDriver is
+  // bound to a single namespace, so sharing it across collections would
+  // target the same lock/file (DatabaseLockedError) or silently overwrite
+  // snapshots (last-writer-wins data loss). See ADR-024.
+  private resolveDriver(name: string): DatastoreDriver | undefined {
+    const driver = this.baseConfig.driver;
+    if (driver === undefined) {
+      return undefined;
+    }
+    if (typeof driver === 'function') {
+      return driver(name);
+    }
+    if (this.datastores.size > 0) {
+      throw new ConfigurationError(
+        `Cannot create collection "${name}": a plain DatastoreDriver instance targets a single physical namespace and cannot back more than one collection. ` +
+          'Pass a driver factory ((collectionName) => DatastoreDriver) that derives a per-collection namespace instead.',
+      );
+    }
+    return driver;
+  }
+
   private createDatastore(
+    driver: DatastoreDriver | undefined,
     duplicateKeys: CollectionDuplicateKeyPolicy,
     capacity?: CapacityConfig,
     autoCommit?: AutoCommitConfig,
     index?: IndexConfig,
     key?: DatastoreKeyDefinition<unknown, unknown>,
   ): Datastore {
+    const {
+      driver: _driver,
+      maxErrorListeners: _maxErrorListeners,
+      maxMatchedDocuments: _maxMatchedDocuments,
+      ...datastoreBaseConfig
+    } = this.baseConfig;
     return new Datastore({
-      ...this.baseConfig,
+      ...datastoreBaseConfig,
+      ...(driver !== undefined ? { driver } : {}),
       skipPayloadValidation: true,
       duplicateKeys,
       ...(capacity !== undefined ? { capacity } : {}),
@@ -165,8 +196,10 @@ export class Database {
       return existing as Collection<TDocument>;
     }
 
+    const driver = this.resolveDriver(name);
     this.collectionOptions.set(name, resolvedOptions);
     const datastore = this.createDatastore(
+      driver,
       resolvedOptions.duplicateKeys,
       resolvedOptions.capacity,
       resolvedOptions.autoCommit,

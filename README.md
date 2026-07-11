@@ -874,6 +874,8 @@ for await (const user of users
 
 frostpillar-db delegates all persistence to frostpillar-storage-engine. Pass a driver to the `Database` constructor.
 
+Each collection is backed by its own datastore, so each durable collection needs its own physical namespace (file path, key prefix, IndexedDB database, etc.). Pass a **driver factory** — a function that receives the collection name and returns a driver — so every collection gets an isolated namespace:
+
 **Node.js / TypeScript:**
 
 ```ts
@@ -881,7 +883,10 @@ import { Database } from '@frostpillar/frostpillar-db';
 import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
-  driver: fileDriver({ filePath: './data/myapp.fpdb' }),
+  driver: (name) =>
+    fileDriver({
+      target: { kind: 'directory', directory: './data', fileName: name },
+    }),
   autoCommit: { frequency: '5s', maxPendingBytes: 1024 * 1024 },
 });
 ```
@@ -892,14 +897,17 @@ const db = new Database({
 const { Database, indexedDBDriver } = window.FrostpillarDB;
 
 const db = new Database({
-  driver: indexedDBDriver({
-    databaseName: 'my-app',
-    objectStoreName: 'records',
-    version: 1,
-  }),
+  driver: (name) =>
+    indexedDBDriver({
+      databaseName: `my-app-${name}`,
+      objectStoreName: 'records',
+      version: 1,
+    }),
   autoCommit: { frequency: '5s' },
 });
 ```
+
+A plain driver instance (e.g. `driver: fileDriver({ filePath: './data/myapp.fpdb' })`) is still supported for databases with a **single** collection. Because one driver instance is bound to one physical namespace, creating a second collection with a plain driver throws `ConfigurationError` — switch to the factory form instead.
 
 See the [frostpillar-storage-engine documentation](https://github.com/hjmsano/frostpillar-storage-engine) for all available drivers and configuration options.
 

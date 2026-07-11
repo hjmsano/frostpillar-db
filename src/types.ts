@@ -4,6 +4,7 @@ import type {
   CapacityPolicy,
   Datastore,
   DatastoreConfig,
+  DatastoreDriver,
   DatastoreErrorEvent,
   DatastoreErrorListener,
   DatastoreKeyDefinition,
@@ -50,13 +51,25 @@ export type {
   AutoCommitConfig,
   CapacityConfig,
   CapacityPolicy,
+  DatastoreDriver,
   DeleteRebalancePolicy,
   DatastoreKeyDefinition,
   IndexConfig,
   PayloadLimitsConfig,
 };
 
-export type DatabaseConfig = Omit<DatastoreConfig, 'duplicateKeys'> & {
+/**
+ * Creates a DatastoreDriver bound to a per-collection physical namespace.
+ * Invoked once per collection when its Datastore is created lazily by
+ * `Database.collection()`. See ADR-024.
+ */
+export type DatabaseDriverFactory = (collectionName: string) => DatastoreDriver;
+
+export type DatabaseConfig = Omit<
+  DatastoreConfig,
+  'duplicateKeys' | 'driver'
+> & {
+  driver?: DatastoreDriver | DatabaseDriverFactory;
   maxErrorListeners?: number | 'unlimited';
   maxMatchedDocuments?: number;
 };
