@@ -196,7 +196,7 @@ const oldest = await users.find({}).max('age');
 
 #### `.percentile(field: string, p: number): Promise<number | null>`
 
-Returns the `p`-th percentile of the specified numeric field. `p` is a fraction in `[0, 1]` (`p = 0.95` means the 95th percentile) — not the 0–100 percent scale. Like the other numeric terminals, operates on the **filtered** set (sort/skip/limit/projection not applied, §1.4), skips non-numeric and non-finite values via `extractNumericValues`, and returns `null` when no numeric values exist.
+Returns the `p`-th percentile of the specified numeric field. `p` is a fraction in `[0, 1]` (`p = 0.95` means the 95th percentile) — not the 0–100 percent scale. Like the other numeric terminals, operates on the **filtered** set and is order-independent (skip/limit/projection not applied, §1.4), skips non-numeric and non-finite values via `extractNumericValues`, and returns `null` when no numeric values exist.
 
 `p` must be a finite scalar number with `0 <= p <= 1`; arrays and all other values throw `ValidationError` **eagerly, before any document is fetched**. Multiple percentiles require separate terminal calls; like every terminal invocation, each call performs a fresh filtered-set execution.
 
@@ -224,7 +224,7 @@ const medianAge = await users.find({ status: 'active' }).median('age');
 
 #### `.stdDevPop(field: string): Promise<number | null>` / `.stdDevSamp(field: string): Promise<number | null>` / `.variancePop(field: string): Promise<number | null>` / `.varianceSamp(field: string): Promise<number | null>`
 
-Return the population/sample standard deviation and variance of the specified numeric field. Like the other numeric terminals, operate on the **filtered** set (sort/skip/limit/projection not applied, §1.4), skip non-numeric and non-finite values via `extractNumericValues`.
+Return the population/sample standard deviation and variance of the specified numeric field. Like the other numeric terminals, operate on the **filtered** set and are order-independent (skip/limit/projection not applied, §1.4), skip non-numeric and non-finite values via `extractNumericValues`.
 
 - **Population** (`stdDevPop`, `variancePop`) divides the sum of squared deviations from the mean by `n`. Use when the matched set *is* the whole population.
 - **Sample** (`stdDevSamp`, `varianceSamp`) divides by `n - 1` (Bessel's correction), the unbiased estimator of a larger population's variance from a sample.
@@ -267,7 +267,7 @@ const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs')
 
 #### `.distinct(field: string): Promise<unknown[]>`
 
-Returns an array of unique values for the specified field across all matching documents. Supports dot notation for nested fields. Documents where the field is missing or `undefined` are skipped; `null` is a valid distinct value. Values are returned in order of first occurrence. Deep equality is used for objects/arrays; strict equality for primitives.
+Returns an array of unique values for the specified field across all matching documents. Supports dot notation for nested fields. Documents where the field is missing or `undefined` are skipped; `null` is a valid distinct value. Values are returned in order of first occurrence **within the aggregation input order** (§1.4): storage order, or `.sort()` order if a sort is specified on the chain. Deep equality is used for objects/arrays; strict equality for primitives.
 
 **Limit:** The result set is capped at `MAX_DISTINCT_COUNT` (100,000) unique values. Exceeding the cap throws `ValidationError`.
 
@@ -329,8 +329,9 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
   - `$percentile: { field: 'fieldPath', p: 0.95 }` — the `p`-th percentile of numeric values, same interpolation as `.percentile()` (`null` if none). `p` is **scalar-only** inside `groupBy`; multiple percentiles of the same group are expressed as multiple output fields (see example below).
   - `$stdDevPop: 'fieldPath'` / `$stdDevSamp: 'fieldPath'` / `$variancePop: 'fieldPath'` / `$varianceSamp: 'fieldPath'` — population/sample standard deviation and variance of numeric values, computed via `computeWelford`, same `n = 0` → `null` / `n = 1` → pop `0`, samp `null` edge rules as the terminals (§1.3 above).
 - **`$percentile` operand validation:** the operand must be a plain object with **exactly** the keys `field` (a valid field path, same eager validation as the other accumulators' field-path operands) and `p` (the same `[0, 1]` finite-number rule as the `.percentile()` terminal). Extra or missing keys throw `ValidationError`. The existing "exactly one accumulator key per entry" rule is unchanged — `$percentile` still occupies exactly one key of its `GroupAccumulator` entry.
-- Groups are returned in order of first occurrence of each key value (unchanged for both forms).
-- Like other aggregation terminals, operates on filtered set (sort/skip/limit not applied).
+- Groups are returned in order of first occurrence of each key value, evaluated over the **aggregation input order** (§1.4): storage order, or `.sort()` order when a sort is specified on the chain (unchanged behavior when no sort is specified; unchanged for both single-field and multi-dimension forms).
+- Each group's internal document order (as consumed by order-sensitive accumulators) likewise follows the aggregation input order.
+- Like other aggregation terminals, operates on the filtered set; `skip`/`limit`/`projection` are not applied (§1.4).
 - Throws `ValidationError` if `field` is an empty string (string form), `accumulators` is empty object, or any accumulator entry does not contain exactly one key.
 - Throws `ValidationError` if `field` is an empty array, an array element is not a non-empty string or fails field-path validation, or the array contains duplicate field paths.
 - Throws `ValidationError` if the number of distinct groups would exceed `MAX_GROUP_COUNT` (100,000).
@@ -379,13 +380,18 @@ const result = await users.find({}).groupBy(['department', 'address.city'], {
 // ]
 ```
 
-### 1.4 Aggregation Terminal Methods — Scope
+### 1.4 Aggregation Terminal Methods — Scope and Input Ordering
 
-Aggregation methods (`sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy`) operate on the **filtered** result set (after applying the filter from `find()`). Sort, skip, limit, and projection are **not applied** to the dataset before aggregation — they only affect `.toArray()`, `.cursor()`, and `.count()`.
+Aggregation methods (`sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy`) operate on the **filtered** result set (after applying the filter from `find()`). `skip`, `limit`, and `projection` are **not applied** to aggregation input — they only affect `.toArray()`, `.cursor()`, and `.count()`.
+
+**Aggregation input order:** storage order, or `.sort()` order if a sort is specified on the chain. This composes with aggregation the way MongoDB's `$sort → $group` pipeline does — a `.sort()` preceding an aggregation terminal is honored by that terminal (see ADR-020).
+
+- **Order-sensitive terminals** — `distinct` and `groupBy` — are observably affected: `distinct`'s first-occurrence order, `groupBy`'s group order (first occurrence of each key), and each group's internal document order all follow the aggregation input order above. Sort semantics (missing-field placement, `NaN` handling, type ranks, string comparison, stability) are exactly §1.2.
+- **Order-insensitive terminals** — `sum`, `avg`, `min`, `max`, `count`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp` — are mathematically order-independent. Their results are defined *as if* computed over the aggregation input order above, but the implementation **skips the sort** for these terminals as a pure optimization: results are byte-identical whether or not a `.sort()` precedes them.
 
 `.count()` is an exception among terminal methods: it applies `skip` and `limit` so that it returns the same number of documents that `.toArray()` would return. This makes `.count()` useful for pagination scenarios. Sort and projection do not affect `.count()`.
 
-This design ensures numeric aggregation reflects the full matching set while `.count()` stays consistent with the result set the user would actually receive.
+This design ensures numeric aggregation reflects the full matching set (regardless of sort), `distinct`/`groupBy` honor a preceding `.sort()` when the caller wants ordered results, and `.count()` stays consistent with the result set the user would actually receive.
 
 ## 2. Execution Pipeline
 
@@ -399,7 +405,7 @@ When a terminal method is called, the `ResultChain` executes the following pipel
    See Spec 02 §2 (Find) for the full fast-path rules including
    Range Query Optimization.
 2. Filter: Apply filter predicates (Spec 02 §8)
-3. Aggregate: If terminal is sum/avg/min/max/percentile/median/stdDevPop/stdDevSamp/variancePop/varianceSamp/distinct/groupBy → compute and return
+3. Aggregate: If terminal is sum/avg/min/max/percentile/median/stdDevPop/stdDevSamp/variancePop/varianceSamp/distinct/groupBy → compute and return. For `distinct`/`groupBy`, sort logically precedes this step: when `state.sort` is defined, the filtered set is first ordered via the same stable sort as step 5 (§1.4) before `distinct`/`groupBy` computes its result. The order-insensitive terminals (`sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp`) skip this ordering step as an optimization — their result is unaffected by input order.
 4. Count: If terminal is count → apply skip/limit to filtered count and return
 5. Sort: Apply sort specification
 6. Skip: Discard first N documents

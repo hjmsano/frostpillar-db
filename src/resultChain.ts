@@ -276,10 +276,26 @@ export class ResultChain<
     return computeVariance(values, true);
   }
 
+  /**
+   * Orders a filtered document set for order-sensitive aggregation terminals
+   * (`distinct`, `groupBy`). Per spec 03 §1.4 / ADR-020, aggregation input
+   * order is storage order, or `.sort()` order when a sort is specified on
+   * the chain. `applySort` is called without a `limit`, so it always takes
+   * the full stable-sort branch (never the top-K path).
+   */
+  private orderForAggregation(
+    docs: FrostpillarStoredDocument<TDocument>[],
+  ): FrostpillarStoredDocument<TDocument>[] {
+    return this.state.sort === undefined
+      ? docs
+      : applySort(docs, this.state.sort, this.context.pathCache);
+  }
+
   public async distinct(field: string): Promise<unknown[]> {
     const normalizedField = validateAggregationField(field);
     const filtered = await this.getFilteredDocuments(false);
-    return computeDistinct(filtered, normalizedField, this.context.pathCache);
+    const ordered = this.orderForAggregation(filtered);
+    return computeDistinct(ordered, normalizedField, this.context.pathCache);
   }
 
   public async groupBy(
@@ -291,8 +307,9 @@ export class ResultChain<
     // during the await cannot change the validated set of paths used below.
     const normalizedField = validateGroupByField(field);
     const filtered = await this.getFilteredDocuments(false);
+    const ordered = this.orderForAggregation(filtered);
     return computeGroupBy(
-      filtered,
+      ordered,
       normalizedField,
       accumulators,
       this.context.pathCache,

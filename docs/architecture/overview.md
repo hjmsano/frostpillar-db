@@ -144,3 +144,4 @@ All architectural decisions are recorded in [docs/adr/](../adr/):
 | [017](../adr/017-multi-dimension-group-by.md)                | Multi-dimension `groupBy`                                  |
 | [018](../adr/018-percentile-and-median-aggregation.md)       | Percentile and median aggregation                          |
 | [019](../adr/019-stddev-and-variance-aggregation.md)          | Standard deviation and variance aggregation                |
+| [020](../adr/020-chain-sort-aware-aggregation.md)             | Chain-sort-aware aggregation (`distinct`/`groupBy` honor a preceding `.sort()`) |

@@ -508,3 +508,50 @@ void test('result chain supports percentile/median reuse across multiple calls',
     await database.close();
   }
 });
+
+void test('same chain used for toArray and groupBy: sort-aware groupBy order matches sorted toArray order (ADR-020)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    // Storage order dept: eng(u1), eng(u2), eng(u3), design(u4), eng(u5).
+    const chain = users.find({}).sort({ dept: 1 });
+
+    const sortedDocs = await chain.toArray();
+    assert.deepEqual(
+      sortedDocs.map((doc) => doc._id),
+      ['u4', 'u1', 'u2', 'u3', 'u5'],
+    );
+
+    const grouped = await chain.groupBy('dept', {
+      count: { $count: true },
+    });
+    // 'design' < 'eng' lexicographically, so the group order flips relative
+    // to storage order ('eng' first in storage) once the chain's .sort() is
+    // honored -- this is the ADR-020 behavior change.
+    assert.deepEqual(
+      grouped.map((entry) => entry._key),
+      ['design', 'eng'],
+    );
+
+    // The two results are mutually consistent: groupBy's group order equals
+    // the first-occurrence order of `dept` within the sorted toArray() output.
+    const firstOccurrenceOrder: unknown[] = [];
+    for (const doc of sortedDocs) {
+      if (!firstOccurrenceOrder.includes(doc.dept)) {
+        firstOccurrenceOrder.push(doc.dept);
+      }
+    }
+    assert.deepEqual(
+      grouped.map((entry) => entry._key),
+      firstOccurrenceOrder,
+    );
+
+    // Reusing the same chain instance did not mutate its state.
+    const sortedDocsAgain = await chain.toArray();
+    assert.deepEqual(sortedDocsAgain, sortedDocs);
+  } finally {
+    await database.close();
+  }
+});

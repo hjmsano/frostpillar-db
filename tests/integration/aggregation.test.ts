@@ -570,3 +570,256 @@ void test('result chain supports stdDevPop/stdDevSamp/variancePop/varianceSamp r
     await database.close();
   }
 });
+
+// --- Chain-sort-aware aggregation (ADR-020) --------------------------------
+
+interface RankedDocument {
+  _id?: string;
+  category: string;
+  nested?: { rank?: number };
+  rank?: number;
+  tie?: number;
+}
+
+void test('distinct follows .sort() order (ascending) when a sort precedes it', async () => {
+  const database = new Database({});
+  const ranked = database.collection<RankedDocument>('ranked');
+
+  try {
+    await ranked.insertMany([
+      { _id: '1', category: 'b', rank: 3 },
+      { _id: '2', category: 'a', rank: 1 },
+      { _id: '3', category: 'c', rank: 2 },
+      { _id: '4', category: 'a', rank: 4 },
+    ]);
+
+    // Storage order (no sort): first occurrence is b, a, c.
+    assert.deepEqual(await ranked.find({}).distinct('category'), [
+      'b',
+      'a',
+      'c',
+    ]);
+
+    // Ascending by rank: 2(a,1), 3(c,2), 1(b,3), 4(a,4 dup) -> a, c, b.
+    const asc = await ranked
+      .find({})
+      .sort({ rank: 1 })
+      .distinct('category');
+    assert.deepEqual(asc, ['a', 'c', 'b']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('distinct follows .sort() order (descending) when a sort precedes it', async () => {
+  const database = new Database({});
+  const ranked = database.collection<RankedDocument>('ranked');
+
+  try {
+    await ranked.insertMany([
+      { _id: '1', category: 'b', rank: 3 },
+      { _id: '2', category: 'a', rank: 1 },
+      { _id: '3', category: 'c', rank: 2 },
+      { _id: '4', category: 'a', rank: 4 },
+    ]);
+
+    // Descending by rank: 4(a,4), 1(b,3), 3(c,2), 2(a,1 dup) -> a, b, c.
+    const desc = await ranked
+      .find({})
+      .sort({ rank: -1 })
+      .distinct('category');
+    assert.deepEqual(desc, ['a', 'b', 'c']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('distinct honors multi-key .sort() precedence', async () => {
+  const database = new Database({});
+  const ranked = database.collection<RankedDocument>('ranked');
+
+  try {
+    await ranked.insertMany([
+      { _id: '1', category: 'x', rank: 1, tie: 2 },
+      { _id: '2', category: 'y', rank: 1, tie: 1 },
+      { _id: '3', category: 'z', rank: 2, tie: 0 },
+    ]);
+
+    // Primary key rank, secondary key tie: rank=1 group ordered by tie
+    // (2 then 1), so y (tie:1) sorts before x (tie:2); z (rank:2) is last.
+    const result = await ranked
+      .find({})
+      .sort({ rank: 1, tie: 1 })
+      .distinct('category');
+    assert.deepEqual(result, ['y', 'x', 'z']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('distinct honors .sort() on a dotted-path field', async () => {
+  const database = new Database({});
+  const ranked = database.collection<RankedDocument>('ranked');
+
+  try {
+    await ranked.insertMany([
+      { _id: '1', category: 'p', nested: { rank: 3 } },
+      { _id: '2', category: 'q', nested: { rank: 1 } },
+      { _id: '3', category: 'r', nested: { rank: 2 } },
+    ]);
+
+    const result = await ranked
+      .find({})
+      .sort({ 'nested.rank': 1 })
+      .distinct('category');
+    assert.deepEqual(result, ['q', 'r', 'p']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('distinct places missing-sort-field documents per spec 03 §1.2 order', async () => {
+  const database = new Database({});
+  const ranked = database.collection<RankedDocument>('ranked');
+
+  try {
+    await ranked.insertMany([
+      { _id: '1', category: 'x', rank: 5 },
+      { _id: '2', category: 'y' }, // rank missing
+      { _id: '3', category: 'z', rank: 1 },
+    ]);
+
+    // Ascending: missing sorts first, then by value ascending -> y, z, x.
+    const asc = await ranked.find({}).sort({ rank: 1 }).distinct('category');
+    assert.deepEqual(asc, ['y', 'z', 'x']);
+
+    // Descending: existing values first (descending), missing last -> x, z, y.
+    const desc = await ranked
+      .find({})
+      .sort({ rank: -1 })
+      .distinct('category');
+    assert.deepEqual(desc, ['x', 'z', 'y']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('regression: distinct and groupBy without .sort() are byte-identical to storage-order behavior', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    // distinct: storage-order first occurrence, unaffected by ADR-020.
+    assert.deepEqual(await users.find({}).distinct('dept'), [
+      'eng',
+      'design',
+    ]);
+
+    const grouped = await users.find({}).groupBy('dept', {
+      count: { $count: true },
+    });
+    assert.deepEqual(
+      grouped.map((entry) => entry._key),
+      ['eng', 'design'],
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+interface MetricDocument {
+  _id?: string;
+  group: string;
+  value: number | string;
+}
+
+void test('regression: numeric aggregation terminals are identical with and without a preceding .sort()', async () => {
+  const database = new Database({});
+  const metrics = database.collection<MetricDocument>('metrics');
+
+  try {
+    await metrics.insertMany([
+      { _id: '1', group: 'g1', value: 7 },
+      { _id: '2', group: 'g2', value: 'nonnumeric' },
+      { _id: '3', group: 'g1', value: 2 },
+      { _id: '4', group: 'g3', value: 9 },
+      { _id: '5', group: 'g2', value: 4 },
+      { _id: '6', group: 'g1', value: 4 },
+      { _id: '7', group: 'g3', value: 1 },
+      { _id: '8', group: 'g2', value: 6 },
+      { _id: '9', group: 'g1', value: 8 },
+      { _id: '10', group: 'g3', value: 3 },
+    ]);
+
+    const noSort = metrics.find({});
+    const sortAsc = metrics.find({}).sort({ value: 1 });
+    const sortDesc = metrics.find({}).sort({ value: -1 });
+    const sortByGroup = metrics.find({}).sort({ group: 1, value: -1 });
+
+    const baselineSum = await noSort.sum('value');
+    assert.equal(baselineSum, 44);
+    assert.equal(await sortAsc.sum('value'), baselineSum);
+    assert.equal(await sortDesc.sum('value'), baselineSum);
+    assert.equal(await sortByGroup.sum('value'), baselineSum);
+
+    const baselineAvg = await noSort.avg('value');
+    assert.equal(await sortAsc.avg('value'), baselineAvg);
+    assert.equal(await sortDesc.avg('value'), baselineAvg);
+    assert.equal(await sortByGroup.avg('value'), baselineAvg);
+
+    const baselineMin = await noSort.min('value');
+    assert.equal(await sortAsc.min('value'), baselineMin);
+    assert.equal(await sortDesc.min('value'), baselineMin);
+    assert.equal(await sortByGroup.min('value'), baselineMin);
+
+    const baselineMax = await noSort.max('value');
+    assert.equal(await sortAsc.max('value'), baselineMax);
+    assert.equal(await sortDesc.max('value'), baselineMax);
+    assert.equal(await sortByGroup.max('value'), baselineMax);
+
+    const baselineMedian = await noSort.median('value');
+    assert.equal(await sortAsc.median('value'), baselineMedian);
+    assert.equal(await sortDesc.median('value'), baselineMedian);
+    assert.equal(await sortByGroup.median('value'), baselineMedian);
+
+    const baselineP25 = await noSort.percentile('value', 0.25);
+    assert.equal(await sortAsc.percentile('value', 0.25), baselineP25);
+    assert.equal(await sortDesc.percentile('value', 0.25), baselineP25);
+    assert.equal(await sortByGroup.percentile('value', 0.25), baselineP25);
+
+    const baselineP75 = await noSort.percentile('value', 0.75);
+    assert.equal(await sortAsc.percentile('value', 0.75), baselineP75);
+    assert.equal(await sortDesc.percentile('value', 0.75), baselineP75);
+    assert.equal(await sortByGroup.percentile('value', 0.75), baselineP75);
+
+    const baselineStdDevPop = await noSort.stdDevPop('value');
+    assert.equal(await sortAsc.stdDevPop('value'), baselineStdDevPop);
+    assert.equal(await sortDesc.stdDevPop('value'), baselineStdDevPop);
+    assert.equal(await sortByGroup.stdDevPop('value'), baselineStdDevPop);
+
+    const baselineStdDevSamp = await noSort.stdDevSamp('value');
+    assert.equal(await sortAsc.stdDevSamp('value'), baselineStdDevSamp);
+    assert.equal(await sortDesc.stdDevSamp('value'), baselineStdDevSamp);
+    assert.equal(await sortByGroup.stdDevSamp('value'), baselineStdDevSamp);
+
+    const baselineVariancePop = await noSort.variancePop('value');
+    assert.equal(await sortAsc.variancePop('value'), baselineVariancePop);
+    assert.equal(await sortDesc.variancePop('value'), baselineVariancePop);
+    assert.equal(
+      await sortByGroup.variancePop('value'),
+      baselineVariancePop,
+    );
+
+    const baselineVarianceSamp = await noSort.varianceSamp('value');
+    assert.equal(await sortAsc.varianceSamp('value'), baselineVarianceSamp);
+    assert.equal(await sortDesc.varianceSamp('value'), baselineVarianceSamp);
+    assert.equal(
+      await sortByGroup.varianceSamp('value'),
+      baselineVarianceSamp,
+    );
+  } finally {
+    await database.close();
+  }
+});
