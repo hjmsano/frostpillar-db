@@ -245,6 +245,9 @@ export const computeWelford = (
   return { count, mean, m2 };
 };
 
+export const clampVariance = (variance: number): number =>
+  Math.max(0, variance);
+
 /**
  * Derives population (`sample = false`) or sample (`sample = true`) variance
  * from `computeWelford`'s accumulators, applying the MongoDB-aligned edge
@@ -267,7 +270,8 @@ export const computeVariance = (
     return sample ? null : 0;
   }
 
-  return sample ? m2 / (count - 1) : m2 / count;
+  const variance = sample ? m2 / (count - 1) : m2 / count;
+  return clampVariance(variance);
 };
 
 /**
