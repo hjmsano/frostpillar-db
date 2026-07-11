@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/hjmsano/frostpillar-db/compare/v1.2.0...v1.3.0) (2026-07-11)
+
+
+### Features
+
+* add $push and $addToSet groupBy accumulators ([3e5475b](https://github.com/hjmsano/frostpillar-db/commit/3e5475bcef2cb5b285bbc8e7d26a635813e47764))
+
 ## [1.2.0](https://github.com/hjmsano/frostpillar-db/compare/v1.1.0...v1.2.0) (2026-07-11)
 
 
