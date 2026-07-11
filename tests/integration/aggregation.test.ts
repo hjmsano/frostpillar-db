@@ -288,6 +288,206 @@ void test('distinct dedupes a large set of objects in linear time', async () => 
   }
 });
 
+// --- countDistinct (ADR-022) ------------------------------------------------
+
+void test('countDistinct returns the count of unique values for a field', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insertMany([
+      { _id: 'd1', name: 'A', city: 'Tokyo' },
+      { _id: 'd2', name: 'B', city: 'Osaka' },
+      { _id: 'd3', name: 'C', city: 'Tokyo' },
+    ]);
+
+    const result = await users.find().countDistinct('city');
+    assert.equal(result, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct with dot notation (nested field)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users.find().countDistinct('profile.city');
+    assert.equal(result, 3);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct respects filter', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users
+      .find({ dept: 'eng' })
+      .countDistinct('profile.city');
+    assert.equal(result, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct skips missing fields and counts null as a value', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insertMany([
+      { _id: 'd1', name: 'A', city: 'Tokyo' },
+      { _id: 'd2', name: 'B' },
+      { _id: 'd3', name: 'C', city: null },
+      { _id: 'd4', name: 'D', city: 'Tokyo' },
+    ]);
+
+    // 'Tokyo' and null are distinct values; missing (d2) is skipped.
+    const result = await users.find().countDistinct('city');
+    assert.equal(result, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct returns 0 for no matching documents', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users
+      .find({ status: 'suspended' })
+      .countDistinct('city');
+    assert.equal(result, 0);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct returns 0 when matches exist but the field is always missing', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insertMany([
+      { _id: 'd1', name: 'A' },
+      { _id: 'd2', name: 'B' },
+    ]);
+
+    const result = await users.find().countDistinct('city');
+    assert.equal(result, 0);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct throws ValidationError for empty field', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () => users.find().countDistinct(''),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct validates field eagerly before checking closed database', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+  await users.insert({ _id: 'u1', name: 'Alice', city: 'Tokyo' });
+
+  const chain = users.find();
+  await database.close();
+
+  // Invalid field must surface as ValidationError, not ClosedDatabaseError,
+  // proving field validation runs before the closed-database check -- the
+  // same eager-validation ordering as the other aggregation terminals.
+  await assert.rejects(
+    () => chain.countDistinct('__proto__'),
+    ValidationError,
+  );
+});
+
+void test('countDistinct is order-insensitive: identical with and without a preceding .sort()', async () => {
+  const database = new Database({});
+  const ranked = database.collection<RankedDocument>('ranked');
+
+  try {
+    await ranked.insertMany([
+      { _id: '1', category: 'b', rank: 3 },
+      { _id: '2', category: 'a', rank: 1 },
+      { _id: '3', category: 'c', rank: 2 },
+      { _id: '4', category: 'a', rank: 4 },
+    ]);
+
+    const noSort = await ranked.find({}).countDistinct('category');
+    const sortAsc = await ranked
+      .find({})
+      .sort({ rank: 1 })
+      .countDistinct('category');
+    const sortDesc = await ranked
+      .find({})
+      .sort({ rank: -1 })
+      .countDistinct('category');
+
+    assert.equal(noSort, 3);
+    assert.equal(sortAsc, noSort);
+    assert.equal(sortDesc, noSort);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('countDistinct equals distinct(field).length for a filtered set', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const distinctValues = await users.find({ dept: 'eng' }).distinct('profile.city');
+    const count = await users.find({ dept: 'eng' }).countDistinct('profile.city');
+    assert.equal(count, distinctValues.length);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('result chain supports countDistinct reuse across multiple calls', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    const activeUsers = users.find({ status: 'active' });
+
+    const count1 = await activeUsers.countDistinct('profile.city');
+    const distinctValues = await activeUsers.distinct('profile.city');
+    const count2 = await activeUsers.countDistinct('profile.city');
+
+    assert.equal(count1, count2);
+    assert.equal(count1, distinctValues.length);
+  } finally {
+    await database.close();
+  }
+});
+
 void test('percentile computes p-th percentile with linear interpolation', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');

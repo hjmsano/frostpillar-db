@@ -1148,6 +1148,200 @@ void test('groupBy $first/$last: exactly-one-accumulator-key rule still enforced
   }
 });
 
+// --- $countDistinct accumulator (ADR-022) -----------------------------------
+
+void test('groupBy $countDistinct counts unique values per group', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    // eng: Tokyo(u1), Osaka(u2), Tokyo(u3), Tokyo(u5) -> 2 unique.
+    // design: Nagoya(u4) -> 1 unique.
+    const result = await users.find({}).groupBy('dept', {
+      uniqueCities: { $countDistinct: 'profile.city' },
+    });
+    const eng = result.find((group) => group._key === 'eng');
+    const design = result.find((group) => group._key === 'design');
+    assert.ok(eng);
+    assert.ok(design);
+    assert.equal(eng.uniqueCities, 2);
+    assert.equal(design.uniqueCities, 1);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $countDistinct equals distinct(field).length computed within each group', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const grouped = await users.find({}).groupBy('dept', {
+      uniqueCities: { $countDistinct: 'profile.city' },
+    });
+
+    for (const entry of grouped) {
+      const dept = entry._key as string;
+      const distinctValues = await users
+        .find({ dept })
+        .distinct('profile.city');
+      assert.equal(entry.uniqueCities, distinctValues.length);
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $countDistinct: string and array groupBy forms', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const stringForm = await users.find({}).groupBy('dept', {
+      uniqueCities: { $countDistinct: 'profile.city' },
+    });
+    const eng = stringForm.find((group) => group._key === 'eng');
+    assert.ok(eng);
+    assert.equal(eng.uniqueCities, 2);
+
+    const arrayForm = await users.find({}).groupBy(['dept'], {
+      uniqueCities: { $countDistinct: 'profile.city' },
+    });
+    const engArray = arrayForm.find(
+      (group) => (group._key as Record<string, unknown>).dept === 'eng',
+    );
+    assert.ok(engArray);
+    assert.equal(engArray.uniqueCities, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $countDistinct returns 0 for a group where the field is always missing', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insertMany([
+      { _id: 'u1', name: 'Alice', dept: 'eng' },
+      { _id: 'u2', name: 'Bob', dept: 'eng' },
+    ]);
+
+    const result = await users.find({}).groupBy('dept', {
+      uniqueCities: { $countDistinct: 'profile.city' },
+    });
+    assert.equal(result[0].uniqueCities, 0);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $countDistinct operand validation: non-string operand rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const badOperand of [123, null, true, { field: 'name' }]) {
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { $countDistinct: badOperand },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for $countDistinct with operand ${JSON.stringify(badOperand)}`,
+      );
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $countDistinct operand validation: bad field path rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $countDistinct: '__proto__.x' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+      'Expected ValidationError for $countDistinct with reserved field path',
+    );
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $countDistinct: '' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+      'Expected ValidationError for $countDistinct with empty field path',
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $countDistinct: exactly-one-accumulator-key rule still enforced', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $countDistinct: 'profile.city', $first: 'name' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+interface CardinalityDocument {
+  _id?: string;
+  group: string;
+  value: number;
+}
+
+void test('groupBy $countDistinct throws ValidationError when a single group exceeds MAX_DISTINCT_COUNT unique values (per-group cap)', async () => {
+  const database = new Database({});
+  const metrics = database.collection<CardinalityDocument>('metrics');
+
+  try {
+    // MAX_DISTINCT_COUNT (100,000) + 1 unique `value`s, all in one group.
+    const docs = Array.from({ length: 100_001 }, (_, i) => ({
+      _id: String(i),
+      group: 'only',
+      value: i,
+    }));
+    await metrics.insertMany(docs);
+
+    await assert.rejects(
+      () =>
+        metrics.find({}).groupBy('group', {
+          uniqueValues: { $countDistinct: 'value' },
+        }),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
 void test('groupBy preserves storage order for equal sort keys (tie stability)', async () => {
   const database = new Database({});
   const items = database.collection<GroupRankedDocument>('items');

@@ -105,14 +105,30 @@ const serializeCanonical = (val: unknown): string => {
   return `{${parts.join(',')}}`;
 };
 
-export const computeDistinct = <TDocument extends FrostpillarDocument>(
+/**
+ * Shared distinct-value scan core (ADR-022 §6): iterates `documents`,
+ * resolves `field` on each, and tracks which resolved values are newly
+ * distinct via the same two seen-sets `computeDistinct` has always used (a
+ * primitive `Set` plus a canonical-key `Set` for objects/arrays, keyed by
+ * `serializeCanonical` so deep equality collapses to `Set` membership). The
+ * `MAX_DISTINCT_COUNT` cap is enforced on the running unique-value count
+ * before each new value is admitted, identically regardless of whether the
+ * caller also collects the values.
+ *
+ * `onNew`, when provided, is invoked once per newly-seen distinct value, in
+ * first-occurrence order — the hook `computeDistinct` uses to build its
+ * result array. `computeCountDistinct` omits it and only counts, so no
+ * result array is ever allocated for the count-only path. `context` is
+ * folded into the cap's `ValidationError` message to identify the caller.
+ */
+const scanDistinctValues = <TDocument extends FrostpillarDocument>(
   documents: FrostpillarStoredDocument<TDocument>[],
   field: string,
   pathCache: Map<string, string[]>,
-): unknown[] => {
-  validateFieldPath(field);
-
-  const result: unknown[] = [];
+  context: string,
+  onNew?: (value: unknown) => void,
+): number => {
+  let count = 0;
   const primitiveSet = new Set<unknown>();
   // Object/array values are deduped by deep equality (spec 03 §1.3): two values
   // are the same when `deepEqual` holds, so e.g. `{a:1,b:2}` and `{b:2,a:1}`
@@ -140,9 +156,9 @@ export const computeDistinct = <TDocument extends FrostpillarDocument>(
       : !primitiveSet.has(value);
 
     if (isNew) {
-      if (result.length >= MAX_DISTINCT_COUNT) {
+      if (count >= MAX_DISTINCT_COUNT) {
         throw new ValidationError(
-          `distinct() result exceeds maximum of ${String(MAX_DISTINCT_COUNT)} unique values.`,
+          `${context} exceeds maximum of ${String(MAX_DISTINCT_COUNT)} unique values.`,
         );
       }
       if (isObject) {
@@ -150,11 +166,50 @@ export const computeDistinct = <TDocument extends FrostpillarDocument>(
       } else {
         primitiveSet.add(value);
       }
-      result.push(value);
+      count += 1;
+      onNew?.(value);
     }
   }
 
+  return count;
+};
+
+export const computeDistinct = <TDocument extends FrostpillarDocument>(
+  documents: FrostpillarStoredDocument<TDocument>[],
+  field: string,
+  pathCache: Map<string, string[]>,
+): unknown[] => {
+  validateFieldPath(field);
+
+  const result: unknown[] = [];
+  scanDistinctValues(documents, field, pathCache, 'distinct() result', (value) => {
+    result.push(value);
+  });
+
   return result;
+};
+
+/**
+ * Counts exactly the values `computeDistinct` would return, without
+ * allocating the result array (ADR-022): `computeCountDistinct(docs, f,
+ * cache) === computeDistinct(docs, f, cache).length` always holds, since
+ * both run the same `scanDistinctValues` core with the identical equality
+ * and cap semantics — only the `onNew` collection hook differs.
+ */
+export const computeCountDistinct = <TDocument extends FrostpillarDocument>(
+  documents: FrostpillarStoredDocument<TDocument>[],
+  field: string,
+  pathCache: Map<string, string[]>,
+  context?: string,
+): number => {
+  validateFieldPath(field);
+
+  return scanDistinctValues(
+    documents,
+    field,
+    pathCache,
+    context ?? 'countDistinct() result',
+  );
 };
 
 export const extractNumericValues = <TDocument extends FrostpillarDocument>(
@@ -317,6 +372,7 @@ const VALID_ACCUMULATOR_KEYS = new Set([
   '$varianceSamp',
   '$first',
   '$last',
+  '$countDistinct',
 ]);
 
 /**
@@ -512,6 +568,16 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
       key === '$first' ? 'first' : 'last',
       fieldPath,
       pathCache,
+    );
+  }
+
+  if (key === '$countDistinct') {
+    const fieldPath = accumulator.$countDistinct!;
+    return computeCountDistinct(
+      groupDocs,
+      fieldPath,
+      pathCache,
+      '$countDistinct accumulator',
     );
   }
 

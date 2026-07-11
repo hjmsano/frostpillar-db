@@ -1,5 +1,6 @@
 import { ValidationError } from './errors.js';
 import {
+  computeCountDistinct,
   computeDistinct,
   computeGroupBy,
   computePercentile,
@@ -296,6 +297,23 @@ export class ResultChain<
     const filtered = await this.getFilteredDocuments(false);
     const ordered = this.orderForAggregation(filtered);
     return computeDistinct(ordered, normalizedField, this.context.pathCache);
+  }
+
+  /**
+   * Returns the count of unique values for `field` — exactly the cardinality
+   * of `distinct(field)`, without materializing that array (ADR-022).
+   * Order-insensitive: unlike `distinct`, this does not call
+   * `orderForAggregation` and skips the chain's sort as a pure optimization,
+   * consistent with the other order-insensitive numeric terminals.
+   */
+  public async countDistinct(field: string): Promise<number> {
+    const normalizedField = validateAggregationField(field);
+    const filtered = await this.getFilteredDocuments(false);
+    return computeCountDistinct(
+      filtered,
+      normalizedField,
+      this.context.pathCache,
+    );
   }
 
   public async groupBy(

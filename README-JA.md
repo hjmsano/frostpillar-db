@@ -27,7 +27,7 @@ frostpillar-cli         ← コマンドラインインターフェース（計�
 - **流暢なクエリ API** — `$` 演算子フィルタと遅延実行（`find`、`sort`、`skip`、`limit`、`project`、`toArray`、`count`）
 - **CRUD + 更新演算子** — `insert`、`insertMany`、`find`、`findOne`、`update`、`remove`、`count` と `$set`、`$unset`、`$inc`、`$rename`、`$push`、`$pull`、`$addToSet`
 - **Upsert サポート** — `update` に `{ upsert: true }` を指定すると、マッチするドキュメントがない場合に新規挿入
-- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`groupBy`（単一または複数フィールド、グループごとの値を返す `$first`/`$last` アキュムレータ付き）
+- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`countDistinct`、`groupBy`（単一または複数フィールド、グループごとの値を返す `$first`/`$last`/`$countDistinct` アキュムレータ付き）
 - **変更イベント** — `watch()` リスナーで insert、update、remove 操作を監視
 - **TTL（Time-To-Live）** — コレクション単位でドキュメントの自動有効期限を設定
 - **非同期カーソル** — `for await...of` による結果のイテレーション
@@ -619,7 +619,7 @@ const max = await users.find({ dept: 'eng' }).max('salary');
 
 `sum`、`avg`、`min`、`max` はフィルタ後の全データに対して実行され、順序に依存しません（skip/limit/projection は適用されません）。`count()` は例外で、skip と limit を適用し、`.toArray()` が返すのと同じ件数を返します。`count()` については [ResultChain](#resultchain) を参照してください。
 
-**集計の入力順序（ADR-020）:** 集計の入力順序は、ストレージ順、またはチェーン上で集計端末メソッドより前に `.sort()` が呼ばれていればその `.sort()` 順になります。`sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp` は数学的に順序に依存しないため、`.sort()` の有無にかかわらず同じ結果を返します。`distinct()` と `groupBy()` は順序に影響を受けます: `distinct()` の初出順序と `groupBy()` のグループ順序（および各グループ内のドキュメント順序）は、`.sort()` が指定されていればその順序に従います。`skip`/`limit`/`projection` は引き続き集計の入力には適用されません。
+**集計の入力順序（ADR-020）:** 集計の入力順序は、ストレージ順、またはチェーン上で集計端末メソッドより前に `.sort()` が呼ばれていればその `.sort()` 順になります。`sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp`/`countDistinct` は数学的に順序に依存しないため、`.sort()` の有無にかかわらず同じ結果を返します。`distinct()` と `groupBy()` は順序に影響を受けます: `distinct()` の初出順序と `groupBy()` のグループ順序（および各グループ内のドキュメント順序）は、`.sort()` が指定されていればその順序に従います。`skip`/`limit`/`projection` は引き続き集計の入力には適用されません。
 
 > **移行時の注意:** 集計はチェーン上で先行する `.sort()` を尊重するようになりました。同じチェーンで `.sort()` を呼びながら `distinct`/`groupBy` の結果がストレージ順であることに依存していた場合は、`.sort()` を削除するとストレージ順が維持されます。
 
@@ -658,6 +658,15 @@ const departments = await users.find().distinct('dept');
 
 返される値は、集計の入力順序（ADR-020）における初出順に従います: ストレージ順、またはチェーン上で `distinct()` より前に `.sort()` が指定されていればその順序になります。
 
+#### Count Distinct
+
+```ts
+const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+// 2
+```
+
+`.countDistinct(field)`（[ADR-022](docs/adr/022-count-distinct.md)）は、`field` の一意な値の数を返します — `distinct(field)` が返す配列の要素数と完全に一致し、その配列自体は生成しません: `countDistinct(f) === (await distinct(f)).length` が常に成り立ちます。意味論は `.distinct()` と同一です（欠落/`undefined` は無視、`null` は値としてカウント、オブジェクト/配列は深い等価性で重複排除、プリミティブは厳密等価性で重複排除、`MAX_DISTINCT_COUNT` で上限）。ただし空の場合、`.distinct()` の `[]` とは異なり、`.countDistinct()` は**`0`**を返します（`count()`/`sum()` と同様、件数だからです）。順序に依存しません — 一意な値の個数は入力順序に依存しないため、先行する `.sort()` の影響を受けません。
+
 ### グルーピング
 
 `groupBy` はフィルタ後のドキュメントをフィールドでグループ化し、グループごとにアキュムレータを計算します。単一のフィールドパスを渡すと1次元でグループ化し、フィールドパスの配列を渡すと複数次元の複合キーでグループ化します。グループの順序（各キーの初出順）と各グループ内のドキュメント順序は、集計の入力順序（ADR-020）に従います: ストレージ順、またはチェーン上で `groupBy()` より前に `.sort()` が指定されていればその順序になります。
@@ -689,7 +698,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 リクエストされたフィールドのいずれかが欠けているドキュメントは、その次元について `null` を返します。単一要素の配列（例: `['dept']`）でもオブジェクトの `_key` を生成します。単一フィールド形式で使われるスカラー形式には変換されません。
 
-利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`、`$first`、`$last`。
+利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`、`$first`、`$last`、`$countDistinct`。
 
 `$median: 'fieldPath'` と `$percentile: { field: 'fieldPath', p: 0.95 }` は `.median()` / `.percentile()` と同じ挙動です（同じ補間、数値がない場合は同じく `null`）。`p` は `groupBy` 内では**スカラーのみ**です — 複数のパーセンタイルが必要な場合は、複数の出力フィールドとして指定します:
 
@@ -717,6 +726,15 @@ const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
   latestStatus: { $first: 'status' },
 });
 // [{ _key: 'u1', latestStatus: 'shipped' }, ...]
+```
+
+`$countDistinct: 'fieldPath'`（[ADR-022](docs/adr/022-count-distinct.md)）は `.countDistinct()` のグループごとの対応版です: グループ内における `fieldPath` の一意な値の数を、同一の等価性判定と `MAX_DISTINCT_COUNT` の上限規則に従ってカウントします — 上限は**グループごと**に適用されます。値が存在しないグループでは `null` ではなく `0` を返します:
+
+```ts
+const result = await users.find().groupBy('dept', {
+  uniqueCities: { $countDistinct: 'address.city' },
+});
+// [{ _key: 'engineering', uniqueCities: 2 }, { _key: 'design', uniqueCities: 1 }]
 ```
 
 > **オブジェクトキーの順序:** グループ化対象フィールドの値がオブジェクトまたは配列の場合、`JSON.stringify` でシリアライズされます。同じプロパティを持つオブジェクトでも挿入順序が異なる場合（例: `{a:1, b:2}` と `{b:2, a:1}`）は**別のグループ**として扱われます。一貫したグルーピングが必要な場合は、挿入前にプロパティの順序を正規化してください。この挙動は複数次元形式の各次元にも個別に適用されます。
@@ -949,6 +967,7 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 | `groupBy` グループ最大数    | 100,000 | 1 回の `groupBy()` が生成する一意グループキー数                             |
 | `groupBy` グループ内最大数  | 100,000 | 1 つの `groupBy()` グループに集約されるドキュメント数                       |
 | `distinct` 値最大数         | 100,000 | 1 回の `distinct()` が返す一意値の数                                        |
+| `countDistinct` 値最大数    | 100,000 | 1 回の `countDistinct()`、または 1 つの `$countDistinct` グループがカウントする一意値の数 |
 
 `$regex` パターンはさらに、破滅的バックトラッキングにつながる形状が事前スクリーニングされ、コンパイル前に `ValidationError` で拒否されます。上記制限を超えた場合は実行時に `ValidationError` がスローされます。このスクリーニングは 3 つの仕組みで構成されます:
 
@@ -1091,6 +1110,7 @@ try {
 | `.variancePop(field)`           | `Promise<number \| null>`     | 母分散（`n=0`→`null`、`n=1`→`0`）                                      |
 | `.varianceSamp(field)`          | `Promise<number \| null>`     | 標本分散（`n<2`→`null`）                                               |
 | `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                 |
+| `.countDistinct(field)`         | `Promise<number>`             | フィールドのユニーク値の数（`=== distinct(field).length`。空の場合は `0`） |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールド（`string \| string[]`）でグループ化しアキュムレータを計算。配列形式は複合 `_key` を生成 |
 
 ---

@@ -119,6 +119,7 @@ export interface GroupAccumulator {
   $varianceSamp?: string;
   $first?: string;
   $last?: string;
+  $countDistinct?: string;
 }
 
 export type GroupAccumulators = Record<string, GroupAccumulator>;
