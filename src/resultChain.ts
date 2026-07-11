@@ -4,6 +4,7 @@ import {
   computeGroupBy,
   extractNumericValues,
   validateAggregationField,
+  validateGroupByField,
 } from './internal/aggregationUtils.js';
 import { cloneDocument } from './internal/objectUtils.js';
 import {
@@ -240,11 +241,13 @@ export class ResultChain<
   }
 
   public async groupBy(
-    field: string,
+    field: string | string[],
     accumulators: GroupAccumulators,
   ): Promise<GroupResultEntry[]> {
-    const normalizedField = validateAggregationField(field);
+    const normalizedField = validateGroupByField(field);
     const filtered = await this.getFilteredDocuments(false);
+    // computeGroupBy re-validates `field` synchronously before use — the
+    // intended safety net against callers mutating the array during the await.
     return computeGroupBy(
       filtered,
       normalizedField,

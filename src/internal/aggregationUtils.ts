@@ -31,6 +31,42 @@ export const validateAggregationField = (field: string): string => {
 };
 
 /**
+ * Validates the `field` argument of `groupBy`, which accepts either a single
+ * field path (string form) or an array of field paths (multi-dimension form).
+ *
+ * String form: delegates to `validateAggregationField` unchanged.
+ *
+ * Array form: the array must be non-empty; each element must independently
+ * pass the same `validateAggregationField` check (non-empty string + eager
+ * `validateFieldPath`); duplicate field paths within the array are rejected.
+ * Validation runs eagerly, before any document is touched.
+ */
+export const validateGroupByField = (
+  field: string | string[],
+): string | string[] => {
+  if (!Array.isArray(field)) {
+    return validateAggregationField(field);
+  }
+
+  if (field.length === 0) {
+    throw new ValidationError('groupBy field array must not be empty.');
+  }
+
+  const seen = new Set<string>();
+  for (const element of field) {
+    validateAggregationField(element);
+    if (seen.has(element)) {
+      throw new ValidationError(
+        `groupBy field array contains duplicate field path "${element}".`,
+      );
+    }
+    seen.add(element);
+  }
+
+  return field;
+};
+
+/**
  * Reduces a value to a canonical string whose equality mirrors `deepEqual`:
  * object keys are sorted recursively, arrays keep element order, and the
  * primitive/Date/NaN/undefined branches match `deepEqual`'s special cases.
@@ -262,44 +298,114 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
   return results;
 };
 
+/**
+ * Builds the composite `_key` object for the array (multi-dimension) form:
+ * one property per requested field path, keyed by the literal path string
+ * (not re-parsed into a nested structure), in the caller's array order.
+ * Only invoked once per newly-created group, never per document.
+ */
+const buildCompositeGroupKey = (
+  fieldPaths: readonly string[],
+  values: readonly unknown[],
+): Record<string, unknown> => {
+  const key: Record<string, unknown> = {};
+  for (let index = 0; index < fieldPaths.length; index += 1) {
+    key[fieldPaths[index]] = values[index];
+  }
+  return key;
+};
+
+type GroupsMap<TDocument extends FrostpillarDocument> = Map<
+  string,
+  { key: unknown; docs: FrostpillarStoredDocument<TDocument>[] }
+>;
+
+/**
+ * Adds `document` to the existing group for `serialized`, enforcing the
+ * MAX_GROUP_DOCUMENTS / MAX_GROUP_COUNT limits shared by both groupBy forms.
+ * Returns `true` when no group exists yet for `serialized` (after checking
+ * the group-count limit), signalling the caller to create it — this lets
+ * the caller build the group `_key` only on first occurrence of a group.
+ */
+const addDocumentToGroups = <TDocument extends FrostpillarDocument>(
+  groups: GroupsMap<TDocument>,
+  serialized: string,
+  document: FrostpillarStoredDocument<TDocument>,
+): boolean => {
+  const existing = groups.get(serialized);
+  if (existing !== undefined) {
+    if (existing.docs.length >= MAX_GROUP_DOCUMENTS) {
+      throw new ValidationError(
+        `groupBy group exceeds maximum of ${String(MAX_GROUP_DOCUMENTS)} documents per group.`,
+      );
+    }
+    existing.docs.push(document);
+    return false;
+  }
+
+  if (groups.size >= MAX_GROUP_COUNT) {
+    throw new ValidationError(
+      `groupBy exceeds maximum of ${String(MAX_GROUP_COUNT)} distinct groups.`,
+    );
+  }
+  return true;
+};
+
 export const computeGroupBy = <TDocument extends FrostpillarDocument>(
   documents: FrostpillarStoredDocument<TDocument>[],
-  field: string,
+  field: string | string[],
   accumulators: GroupAccumulators,
   pathCache: Map<string, string[]>,
 ): GroupResultEntry[] => {
-  validateFieldPath(field);
+  validateGroupByField(field);
   validateAccumulators(accumulators);
 
-  const groups = new Map<
-    string,
-    { key: unknown; docs: FrostpillarStoredDocument<TDocument>[] }
-  >();
+  const groups: GroupsMap<TDocument> = new Map();
 
-  for (const document of documents) {
-    const resolved = getValueByPath(
-      document as Record<string, unknown>,
-      field,
-      pathCache,
-    );
-    const groupKey: unknown = resolved !== PATH_NOT_FOUND ? resolved : null;
-    const serialized = serializeGroupKey(groupKey);
+  if (Array.isArray(field)) {
+    // Composite (array) form. Resolve every requested dimension per document;
+    // a dimension whose path is not found contributes `null`, mirroring the
+    // string form's "missing field -> null" rule, independently per dimension.
+    for (const document of documents) {
+      const resolvedValues = field.map((path) => {
+        const resolved = getValueByPath(
+          document as Record<string, unknown>,
+          path,
+          pathCache,
+        );
+        return resolved !== PATH_NOT_FOUND ? resolved : null;
+      });
 
-    const existing = groups.get(serialized);
-    if (existing !== undefined) {
-      if (existing.docs.length >= MAX_GROUP_DOCUMENTS) {
-        throw new ValidationError(
-          `groupBy group exceeds maximum of ${String(MAX_GROUP_DOCUMENTS)} documents per group.`,
-        );
+      // Each dimension is serialized independently via the existing type-aware
+      // serializeGroupKey, then combined collision-free via JSON.stringify of
+      // the ordered array of serialized parts (ADR-017): this guarantees no
+      // cross-dimension collision, unlike a plain string join/concatenation.
+      const serialized = JSON.stringify(resolvedValues.map(serializeGroupKey));
+
+      if (addDocumentToGroups(groups, serialized, document)) {
+        // The composite _key object is built only now, on first occurrence
+        // of this group -- never per document.
+        groups.set(serialized, {
+          key: buildCompositeGroupKey(field, resolvedValues),
+          docs: [document],
+        });
       }
-      existing.docs.push(document);
-    } else {
-      if (groups.size >= MAX_GROUP_COUNT) {
-        throw new ValidationError(
-          `groupBy exceeds maximum of ${String(MAX_GROUP_COUNT)} distinct groups.`,
-        );
+    }
+  } else {
+    // Scalar (string) form: zero-allocation hot path, byte-for-byte the
+    // single-field behavior that predates the composite form.
+    for (const document of documents) {
+      const resolved = getValueByPath(
+        document as Record<string, unknown>,
+        field,
+        pathCache,
+      );
+      const groupKey: unknown = resolved !== PATH_NOT_FOUND ? resolved : null;
+      const serialized = serializeGroupKey(groupKey);
+
+      if (addDocumentToGroups(groups, serialized, document)) {
+        groups.set(serialized, { key: groupKey, docs: [document] });
       }
-      groups.set(serialized, { key: groupKey, docs: [document] });
     }
   }
 

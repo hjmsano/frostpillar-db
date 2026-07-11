@@ -326,6 +326,83 @@ void test('groupBy distinguishes null value from missing field', async () => {
   }
 });
 
+void test('groupBy multi-dimension grouping via array field', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users.find({}).groupBy(['dept', 'profile.city'], {
+      count: { $count: true },
+      totalSalary: { $sum: 'salary' },
+    });
+
+    assert.equal(result.length, 3);
+
+    const findGroup = (
+      dept: string,
+      city: string,
+    ): (typeof result)[number] | undefined =>
+      result.find((group) => {
+        const key = group._key as Record<string, unknown>;
+        return key.dept === dept && key['profile.city'] === city;
+      });
+
+    const engTokyo = findGroup('eng', 'Tokyo');
+    assert.ok(engTokyo);
+    assert.deepEqual(engTokyo._key, { dept: 'eng', 'profile.city': 'Tokyo' });
+    // u1 (100), u3 (salary '90' is a string, skipped), u5 (200)
+    assert.equal(engTokyo.count, 3);
+    assert.equal(engTokyo.totalSalary, 100 + 200);
+
+    const engOsaka = findGroup('eng', 'Osaka');
+    assert.ok(engOsaka);
+    assert.equal(engOsaka.count, 1);
+    assert.equal(engOsaka.totalSalary, 80);
+
+    const designNagoya = findGroup('design', 'Nagoya');
+    assert.ok(designNagoya);
+    assert.equal(designNagoya.count, 1);
+    assert.equal(designNagoya.totalSalary, 0);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy throws ValidationError for empty field array', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () => users.find().groupBy([], { count: { $count: true } }),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy throws ValidationError for duplicate field paths in array', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy(['dept', 'dept'], { count: { $count: true } }),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
 void test('groupBy respects filter', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');

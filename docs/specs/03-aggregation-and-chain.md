@@ -205,9 +205,9 @@ const cities = await users.find({ status: 'active' }).distinct('address.city');
 // e.g. ['Tokyo', 'Osaka']
 ```
 
-#### `.groupBy(field: string, accumulators: GroupAccumulators): Promise<GroupResultEntry[]>`
+#### `.groupBy(field: string | string[], accumulators: GroupAccumulators): Promise<GroupResultEntry[]>`
 
-Groups documents by the value of `field`, then applies accumulators to each group.
+Groups documents by the value of `field`, then applies accumulators to each group. `field` is either a single field path (string form) or an array of field paths (multi-dimension form) for grouping by a composite key.
 
 **Types:**
 
@@ -223,7 +223,7 @@ interface GroupAccumulator {
 type GroupAccumulators = Record<string, GroupAccumulator>;
 
 interface GroupResultEntry {
-  _key: unknown; // the group key value
+  _key: unknown; // the group key value (string form) or composite key object (array form)
   [outputField: string]: unknown; // accumulator results
 }
 ```
@@ -232,24 +232,31 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
 
 **Behavior:**
 
-- Groups by field value (supports dot notation via `getValueByPath`).
-- Documents where the group field is missing are grouped under `_key: null`.
-- Group key serialization is type-aware: values of different types (e.g., the string `"123"` and the number `123`, or the string `"null"` and `null`) are always treated as distinct groups.
-- **Object/array key ordering:** When a group key is an object or array, it is serialized via `JSON.stringify`. This means objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) are treated as **different** group keys. To ensure consistent grouping, callers should normalize key property order before insertion.
-- Each accumulator operates on the group's documents:
+- **String form (single field):** Groups by field value (supports dot notation via `getValueByPath`). `_key` is the raw group value. This form is unchanged from prior versions.
+- **Array form (multi-dimension grouping):** Groups by the combination of all field values in `field`.
+  - Each element of `field` must be a non-empty string and a valid field path — the same eager validation as the string form (reserved segments `__proto__`/`constructor`/`prototype` rejected, max depth, max length). Dot notation is supported per element.
+  - `field` must be a non-empty array. Duplicate field paths within the array are rejected.
+  - `_key` is an object with one property per requested field path: `{ [fieldPath]: value, ... }`. The property key is the literal path string (e.g. `'address.city'` is a single literal key, not nested under `address`). Property order follows the order of `field`, **except** that JavaScript enumerates integer-like path keys (e.g. `'0'`, `'2024'`) ahead of other keys regardless of insertion order — the same object-key reordering documented for `.sort()` in §1.2. Callers should access `_key` properties by name (e.g. `result._key['2024']`) rather than relying on `Object.keys(_key)` order.
+  - A single-element array (e.g. `['dept']`) still produces an object `_key` (e.g. `{ dept: ... }`) — it is **not** collapsed to the scalar form used by the string form.
+  - A document missing one of the requested fields contributes `null` for that dimension, consistent with the string form's "missing field → `_key: null`" rule.
+- Documents where the group field is missing are grouped under `_key: null` (string form) or `null` for that dimension (array form).
+- Group key serialization is type-aware, per dimension: values of different types (e.g., the string `"123"` and the number `123`, or the string `"null"` and `null`) are always treated as distinct groups, and this holds independently for each field in the array form — there is no cross-dimension collision between, say, the first field's `"123"` and the second field's `123`.
+- **Object/array key ordering:** When a group key value (or a dimension's value, in the array form) is an object or array, it is serialized via `JSON.stringify`. This means objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) are treated as **different** group keys. To ensure consistent grouping, callers should normalize key property order before insertion.
+- Each accumulator operates on the group's documents (unchanged for both forms):
   - `$count: true` — count of documents in the group.
   - `$sum: 'fieldPath'` — sum of numeric values (skip non-numeric, `0` if none).
   - `$avg: 'fieldPath'` — average of numeric values (`null` if none).
   - `$min: 'fieldPath'` — minimum numeric value (`null` if none).
   - `$max: 'fieldPath'` — maximum numeric value (`null` if none).
-- Groups are returned in order of first occurrence of each key value.
+- Groups are returned in order of first occurrence of each key value (unchanged for both forms).
 - Like other aggregation terminals, operates on filtered set (sort/skip/limit not applied).
-- Throws `ValidationError` if `field` is empty string, `accumulators` is empty object, or any accumulator entry does not contain exactly one key.
+- Throws `ValidationError` if `field` is an empty string (string form), `accumulators` is empty object, or any accumulator entry does not contain exactly one key.
+- Throws `ValidationError` if `field` is an empty array, an array element is not a non-empty string or fails field-path validation, or the array contains duplicate field paths.
 - Throws `ValidationError` if the number of distinct groups would exceed `MAX_GROUP_COUNT` (100,000).
 - Throws `ValidationError` if any single group would exceed `MAX_GROUP_DOCUMENTS` (100,000) documents. (Reachable only when `maxMatchedDocuments` is configured above 100,000, since the scan cap would otherwise be hit first.)
 - Returns `[]` if no matching documents.
 
-**Example:**
+**Example (single field):**
 
 ```ts
 const result = await users.find({}).groupBy('department', {
@@ -260,6 +267,20 @@ const result = await users.find({}).groupBy('department', {
 // → [
 //   { _key: 'eng', count: 12, avgSalary: 85000, maxAge: 45 },
 //   { _key: 'sales', count: 8, avgSalary: 72000, maxAge: 52 },
+// ]
+```
+
+**Example (multi-dimension):**
+
+```ts
+const result = await users.find({}).groupBy(['department', 'address.city'], {
+  count: { $count: true },
+  avgSalary: { $avg: 'salary' },
+});
+// → [
+//   { _key: { department: 'eng', 'address.city': 'Tokyo' }, count: 7, avgSalary: 88000 },
+//   { _key: { department: 'eng', 'address.city': 'Osaka' }, count: 5, avgSalary: 81000 },
+//   { _key: { department: 'sales', 'address.city': 'Tokyo' }, count: 8, avgSalary: 72000 },
 // ]
 ```
 
@@ -332,7 +353,7 @@ Each terminal call triggers a fresh execution of the pipeline.
 | `ValidationError`     | Mixed inclusion/exclusion in projection                                                                                                                                                                            |
 | `ValidationError`     | Aggregation field path is not a non-empty string, contains reserved segments (`__proto__`, `constructor`, `prototype`), exceeds max depth, or exceeds max length — validated eagerly regardless of result set size |
 | `ValidationError`     | `distinct` field path fails the same eager validation as above                                                                                                                                                     |
-| `ValidationError`     | `groupBy` field fails the same eager validation as above                                                                                                                                                           |
+| `ValidationError`     | `groupBy` field fails the same eager validation as above (string form), or, for the array form, `field` is an empty array, an array element is not a non-empty string or fails the same eager field-path validation, or the array contains duplicate field paths                                                                          |
 | `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max` operands) fail the same eager validation                                                                                                         |
 | `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
 | `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
