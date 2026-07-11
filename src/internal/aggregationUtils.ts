@@ -4,7 +4,7 @@ import {
   PATH_NOT_FOUND,
   validateFieldPath,
 } from './documentPath.js';
-import { hasOwn, isObjectRecord } from './objectUtils.js';
+import { cloneAccumulatorValue, hasOwn, isObjectRecord } from './objectUtils.js';
 import {
   MAX_DISTINCT_COUNT,
   MAX_GROUP_COUNT,
@@ -315,6 +315,8 @@ const VALID_ACCUMULATOR_KEYS = new Set([
   '$stdDevSamp',
   '$variancePop',
   '$varianceSamp',
+  '$first',
+  '$last',
 ]);
 
 /**
@@ -445,6 +447,43 @@ const computeNumericAccumulator = (
   }
 };
 
+/**
+ * Implements `$first` / `$last` (ADR-021): selects the positional document
+ * of the group (first or last, per the aggregation input order established
+ * by ADR-020 -- the chain's `.sort()` order when present, otherwise storage
+ * order) and THEN reads `fieldPath` from it. This is deliberately
+ * positional-then-read, not "the first/last document that has the field":
+ * if the selected document lacks `fieldPath`, the result is `null` even
+ * when another document in the group has the field. A group always has at
+ * least one document. Unlike every other accumulator, the value may be of
+ * any type; object/array values are defensively cloned via
+ * `cloneAccumulatorValue` before being returned, since group documents are
+ * references to stored documents.
+ */
+const computeFirstLast = <TDocument extends FrostpillarDocument>(
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  position: 'first' | 'last',
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): unknown => {
+  if (groupDocs.length === 0) {
+    return null;
+  }
+
+  const selectedDoc =
+    position === 'first' ? groupDocs[0] : groupDocs[groupDocs.length - 1];
+  const resolved = getValueByPath(
+    selectedDoc as Record<string, unknown>,
+    fieldPath,
+    pathCache,
+  );
+  if (resolved === PATH_NOT_FOUND || resolved === undefined) {
+    return null;
+  }
+
+  return cloneAccumulatorValue(resolved);
+};
+
 const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
   groupDocs: FrostpillarStoredDocument<TDocument>[],
   accumulator: GroupAccumulator,
@@ -464,6 +503,16 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
       pathCache,
     );
     return computePercentile(numericValues, operand.p);
+  }
+
+  if (key === '$first' || key === '$last') {
+    const fieldPath = accumulator[key]!;
+    return computeFirstLast(
+      groupDocs,
+      key === '$first' ? 'first' : 'last',
+      fieldPath,
+      pathCache,
+    );
   }
 
   const fieldPath = accumulator[key]!;

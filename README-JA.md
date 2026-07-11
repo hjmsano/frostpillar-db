@@ -27,7 +27,7 @@ frostpillar-cli         ← コマンドラインインターフェース（計�
 - **流暢なクエリ API** — `$` 演算子フィルタと遅延実行（`find`、`sort`、`skip`、`limit`、`project`、`toArray`、`count`）
 - **CRUD + 更新演算子** — `insert`、`insertMany`、`find`、`findOne`、`update`、`remove`、`count` と `$set`、`$unset`、`$inc`、`$rename`、`$push`、`$pull`、`$addToSet`
 - **Upsert サポート** — `update` に `{ upsert: true }` を指定すると、マッチするドキュメントがない場合に新規挿入
-- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`groupBy`（単一または複数フィールド）
+- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`groupBy`（単一または複数フィールド、グループごとの値を返す `$first`/`$last` アキュムレータ付き）
 - **変更イベント** — `watch()` リスナーで insert、update、remove 操作を監視
 - **TTL（Time-To-Live）** — コレクション単位でドキュメントの自動有効期限を設定
 - **非同期カーソル** — `for await...of` による結果のイテレーション
@@ -689,7 +689,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 リクエストされたフィールドのいずれかが欠けているドキュメントは、その次元について `null` を返します。単一要素の配列（例: `['dept']`）でもオブジェクトの `_key` を生成します。単一フィールド形式で使われるスカラー形式には変換されません。
 
-利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`。
+利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`、`$first`、`$last`。
 
 `$median: 'fieldPath'` と `$percentile: { field: 'fieldPath', p: 0.95 }` は `.median()` / `.percentile()` と同じ挙動です（同じ補間、数値がない場合は同じく `null`）。`p` は `groupBy` 内では**スカラーのみ**です — 複数のパーセンタイルが必要な場合は、複数の出力フィールドとして指定します:
 
@@ -708,6 +708,15 @@ const result = await requests.find({}).groupBy('route', {
   jitterPop: { $stdDevPop: 'latencyMs' },
   jitterSamp: { $stdDevSamp: 'latencyMs' },
 });
+```
+
+`$first: 'fieldPath'` / `$last: 'fieldPath'`（[ADR-021](docs/adr/021-first-last-accumulators.md)）は、集計の入力順序（ADR-020）——チェーン上で `.sort()` が指定されていればその順序、なければストレージ順——において、グループの先頭（または末尾）のドキュメントにおける `fieldPath` の値を返します。これは**「位置を選んでから読む」**方式です: 先頭/末尾のドキュメントを先に選択し、そのドキュメントからフィールドを読み取ります——「フィールドを持つ最初/最後のドキュメント」ではありません。選択されたドキュメントがそのフィールドを持たない場合、結果は `null` になります。他のアキュムレータと異なり、`$first`/`$last` は**任意の型**（文字列、数値、真偽値、`null`、オブジェクト、配列）の値を返します。オブジェクト/配列の値は返却前に防御的にクローンされます。典型的な用途は「グループごとの最新値」です:
+
+```ts
+const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
+  latestStatus: { $first: 'status' },
+});
+// [{ _key: 'u1', latestStatus: 'shipped' }, ...]
 ```
 
 > **オブジェクトキーの順序:** グループ化対象フィールドの値がオブジェクトまたは配列の場合、`JSON.stringify` でシリアライズされます。同じプロパティを持つオブジェクトでも挿入順序が異なる場合（例: `{a:1, b:2}` と `{b:2, a:1}`）は**別のグループ**として扱われます。一貫したグルーピングが必要な場合は、挿入前にプロパティの順序を正規化してください。この挙動は複数次元形式の各次元にも個別に適用されます。

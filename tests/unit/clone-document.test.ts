@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cloneDocument } from '../../src/internal/objectUtils.js';
+import {
+  cloneAccumulatorValue,
+  cloneDocument,
+} from '../../src/internal/objectUtils.js';
 
 void test('cloneDocument: primitives are returned as-is', () => {
   assert.equal(cloneDocument(42), 42);
@@ -129,4 +132,41 @@ void test('cloneDocument: __proto__ key is safely skipped', () => {
   assert.equal(Object.getPrototypeOf(cloned), Object.prototype);
   const probe = {} as Record<string, unknown>;
   assert.equal(probe.polluted, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// cloneAccumulatorValue (ADR-021) -- primitives pass through, objects/arrays
+// are deep-cloned. It is a thin named-export alias of cloneDocument, reused
+// by $first/$last (ADR-021) and $push/$addToSet (ADR-023, PR 6).
+// ---------------------------------------------------------------------------
+
+void test('cloneAccumulatorValue: primitives and null pass through unchanged', () => {
+  assert.equal(cloneAccumulatorValue(42), 42);
+  assert.equal(cloneAccumulatorValue('hello'), 'hello');
+  assert.equal(cloneAccumulatorValue(true), true);
+  assert.equal(cloneAccumulatorValue(false), false);
+  assert.equal(cloneAccumulatorValue(null), null);
+  assert.equal(cloneAccumulatorValue(undefined), undefined);
+});
+
+void test('cloneAccumulatorValue: objects are deep-cloned, not passed by reference', () => {
+  const original = { a: 1, nested: { b: 2 } };
+  const cloned = cloneAccumulatorValue(original) as typeof original;
+  assert.deepEqual(cloned, original);
+  assert.notEqual(cloned, original);
+  assert.notEqual(cloned.nested, original.nested);
+
+  cloned.nested.b = 999;
+  assert.equal(original.nested.b, 2);
+});
+
+void test('cloneAccumulatorValue: arrays are deep-cloned, not passed by reference', () => {
+  const original = [1, { x: 'y' }, [2, 3]];
+  const cloned = cloneAccumulatorValue(original) as typeof original;
+  assert.deepEqual(cloned, original);
+  assert.notEqual(cloned, original);
+  assert.notEqual(cloned[1], original[1]);
+
+  cloned.push(4);
+  assert.equal(original.length, 3);
 });
