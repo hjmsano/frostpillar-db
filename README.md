@@ -768,7 +768,7 @@ frostpillar-db delegates all persistence to frostpillar-storage-engine. Pass a d
 
 ```ts
 import { Database } from '@frostpillar/frostpillar-db';
-import { fileDriver } from 'frostpillar-db/drivers/file';
+import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
   driver: fileDriver({ filePath: './data/myapp.fpdb' }),
