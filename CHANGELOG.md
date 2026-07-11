@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/hjmsano/frostpillar-db/compare/v0.3.0...v1.0.0) (2026-07-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* distinct() and groupBy() now order their input by a preceding .sort() when present (previously always storage order). Ordering only changes; the set of values and group contents are unchanged. Remove the .sort() to keep storage order.
+
+### Features
+
+* honor chain .sort() in distinct and groupBy aggregation ([e35ce17](https://github.com/hjmsano/frostpillar-db/commit/e35ce17dc9687fbe7f23f9e7a40f4cd18cecc41d))
+
 ## [0.3.0](https://github.com/hjmsano/frostpillar-db/compare/v0.2.0...v0.3.0) (2026-07-11)
 
 
