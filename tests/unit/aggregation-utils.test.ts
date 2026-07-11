@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { ValidationError } from '../../src/errors.js';
 import {
+  clampVariance,
   computeDistinct,
   computePercentile,
   computeStdDev,
@@ -378,6 +379,12 @@ void test('computeVariance computes population variance for a known set', () => 
   // [2, 4, 4, 4, 5, 5, 7, 9]: population variance = 32 / 8 = 4
   const values = [2, 4, 4, 4, 5, 5, 7, 9];
   assert.equal(computeVariance(values, false), 4);
+});
+
+void test('clampVariance normalizes negative floating-point roundoff to zero', () => {
+  assert.equal(clampVariance(-Number.EPSILON), 0);
+  assert.equal(clampVariance(0), 0);
+  assert.equal(clampVariance(Number.EPSILON), Number.EPSILON);
 });
 
 void test('computeStdDev computes population standard deviation for a known set', () => {

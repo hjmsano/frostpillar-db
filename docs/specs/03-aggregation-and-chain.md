@@ -244,6 +244,10 @@ stdDevPop    = sqrt(variancePop)
 stdDevSamp   = sqrt(varianceSamp)
 ```
 
+After division, clamp a negative computed variance to `0`. This defensive
+normalization prevents floating-point roundoff in the accumulated `m2` from
+causing `sqrt(variance)` to return `NaN`; positive variances are unchanged.
+
 **Edge semantics (MongoDB-aligned):**
 
 | `n` (numeric values) | `variancePop` / `stdDevPop` | `varianceSamp` / `stdDevSamp` |
