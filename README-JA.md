@@ -27,7 +27,7 @@ frostpillar-cli         ← コマンドラインインターフェース（計�
 - **流暢なクエリ API** — `$` 演算子フィルタと遅延実行（`find`、`sort`、`skip`、`limit`、`project`、`toArray`、`count`）
 - **CRUD + 更新演算子** — `insert`、`insertMany`、`find`、`findOne`、`update`、`remove`、`count` と `$set`、`$unset`、`$inc`、`$rename`、`$push`、`$pull`、`$addToSet`
 - **Upsert サポート** — `update` に `{ upsert: true }` を指定すると、マッチするドキュメントがない場合に新規挿入
-- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`countDistinct`、`groupBy`（単一または複数フィールド、グループごとの値を返す `$first`/`$last`/`$countDistinct` アキュムレータ付き）
+- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`countDistinct`、`groupBy`（単一または複数フィールド、グループごとの値を返す `$first`/`$last`/`$countDistinct`/`$push`/`$addToSet` アキュムレータ付き）
 - **変更イベント** — `watch()` リスナーで insert、update、remove 操作を監視
 - **TTL（Time-To-Live）** — コレクション単位でドキュメントの自動有効期限を設定
 - **非同期カーソル** — `for await...of` による結果のイテレーション
@@ -698,7 +698,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 リクエストされたフィールドのいずれかが欠けているドキュメントは、その次元について `null` を返します。単一要素の配列（例: `['dept']`）でもオブジェクトの `_key` を生成します。単一フィールド形式で使われるスカラー形式には変換されません。
 
-利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`、`$first`、`$last`、`$countDistinct`。
+利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`、`$first`、`$last`、`$countDistinct`、`$push`、`$addToSet`。
 
 `$median: 'fieldPath'` と `$percentile: { field: 'fieldPath', p: 0.95 }` は `.median()` / `.percentile()` と同じ挙動です（同じ補間、数値がない場合は同じく `null`）。`p` は `groupBy` 内では**スカラーのみ**です — 複数のパーセンタイルが必要な場合は、複数の出力フィールドとして指定します:
 
@@ -736,6 +736,25 @@ const result = await users.find().groupBy('dept', {
 });
 // [{ _key: 'engineering', uniqueCities: 2 }, { _key: 'design', uniqueCities: 1 }]
 ```
+
+`$push: 'fieldPath'` / `$addToSet: 'fieldPath'`（[ADR-023](docs/adr/023-push-addtoset-accumulators.md)）は最後の一対のアキュムレータ——配列を返す**コレクタ**です。両者とも `$first`/`$last`（ADR-020）と同じ集計の入力順序でグループのドキュメントを走査し、オブジェクト/配列の値を防御的にクローンして返すため、返却された値を変更してもストレージ内のデータには影響しません:
+
+- `$push: 'fieldPath'` はグループ内の**すべての**ドキュメントについて `fieldPath` の値を順序どおりに収集します（重複も保持）。欠落/`undefined` の値はスキップされ、`null` は含まれます。
+- `$addToSet: 'fieldPath'` は `fieldPath` の**一意な**値を初出順で収集します。等価性判定は `.distinct()`/`$countDistinct` と完全に同一です(オブジェクト/配列は深い等価性、プリミティブは厳密等価性、`null` は有効なメンバー)。
+
+どちらも、値が存在しないグループに対しては `[]` を返します。
+
+```ts
+const result = await posts.find().groupBy('author', {
+  allTags: { $push: 'tag' },       // すべてのタグを順序どおり(重複含む)
+  cities: { $addToSet: 'city' },   // 一意な都市の集合
+});
+// [{ _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] }]
+```
+
+> **メモリに関する注意:** `$push` と `$addToSet` はメモリを消費するコレクタです — カーディナリティの高いグループは大きな出力配列を生成します。`$push` は `MAX_GROUP_DOCUMENTS`(グループあたり 100,000 ドキュメント)のみで制限されます。`$addToSet` はさらに `MAX_DISTINCT_COUNT`(**グループごと**に 100,000 個の一意な値)で上限が設定されており、これは `$countDistinct` と同じ上限・同じ `ValidationError` です。カーディナリティが高い場合は、スカラーアキュムレータを使うか、グループを絞り込むことを推奨します。
+>
+> **名前の再利用について:** `$push`/`$addToSet` は更新演算子としても存在します(後述の[更新演算子](#更新演算子)を参照)。両者は無関係です: `groupBy` 内ではオペランドはフィールドパスの**文字列**ですが、更新スペック内ではオペランドは更新**命令**です(例: `{ $push: { tags: 'new' } }`)。同一オブジェクト上で両者が共存することはありません。
 
 > **オブジェクトキーの順序:** グループ化対象フィールドの値がオブジェクトまたは配列の場合、`JSON.stringify` でシリアライズされます。同じプロパティを持つオブジェクトでも挿入順序が異なる場合（例: `{a:1, b:2}` と `{b:2, a:1}`）は**別のグループ**として扱われます。一貫したグルーピングが必要な場合は、挿入前にプロパティの順序を正規化してください。この挙動は複数次元形式の各次元にも個別に適用されます。
 
@@ -968,6 +987,7 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 | `groupBy` グループ内最大数  | 100,000 | 1 つの `groupBy()` グループに集約されるドキュメント数                       |
 | `distinct` 値最大数         | 100,000 | 1 回の `distinct()` が返す一意値の数                                        |
 | `countDistinct` 値最大数    | 100,000 | 1 回の `countDistinct()`、または 1 つの `$countDistinct` グループがカウントする一意値の数 |
+| `$addToSet` 値最大数        | 100,000 | 1 つの `$addToSet` グループが収集する一意値の数(`$countDistinct` と同じ上限)             |
 
 `$regex` パターンはさらに、破滅的バックトラッキングにつながる形状が事前スクリーニングされ、コンパイル前に `ValidationError` で拒否されます。上記制限を超えた場合は実行時に `ValidationError` がスローされます。このスクリーニングは 3 つの仕組みで構成されます:
 

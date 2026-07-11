@@ -147,3 +147,4 @@ All architectural decisions are recorded in [docs/adr/](../adr/):
 | [020](../adr/020-chain-sort-aware-aggregation.md)             | Chain-sort-aware aggregation (`distinct`/`groupBy` honor a preceding `.sort()`) |
 | [021](../adr/021-first-last-accumulators.md)                  | `$first` / `$last` groupBy accumulators                    |
 | [022](../adr/022-count-distinct.md)                            | `countDistinct` terminal and `$countDistinct` accumulator   |
+| [023](../adr/023-push-addtoset-accumulators.md)                | `$push` / `$addToSet` groupBy accumulators                  |

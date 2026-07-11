@@ -1342,6 +1342,377 @@ void test('computeGroupBy $countDistinct does not throw when different groups ea
   assert.equal(b.uniqueValues, half);
 });
 
+// ---------------------------------------------------------------------------
+// computeGroupBy — $push / $addToSet accumulators (ADR-023)
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy $push collects every present value in aggregation input order, preserving duplicates', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+    flDoc('3', { category: 'a', value: 'x' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $push: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].values, ['x', 'y', 'x']);
+});
+
+void test('computeGroupBy $push skips missing/undefined but includes null, preserving position', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a' }), // missing
+    flDoc('3', { category: 'a', value: undefined }),
+    flDoc('4', { category: 'a', value: null }),
+    flDoc('5', { category: 'a', value: 'y' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $push: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].values, ['x', null, 'y']);
+});
+
+void test('computeGroupBy $push returns [] for a group with no present values', () => {
+  const docs = [
+    flDoc('1', { category: 'a' }),
+    flDoc('2', { category: 'a', value: undefined }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $push: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].values, []);
+});
+
+void test('computeGroupBy $push (array groupBy form)', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+    flDoc('3', { category: 'b', value: 'z' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { values: { $push: 'value' } },
+    pathCache,
+  );
+  const a = result.find(
+    (entry) => (entry._key as Record<string, unknown>).category === 'a',
+  )!;
+  assert.deepEqual(a.values, ['x', 'y']);
+});
+
+void test('computeGroupBy $push with dot-notation field path', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: { nested: { deep: 'v1' } } }),
+    flDoc('2', { category: 'a', value: { nested: { deep: 'v2' } } }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { deepValues: { $push: 'value.nested.deep' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].deepValues, ['v1', 'v2']);
+});
+
+void test('computeGroupBy $push defensively clones object/array values: mutating the result does not affect the stored document', () => {
+  const storedObject = { tag: 'original' };
+  const storedArray = [1, 2, 3];
+  const docs = [
+    flDoc('1', { category: 'a', value: storedObject }),
+    flDoc('2', { category: 'a', value: storedArray }),
+  ];
+
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $push: 'value' } },
+    pathCache,
+  );
+
+  const values = result[0].values as unknown[];
+  assert.notEqual(values[0], storedObject);
+  (values[0] as Record<string, unknown>).tag = 'mutated';
+  assert.equal(storedObject.tag, 'original');
+
+  assert.notEqual(values[1], storedArray);
+  (values[1] as unknown[]).push(999);
+  assert.deepEqual(storedArray, [1, 2, 3]);
+});
+
+void test('computeGroupBy throws ValidationError when $push operand is not a string', () => {
+  const badOperands: [string, unknown][] = [
+    ['numeric', 123],
+    ['null', null],
+    ['boolean', true],
+    ['object', { field: 'value' }],
+  ];
+  for (const [label, operand] of badOperands) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          { result: { $push: operand } } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for $push with ${label} operand`,
+    );
+  }
+});
+
+void test('computeGroupBy rejects reserved/bad field path for $push accumulator', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        { result: { $push: '__proto__.x' } } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+    'Expected ValidationError for $push with reserved field path',
+  );
+});
+
+void test('computeGroupBy $push entry still enforces exactly-one-accumulator-key rule', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $push: 'value', $last: 'value' },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy $addToSet collects distinct values in first-occurrence order, per group', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+    flDoc('3', { category: 'a', value: 'x' }),
+    flDoc('4', { category: 'b', value: 'z' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $addToSet: 'value' } },
+    pathCache,
+  );
+  const a = result.find((entry) => entry._key === 'a')!;
+  const b = result.find((entry) => entry._key === 'b')!;
+  assert.deepEqual(a.values, ['x', 'y']);
+  assert.deepEqual(b.values, ['z']);
+});
+
+void test('computeGroupBy $addToSet skips missing/undefined, includes null as one distinct member, distinguishes null from the string "null"', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: null }),
+    flDoc('2', { category: 'a' }), // missing
+    flDoc('3', { category: 'a', value: undefined }),
+    flDoc('4', { category: 'a', value: null }), // duplicate null
+    flDoc('5', { category: 'a', value: 'null' }), // the string "null" is distinct from null
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $addToSet: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].values, [null, 'null']);
+});
+
+void test('computeGroupBy $addToSet dedupes object values by deep equality regardless of key order', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: { x: 1, y: 2 } }),
+    flDoc('2', { category: 'a', value: { y: 2, x: 1 } }), // same object, reordered keys -> one
+    flDoc('3', { category: 'a', value: { x: 1, y: 3 } }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $addToSet: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].values, [
+    { x: 1, y: 2 },
+    { x: 1, y: 3 },
+  ]);
+});
+
+void test('computeGroupBy $addToSet returns [] for a group with no present values', () => {
+  const docs = [
+    flDoc('1', { category: 'a' }),
+    flDoc('2', { category: 'a', value: undefined }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $addToSet: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].values, []);
+});
+
+void test('computeGroupBy $addToSet (array groupBy form)', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'x' }),
+    flDoc('3', { category: 'b', value: 'z' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { values: { $addToSet: 'value' } },
+    pathCache,
+  );
+  const a = result.find(
+    (entry) => (entry._key as Record<string, unknown>).category === 'a',
+  )!;
+  assert.deepEqual(a.values, ['x']);
+});
+
+void test('computeGroupBy $addToSet with dot-notation field path', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: { nested: { deep: 'v1' } } }),
+    flDoc('2', { category: 'a', value: { nested: { deep: 'v1' } } }),
+    flDoc('3', { category: 'a', value: { nested: { deep: 'v2' } } }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { deepValues: { $addToSet: 'value.nested.deep' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].deepValues, ['v1', 'v2']);
+});
+
+void test('computeGroupBy $addToSet defensively clones distinct object/array values: mutating the result does not affect the stored document', () => {
+  const storedObject = { tag: 'original' };
+  const docs = [
+    flDoc('1', { category: 'a', value: storedObject }),
+    flDoc('2', { category: 'a', value: storedObject }), // same reference; still one distinct value
+  ];
+
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { values: { $addToSet: 'value' } },
+    pathCache,
+  );
+
+  const values = result[0].values as unknown[];
+  assert.equal(values.length, 1);
+  assert.notEqual(values[0], storedObject);
+  (values[0] as Record<string, unknown>).tag = 'mutated';
+  assert.equal(storedObject.tag, 'original');
+});
+
+void test('computeGroupBy throws ValidationError when $addToSet operand is not a string', () => {
+  const badOperands: [string, unknown][] = [
+    ['numeric', 123],
+    ['null', null],
+    ['boolean', true],
+    ['object', { field: 'value' }],
+  ];
+  for (const [label, operand] of badOperands) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          { result: { $addToSet: operand } } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for $addToSet with ${label} operand`,
+    );
+  }
+});
+
+void test('computeGroupBy rejects reserved/bad field path for $addToSet accumulator', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        { result: { $addToSet: '__proto__.x' } } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+    'Expected ValidationError for $addToSet with reserved field path',
+  );
+});
+
+void test('computeGroupBy $addToSet entry still enforces exactly-one-accumulator-key rule', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $addToSet: 'value', $first: 'value' },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy $addToSet throws ValidationError when a single group exceeds MAX_DISTINCT_COUNT unique values (per-group cap)', () => {
+  // MAX_GROUP_DOCUMENTS === MAX_DISTINCT_COUNT at the current limits, so
+  // MAX_DISTINCT_COUNT + 1 unique values in one group also breaches
+  // MAX_GROUP_DOCUMENTS first -- mirroring the equivalent $countDistinct
+  // test above (spec 03 §1.3's documented precedence). Either way a
+  // ValidationError is thrown for the cap breach.
+  const docs = Array.from({ length: MAX_GROUP_DOCUMENTS + 1 }, (_, i) =>
+    flDoc(String(i), { category: 'a', value: i }),
+  );
+  assert.throws(
+    () =>
+      computeGroupBy(
+        docs,
+        'category',
+        { values: { $addToSet: 'value' } },
+        pathCache,
+      ),
+    {
+      constructor: ValidationError,
+      message: `groupBy group exceeds maximum of ${String(MAX_GROUP_DOCUMENTS)} documents per group.`,
+    },
+  );
+});
+
+void test('computeGroupBy $push and $addToSet coexist as separate output fields in the same accumulators object', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'x' }),
+    flDoc('3', { category: 'a', value: 'y' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { all: { $push: 'value' }, distinctValues: { $addToSet: 'value' } },
+    pathCache,
+  );
+  assert.deepEqual(result[0].all, ['x', 'x', 'y']);
+  assert.deepEqual(result[0].distinctValues, ['x', 'y']);
+});
+
 void test('validateGroupByField returns a defensive copy for the array form', () => {
   const input = ['category', 'score'];
   const validated = validateGroupByField(input);
