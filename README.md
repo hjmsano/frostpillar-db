@@ -27,7 +27,7 @@ frostpillar-cli         ← Command-line interface (planned)
 - **Fluent query API** — method chaining with `$`-operator filters and lazy execution (`find`, `sort`, `skip`, `limit`, `project`, `toArray`, `count`)
 - **CRUD + update operators** — `insert`, `insertMany`, `find`, `findOne`, `update`, `remove`, `count` with `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet`
 - **Upsert support** — `update` with `{ upsert: true }` inserts when no document matches
-- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy` (single- or multi-field) on filtered result sets
+- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy` (single- or multi-field, with `$first`/`$last` per-group value accumulators) on filtered result sets
 - **Change events** — `watch()` listeners for insert, update, and remove operations
 - **TTL (Time-To-Live)** — automatic document expiration per collection
 - **Async cursor** — iterate results with `for await...of`
@@ -689,7 +689,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 A document missing one of the requested fields contributes `null` for that dimension. A single-element array (e.g. `['dept']`) still produces an object `_key` — it is not collapsed to the scalar form used by the single-field form.
 
-Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`.
+Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`.
 
 `$median: 'fieldPath'` and `$percentile: { field: 'fieldPath', p: 0.95 }` mirror `.median()` / `.percentile()`: same interpolation, same `null`-when-empty behavior. `p` is **scalar-only** inside `groupBy` — request multiple percentiles as multiple output fields:
 
@@ -708,6 +708,15 @@ const result = await requests.find({}).groupBy('route', {
   jitterPop: { $stdDevPop: 'latencyMs' },
   jitterSamp: { $stdDevSamp: 'latencyMs' },
 });
+```
+
+`$first: 'fieldPath'` / `$last: 'fieldPath'` ([ADR-021](docs/adr/021-first-last-accumulators.md)) return the value of `fieldPath` on the first (resp. last) document of the group, in aggregation input order (ADR-020) — the chain's `.sort()` order when present, otherwise storage order. This is **positional-then-read**: the first/last document is selected first, and only then is the field read from it — not "the first/last document that has the field". If the selected document lacks the field, the result is `null`. Unlike the other accumulators, `$first`/`$last` return a value of **any type** (string, number, boolean, `null`, object, array); object/array values are defensively cloned before being returned. The canonical use case is "latest value per group":
+
+```ts
+const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
+  latestStatus: { $first: 'status' },
+});
+// [{ _key: 'u1', latestStatus: 'shipped' }, ...]
 ```
 
 > **Object key ordering:** When grouping by a field whose value is an object or array, keys are serialized via `JSON.stringify`. Objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) become **different** groups. Normalize property order before insertion if consistent grouping is required. This applies independently to each dimension in the multi-dimension form.

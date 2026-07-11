@@ -295,6 +295,8 @@ interface GroupAccumulator {
   $stdDevSamp?: string; // field path
   $variancePop?: string; // field path
   $varianceSamp?: string; // field path
+  $first?: string; // field path
+  $last?: string; // field path
 }
 
 type GroupAccumulators = Record<string, GroupAccumulator>;
@@ -328,6 +330,7 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
   - `$median: 'fieldPath'` — median of numeric values, i.e. the 50th percentile (`null` if none).
   - `$percentile: { field: 'fieldPath', p: 0.95 }` — the `p`-th percentile of numeric values, same interpolation as `.percentile()` (`null` if none). `p` is **scalar-only** inside `groupBy`; multiple percentiles of the same group are expressed as multiple output fields (see example below).
   - `$stdDevPop: 'fieldPath'` / `$stdDevSamp: 'fieldPath'` / `$variancePop: 'fieldPath'` / `$varianceSamp: 'fieldPath'` — population/sample standard deviation and variance of numeric values, computed via `computeWelford`, same `n = 0` → `null` / `n = 1` → pop `0`, samp `null` edge rules as the terminals (§1.3 above).
+  - `$first: 'fieldPath'` / `$last: 'fieldPath'` ([ADR-021](../adr/021-first-last-accumulators.md)) — the value of `fieldPath` on the first (resp. last) document of the group, in **aggregation input order** (§1.4): the chain's `.sort()` order when present, otherwise storage order. This is **positional-then-read**: the first/last document of the group is selected first, and only then is `fieldPath` read from it — it is not "the first/last document that has the field". If the selected document does not have `fieldPath`, the result is `null`. Unlike every other accumulator, `$first`/`$last` return the value **of any type** (string, number, boolean, `null`, object, or array) — the first non-numeric accumulators; they do not use `extractNumericValues`. Object/array values are defensively cloned via `cloneAccumulatorValue` (an exported alias of `cloneDocument`, `src/internal/objectUtils.ts`) before being placed in the result, since group documents are references to stored documents; primitives and `null` pass through unchanged. A group always has at least one document, so a selected document always exists.
 - **`$percentile` operand validation:** the operand must be a plain object with **exactly** the keys `field` (a valid field path, same eager validation as the other accumulators' field-path operands) and `p` (the same `[0, 1]` finite-number rule as the `.percentile()` terminal). Extra or missing keys throw `ValidationError`. The existing "exactly one accumulator key per entry" rule is unchanged — `$percentile` still occupies exactly one key of its `GroupAccumulator` entry.
 - Groups are returned in order of first occurrence of each key value, evaluated over the **aggregation input order** (§1.4): storage order, or `.sort()` order when a sort is specified on the chain (unchanged behavior when no sort is specified; unchanged for both single-field and multi-dimension forms).
 - Each group's internal document order (as consumed by order-sensitive accumulators) likewise follows the aggregation input order.
@@ -363,6 +366,17 @@ const result = await requests.find({}).groupBy('route', {
 });
 // → [
 //   { _key: '/api', p50: 12, p95: 48, p99: 90, medianLatency: 12 },
+// ]
+```
+
+**Example (`$first` / `$last`, latest status per user):**
+
+```ts
+const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
+  latestStatus: { $first: 'status' },
+});
+// → [
+//   { _key: 'u1', latestStatus: 'shipped' },
 // ]
 ```
 
@@ -445,6 +459,8 @@ Each terminal call triggers a fresh execution of the pipeline.
 
 **`n = 1` numeric value nuance:** when the numeric set has exactly one value (`n = 1`), `stdDevPop`/`variancePop` return `0` (a single point has zero dispersion from itself), while `stdDevSamp`/`varianceSamp` return `null` (the `n - 1 = 0` divisor makes the sample estimator undefined). This differs from the `n = 0` row above, where all four return `null`. See §1.3 for the full `n` → result table.
 
+**`$first` / `$last` nuance:** these accumulators are not numeric, so they are not represented as a column above. A group always has at least one document (there is no "no matching documents" case for an individual group — the row above already covers `groupBy` returning `[]` when nothing matches at all). Within a non-empty group, `$first`/`$last` return `null` only when the selected (first or last) document lacks the requested field path — not when the group as a whole lacks numeric values. See §1.3.
+
 ## 5. Error Handling
 
 | Error                 | Condition                                                                                                                                                                                                          |
@@ -458,7 +474,7 @@ Each terminal call triggers a fresh execution of the pipeline.
 | `ValidationError`     | `stdDevPop` / `stdDevSamp` / `variancePop` / `varianceSamp` field path fails the same eager validation as above, before any document is fetched                                                                    |
 | `ValidationError`     | `distinct` field path fails the same eager validation as above                                                                                                                                                     |
 | `ValidationError`     | `groupBy` field fails the same eager validation as above (string form), or, for the array form, `field` is an empty array, an array element is not a non-empty string or fails the same eager field-path validation, or the array contains duplicate field paths                                                                          |
-| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp` operands) fail the same eager validation                                            |
+| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last` operands) fail the same eager validation                          |
 | `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
 | `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
 | `ValidationError`     | `percentile` / `$percentile` `p` is not a finite scalar number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                        |

@@ -117,6 +117,8 @@ export interface GroupAccumulator {
   $stdDevSamp?: string;
   $variancePop?: string;
   $varianceSamp?: string;
+  $first?: string;
+  $last?: string;
 }
 
 export type GroupAccumulators = Record<string, GroupAccumulator>;

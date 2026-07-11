@@ -900,6 +900,212 @@ void test('computeGroupBy $stdDevPop entry still enforces exactly-one-accumulato
 // validateGroupByField — defensive copy semantics
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// computeGroupBy — $first / $last accumulators (ADR-021)
+// ---------------------------------------------------------------------------
+
+interface FirstLastDoc extends FrostpillarDocument {
+  category?: string;
+  value?: unknown;
+}
+
+const flDoc = (
+  id: string,
+  fields: Record<string, unknown>,
+): FrostpillarStoredDocument<FirstLastDoc> =>
+  ({ _id: id, ...fields }) as FrostpillarStoredDocument<FirstLastDoc>;
+
+void test('computeGroupBy $first/$last select value.of the first/last document in input (array) order', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'one' }),
+    flDoc('2', { category: 'a', value: 'two' }),
+    flDoc('3', { category: 'a', value: 'three' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { firstValue: { $first: 'value' }, lastValue: { $last: 'value' } },
+    pathCache,
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].firstValue, 'one');
+  assert.equal(result[0].lastValue, 'three');
+});
+
+void test('computeGroupBy $first/$last is positional-then-read: missing field on the selected document returns null even if another document in the group has it', () => {
+  // First doc lacks `value`, later docs have it -- $first must be null, NOT "one".
+  const docsMissingFirst = [
+    flDoc('1', { category: 'a' }),
+    flDoc('2', { category: 'a', value: 'two' }),
+  ];
+  const firstResult = computeGroupBy(
+    docsMissingFirst,
+    'category',
+    { firstValue: { $first: 'value' } },
+    pathCache,
+  );
+  assert.equal(firstResult[0].firstValue, null);
+
+  // Last doc lacks `value`, earlier docs have it -- $last must be null, NOT "one".
+  const docsMissingLast = [
+    flDoc('1', { category: 'a', value: 'one' }),
+    flDoc('2', { category: 'a' }),
+  ];
+  const lastResult = computeGroupBy(
+    docsMissingLast,
+    'category',
+    { lastValue: { $last: 'value' } },
+    pathCache,
+  );
+  assert.equal(lastResult[0].lastValue, null);
+});
+
+void test('computeGroupBy $first/$last on a single-document group returns that document\'s value for both', () => {
+  const docs = [flDoc('1', { category: 'a', value: 'only' })];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { firstValue: { $first: 'value' }, lastValue: { $last: 'value' } },
+    pathCache,
+  );
+  assert.equal(result[0].firstValue, 'only');
+  assert.equal(result[0].lastValue, 'only');
+});
+
+void test('computeGroupBy $first/$last support non-numeric value types: string, number, boolean, null, object, array', () => {
+  const cases: [string, unknown][] = [
+    ['string', 'hello'],
+    ['number', 42],
+    ['boolean', true],
+    ['null', null],
+    ['object', { nested: 1 }],
+    ['array', [1, 2, 3]],
+  ];
+
+  for (const [label, value] of cases) {
+    const docs = [flDoc('1', { category: 'a', value })];
+    const result = computeGroupBy(
+      docs,
+      'category',
+      { firstValue: { $first: 'value' } },
+      pathCache,
+    );
+    assert.deepEqual(result[0].firstValue, value, `Expected ${label} to round-trip`);
+  }
+});
+
+void test('computeGroupBy $first/$last defensively clone object/array values: mutating the result does not affect the stored document', () => {
+  const storedObject = { tag: 'original' };
+  const storedArray = [1, 2, 3];
+  const docs = [
+    flDoc('1', { category: 'a', value: storedObject }),
+    flDoc('2', { category: 'a', value: storedArray }),
+  ];
+
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { firstValue: { $first: 'value' }, lastValue: { $last: 'value' } },
+    pathCache,
+  );
+
+  assert.notEqual(result[0].firstValue, storedObject);
+  (result[0].firstValue as Record<string, unknown>).tag = 'mutated';
+  assert.equal(storedObject.tag, 'original');
+
+  assert.notEqual(result[0].lastValue, storedArray);
+  (result[0].lastValue as unknown[]).push(999);
+  assert.deepEqual(storedArray, [1, 2, 3]);
+});
+
+void test('computeGroupBy $first/$last (array groupBy form)', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: 'x' }),
+    flDoc('2', { category: 'a', value: 'y' }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { firstValue: { $first: 'value' }, lastValue: { $last: 'value' } },
+    pathCache,
+  );
+  assert.equal(result[0].firstValue, 'x');
+  assert.equal(result[0].lastValue, 'y');
+});
+
+void test('computeGroupBy $first/$last with dot-notation field path', () => {
+  const docs = [
+    flDoc('1', { category: 'a', value: { nested: { deep: 'v1' } } }),
+    flDoc('2', { category: 'a', value: { nested: { deep: 'v2' } } }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      firstDeep: { $first: 'value.nested.deep' },
+      lastDeep: { $last: 'value.nested.deep' },
+    },
+    pathCache,
+  );
+  assert.equal(result[0].firstDeep, 'v1');
+  assert.equal(result[0].lastDeep, 'v2');
+});
+
+void test('computeGroupBy throws ValidationError when $first/$last operand is not a string', () => {
+  const badOperands: [string, unknown][] = [
+    ['numeric', 123],
+    ['null', null],
+    ['boolean', true],
+    ['object', { field: 'value' }],
+  ];
+  for (const op of ['$first', '$last'] as const) {
+    for (const [label, operand] of badOperands) {
+      assert.throws(
+        () =>
+          computeGroupBy(
+            [],
+            'category',
+            { result: { [op]: operand } } as unknown as GroupAccumulators,
+            pathCache,
+          ),
+        ValidationError,
+        `Expected ValidationError for ${op} with ${label} operand`,
+      );
+    }
+  }
+});
+
+void test('computeGroupBy rejects reserved field path for $first/$last accumulators', () => {
+  for (const op of ['$first', '$last'] as const) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          { result: { [op]: '__proto__.x' } } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for ${op} with reserved field path`,
+    );
+  }
+});
+
+void test('computeGroupBy $first entry still enforces exactly-one-accumulator-key rule', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $first: 'value', $last: 'value' },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
 void test('validateGroupByField returns a defensive copy for the array form', () => {
   const input = ['category', 'score'];
   const validated = validateGroupByField(input);

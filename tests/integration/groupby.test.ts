@@ -803,6 +803,351 @@ void test('groupBy group order follows .sort() descending', async () => {
   }
 });
 
+// --- $first / $last accumulators (ADR-021) ---------------------------------
+
+interface EventDocument {
+  _id?: string;
+  userId: string;
+  status: string;
+  updatedAt: number;
+  meta?: { tags?: string[] } | null;
+}
+
+void test('groupBy $first/$last: latest status per user via .sort() descending (canonical ADR-021 example)', async () => {
+  const database = new Database({});
+  const events = database.collection<EventDocument>('events');
+
+  try {
+    await events.insertMany([
+      { _id: 'e1', userId: 'u1', status: 'created', updatedAt: 1 },
+      { _id: 'e2', userId: 'u1', status: 'shipped', updatedAt: 3 },
+      { _id: 'e3', userId: 'u1', status: 'paid', updatedAt: 2 },
+      { _id: 'e4', userId: 'u2', status: 'created', updatedAt: 1 },
+    ]);
+
+    const result = await events
+      .find({})
+      .sort({ updatedAt: -1 })
+      .groupBy('userId', {
+        latestStatus: { $first: 'status' },
+      });
+
+    const u1 = result.find((group) => group._key === 'u1');
+    assert.ok(u1);
+    // Descending by updatedAt: e2(3,shipped), e3(2,paid), e1(1,created) -> first is e2.
+    assert.equal(u1.latestStatus, 'shipped');
+
+    const u2 = result.find((group) => group._key === 'u2');
+    assert.ok(u2);
+    assert.equal(u2.latestStatus, 'created');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: first event per session via .sort() ascending', async () => {
+  const database = new Database({});
+  const events = database.collection<EventDocument>('events');
+
+  try {
+    await events.insertMany([
+      { _id: 'e1', userId: 's1', status: 'created', updatedAt: 5 },
+      { _id: 'e2', userId: 's1', status: 'shipped', updatedAt: 1 },
+      { _id: 'e3', userId: 's1', status: 'paid', updatedAt: 3 },
+    ]);
+
+    const result = await events
+      .find({})
+      .sort({ updatedAt: 1 })
+      .groupBy('userId', {
+        earliestStatus: { $first: 'status' },
+        latestStatus: { $last: 'status' },
+      });
+
+    assert.equal(result[0].earliestStatus, 'shipped'); // updatedAt=1
+    assert.equal(result[0].latestStatus, 'created'); // updatedAt=5
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: multi-key .sort() determines group document order', async () => {
+  const database = new Database({});
+  const events = database.collection<EventDocument>('events');
+
+  try {
+    await events.insertMany([
+      { _id: 'e1', userId: 'u1', status: 'a', updatedAt: 1 },
+      { _id: 'e2', userId: 'u1', status: 'b', updatedAt: 1 },
+      { _id: 'e3', userId: 'u1', status: 'c', updatedAt: 2 },
+    ]);
+
+    // Sort by updatedAt asc, then _id desc: within updatedAt=1, e2 before e1.
+    const result = await events
+      .find({})
+      .sort([
+        ['updatedAt', 1],
+        ['_id', -1],
+      ])
+      .groupBy('userId', {
+        firstStatus: { $first: 'status' },
+        lastStatus: { $last: 'status' },
+      });
+
+    assert.equal(result[0].firstStatus, 'b');
+    assert.equal(result[0].lastStatus, 'c');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last without .sort() uses storage order', async () => {
+  const database = new Database({});
+  const events = database.collection<EventDocument>('events');
+
+  try {
+    await events.insertMany([
+      { _id: 'e1', userId: 'u1', status: 'a', updatedAt: 1 },
+      { _id: 'e2', userId: 'u1', status: 'b', updatedAt: 2 },
+      { _id: 'e3', userId: 'u1', status: 'c', updatedAt: 3 },
+    ]);
+
+    const result = await events.find({}).groupBy('userId', {
+      firstStatus: { $first: 'status' },
+      lastStatus: { $last: 'status' },
+    });
+
+    // Storage order (insertion order for the memory backend): a, b, c.
+    assert.equal(result[0].firstStatus, 'a');
+    assert.equal(result[0].lastStatus, 'c');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last tie-stability: equal sort keys keep storage order', async () => {
+  const database = new Database({});
+  const items = database.collection<GroupRankedDocument>('items');
+
+  try {
+    await items.insertMany([
+      { _id: 'A', group: 'p', rank: 1 },
+      { _id: 'B', group: 'p', rank: 1 }, // tie with A
+      { _id: 'C', group: 'p', rank: 2 },
+    ]);
+
+    const result = await items
+      .find({})
+      .sort({ rank: 1 })
+      .groupBy('group', {
+        firstId: { $first: '_id' },
+        lastId: { $last: '_id' },
+      });
+
+    // Ties (A, B at rank 1) keep storage order -> A first; C is rank 2 -> last.
+    assert.equal(result[0].firstId, 'A');
+    assert.equal(result[0].lastId, 'C');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: positional-then-read -- missing field on the selected document returns null even when another document in the group has it', async () => {
+  const database = new Database({});
+  const events = database.collection<EventDocument>('events');
+
+  try {
+    // Sorted ascending by updatedAt: e1 (no status) is first, e2 (status='b') is second.
+    await events.insertMany([
+      { _id: 'e1', userId: 'u1', updatedAt: 1 } as EventDocument,
+      { _id: 'e2', userId: 'u1', status: 'b', updatedAt: 2 },
+    ]);
+
+    const result = await events
+      .find({})
+      .sort({ updatedAt: 1 })
+      .groupBy('userId', {
+        firstStatus: { $first: 'status' },
+      });
+
+    // e1 is positionally first but lacks `status` -> null, NOT "b".
+    assert.equal(result[0].firstStatus, null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: non-numeric value types (boolean, null, object, array)', async () => {
+  const database = new Database({});
+  const items = database.collection<{
+    _id?: string;
+    category: string;
+    flag: boolean;
+    tag: string | null;
+    meta: { level: number };
+    list: number[];
+  }>('items');
+
+  try {
+    await items.insertMany([
+      {
+        _id: 'i1',
+        category: 'a',
+        flag: true,
+        tag: null,
+        meta: { level: 1 },
+        list: [1, 2],
+      },
+    ]);
+
+    const result = await items.find({}).groupBy('category', {
+      firstFlag: { $first: 'flag' },
+      firstTag: { $first: 'tag' },
+      firstMeta: { $first: 'meta' },
+      firstList: { $first: 'list' },
+    });
+
+    assert.equal(result[0].firstFlag, true);
+    assert.equal(result[0].firstTag, null);
+    assert.deepEqual(result[0].firstMeta, { level: 1 });
+    assert.deepEqual(result[0].firstList, [1, 2]);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: mutating a returned object/array value does not affect the stored document', async () => {
+  const database = new Database({});
+  const items = database.collection<{
+    _id?: string;
+    category: string;
+    meta: { tags: string[] };
+  }>('items');
+
+  try {
+    await items.insert({
+      _id: 'i1',
+      category: 'a',
+      meta: { tags: ['x', 'y'] },
+    });
+
+    const result = await items.find({}).groupBy('category', {
+      firstMeta: { $first: 'meta' },
+    });
+
+    const firstMeta = result[0].firstMeta as { tags: string[] };
+    firstMeta.tags.push('MUTATED');
+    firstMeta.tags[0] = 'MUTATED';
+
+    const stored = await items.find({ _id: 'i1' }).toArray();
+    assert.deepEqual(stored[0]?.meta, { tags: ['x', 'y'] });
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: string and array groupBy forms', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const stringForm = await users.find({}).groupBy('dept', {
+      firstName: { $first: 'name' },
+    });
+    const eng = stringForm.find((group) => group._key === 'eng');
+    assert.ok(eng);
+    assert.equal(eng.firstName, 'Alice');
+
+    const arrayForm = await users.find({}).groupBy(['dept'], {
+      firstName: { $first: 'name' },
+      lastName: { $last: 'name' },
+    });
+    const engArray = arrayForm.find(
+      (group) => (group._key as Record<string, unknown>).dept === 'eng',
+    );
+    assert.ok(engArray);
+    assert.equal(engArray.firstName, 'Alice');
+    assert.equal(engArray.lastName, 'Erin');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last operand validation: non-string operand rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const op of ['$first', '$last'] as const) {
+      for (const badOperand of [123, null, true, { field: 'name' }]) {
+        await assert.rejects(
+          () =>
+            users.find().groupBy('dept', {
+              result: { [op]: badOperand },
+            } as unknown as GroupAccumulators),
+          ValidationError,
+          `Expected ValidationError for ${op} with operand ${JSON.stringify(badOperand)}`,
+        );
+      }
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last operand validation: bad field path rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const op of ['$first', '$last'] as const) {
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { [op]: '__proto__.x' },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for ${op} with reserved field path`,
+      );
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { [op]: '' },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for ${op} with empty field path`,
+      );
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $first/$last: exactly-one-accumulator-key rule still enforced', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $first: 'name', $last: 'name' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
 void test('groupBy preserves storage order for equal sort keys (tie stability)', async () => {
   const database = new Database({});
   const items = database.collection<GroupRankedDocument>('items');

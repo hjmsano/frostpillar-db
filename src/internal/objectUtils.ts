@@ -56,6 +56,18 @@ export const cloneDocument = <T>(value: T): T => {
 };
 
 /**
+ * Defensively clones an accumulator's result value before it is placed into
+ * a `groupBy` output entry (ADR-021). Group documents are references to
+ * stored documents, so returning an object/array value verbatim would let a
+ * caller mutate stored data through the result. A thin, semantically named
+ * alias of `cloneDocument`: primitives (including `null`/`undefined`) pass
+ * through unchanged, objects/arrays are deep-cloned. Introduced for
+ * `$first`/`$last` (ADR-021); reused by `$push`/`$addToSet` (ADR-023).
+ */
+export const cloneAccumulatorValue = (value: unknown): unknown =>
+  cloneDocument(value);
+
+/**
  * Returns `true` when an object has at least one own enumerable key.
  * Uses a `for…in` + `hasOwnProperty` loop so no intermediate array is
  * allocated, unlike `Object.keys(obj).length > 0`.
