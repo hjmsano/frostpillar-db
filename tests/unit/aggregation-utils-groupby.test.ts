@@ -113,46 +113,37 @@ void test('computeGroupBy throws on unknown accumulator key', () => {
 });
 
 void test('computeGroupBy throws ValidationError when accumulator operand is not a string', () => {
-  for (const op of ['$sum', '$avg', '$min', '$max', '$median'] as const) {
-    assert.throws(
-      () =>
-        computeGroupBy(
-          [],
-          'category',
-          {
-            result: { [op]: 123 },
-          } as unknown as GroupAccumulators,
-          pathCache,
-        ),
-      ValidationError,
-      `Expected ValidationError for ${op} with numeric operand`,
-    );
-    assert.throws(
-      () =>
-        computeGroupBy(
-          [],
-          'category',
-          {
-            result: { [op]: null },
-          } as unknown as GroupAccumulators,
-          pathCache,
-        ),
-      ValidationError,
-      `Expected ValidationError for ${op} with null operand`,
-    );
-    assert.throws(
-      () =>
-        computeGroupBy(
-          [],
-          'category',
-          {
-            result: { [op]: true },
-          } as unknown as GroupAccumulators,
-          pathCache,
-        ),
-      ValidationError,
-      `Expected ValidationError for ${op} with boolean operand`,
-    );
+  const ops = [
+    '$sum',
+    '$avg',
+    '$min',
+    '$max',
+    '$median',
+    '$stdDevPop',
+    '$stdDevSamp',
+    '$variancePop',
+    '$varianceSamp',
+  ] as const;
+  const badOperands: [string, unknown][] = [
+    ['numeric', 123],
+    ['null', null],
+    ['boolean', true],
+  ];
+
+  for (const op of ops) {
+    for (const [label, operand] of badOperands) {
+      assert.throws(
+        () =>
+          computeGroupBy(
+            [],
+            'category',
+            { result: { [op]: operand } } as unknown as GroupAccumulators,
+            pathCache,
+          ),
+        ValidationError,
+        `Expected ValidationError for ${op} with ${label} operand`,
+      );
+    }
   }
 });
 
@@ -763,6 +754,141 @@ void test('computeGroupBy $percentile entry still enforces exactly-one-accumulat
             $percentile: { field: 'score', p: 0.5 },
             $median: 'score',
           },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// computeGroupBy — $stdDevPop / $stdDevSamp / $variancePop / $varianceSamp
+// accumulators
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy computes $stdDevPop/$stdDevSamp/$variancePop/$varianceSamp per group (string groupBy form)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 2 }),
+    doc('2', { category: 'a', score: 4 }),
+    doc('3', { category: 'a', score: 4 }),
+    doc('4', { category: 'a', score: 4 }),
+    doc('5', { category: 'a', score: 5 }),
+    doc('6', { category: 'a', score: 5 }),
+    doc('7', { category: 'a', score: 7 }),
+    doc('8', { category: 'a', score: 9 }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      sdPop: { $stdDevPop: 'score' },
+      sdSamp: { $stdDevSamp: 'score' },
+      varPop: { $variancePop: 'score' },
+      varSamp: { $varianceSamp: 'score' },
+    },
+    pathCache,
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].varPop, 4);
+  assert.equal(result[0].sdPop, 2);
+  const varSamp = result[0].varSamp as number;
+  assert.ok(Math.abs(varSamp - 32 / 7) < 1e-9);
+  const sdSamp = result[0].sdSamp as number;
+  assert.ok(Math.abs(sdSamp - Math.sqrt(32 / 7)) < 1e-9);
+});
+
+void test('computeGroupBy computes $variancePop per group (array groupBy form)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 1 }),
+    doc('2', { category: 'a', score: 2 }),
+    doc('3', { category: 'a', score: 3 }),
+    doc('4', { category: 'a', score: 4 }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { varPop: { $variancePop: 'score' } },
+    pathCache,
+  );
+  assert.equal(result[0].varPop, 1.25);
+});
+
+void test('computeGroupBy $stdDevPop/$stdDevSamp/$variancePop/$varianceSamp return null when a group has no numeric values (n=0)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 'x' }),
+    doc('2', { category: 'a', score: null }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      sdPop: { $stdDevPop: 'score' },
+      sdSamp: { $stdDevSamp: 'score' },
+      varPop: { $variancePop: 'score' },
+      varSamp: { $varianceSamp: 'score' },
+    },
+    pathCache,
+  );
+  assert.deepEqual(result[0], {
+    _key: 'a',
+    sdPop: null,
+    sdSamp: null,
+    varPop: null,
+    varSamp: null,
+  });
+});
+
+void test('computeGroupBy $stdDevPop/$variancePop is 0 and $stdDevSamp/$varianceSamp is null for a single-value group (n=1)', () => {
+  const docs = [doc('1', { category: 'a', score: 42 })];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      sdPop: { $stdDevPop: 'score' },
+      sdSamp: { $stdDevSamp: 'score' },
+      varPop: { $variancePop: 'score' },
+      varSamp: { $varianceSamp: 'score' },
+    },
+    pathCache,
+  );
+  assert.deepEqual(result[0], {
+    _key: 'a',
+    sdPop: 0,
+    sdSamp: null,
+    varPop: 0,
+    varSamp: null,
+  });
+});
+
+void test('computeGroupBy rejects reserved field path for $stdDevPop/$stdDevSamp/$variancePop/$varianceSamp accumulators', () => {
+  for (const op of [
+    '$stdDevPop',
+    '$stdDevSamp',
+    '$variancePop',
+    '$varianceSamp',
+  ] as const) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          { result: { [op]: '__proto__.x' } } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for ${op} with reserved field path`,
+    );
+  }
+});
+
+void test('computeGroupBy $stdDevPop entry still enforces exactly-one-accumulator-key rule', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $stdDevPop: 'score', $variancePop: 'score' },
         } as unknown as GroupAccumulators,
         pathCache,
       ),

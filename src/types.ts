@@ -113,6 +113,10 @@ export interface GroupAccumulator {
   $max?: string;
   $median?: string;
   $percentile?: { field: string; p: number };
+  $stdDevPop?: string;
+  $stdDevSamp?: string;
+  $variancePop?: string;
+  $varianceSamp?: string;
 }
 
 export type GroupAccumulators = Record<string, GroupAccumulator>;

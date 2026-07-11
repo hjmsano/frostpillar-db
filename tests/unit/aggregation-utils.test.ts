@@ -5,6 +5,9 @@ import { ValidationError } from '../../src/errors.js';
 import {
   computeDistinct,
   computePercentile,
+  computeStdDev,
+  computeVariance,
+  computeWelford,
   extractNumericValues,
   validateAggregationField,
   validatePercentile,
@@ -339,5 +342,101 @@ void test('validatePercentile rejects arrays', () => {
   assert.throws(
     () => validatePercentile([0.5] as unknown as number),
     ValidationError,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// computeWelford
+// ---------------------------------------------------------------------------
+
+void test('computeWelford returns count 0 / mean 0 / m2 0 for an empty array', () => {
+  const result = computeWelford([]);
+  assert.deepEqual(result, { count: 0, mean: 0, m2: 0 });
+});
+
+void test('computeWelford computes count, mean, and m2 for a known set', () => {
+  // [2, 4, 4, 4, 5, 5, 7, 9]: mean = 5, sum of squared deviations = 32
+  const values = [2, 4, 4, 4, 5, 5, 7, 9];
+  const result = computeWelford(values);
+  assert.equal(result.count, 8);
+  assert.ok(Math.abs(result.mean - 5) < 1e-9);
+  assert.ok(Math.abs(result.m2 - 32) < 1e-9);
+});
+
+void test('computeWelford does not mutate the input array', () => {
+  const values = [3, 1, 2];
+  const copy = [...values];
+  computeWelford(values);
+  assert.deepEqual(values, copy);
+});
+
+// ---------------------------------------------------------------------------
+// computeVariance / computeStdDev — hand-computed correctness
+// ---------------------------------------------------------------------------
+
+void test('computeVariance computes population variance for a known set', () => {
+  // [2, 4, 4, 4, 5, 5, 7, 9]: population variance = 32 / 8 = 4
+  const values = [2, 4, 4, 4, 5, 5, 7, 9];
+  assert.equal(computeVariance(values, false), 4);
+});
+
+void test('computeStdDev computes population standard deviation for a known set', () => {
+  const values = [2, 4, 4, 4, 5, 5, 7, 9];
+  assert.equal(computeStdDev(values, false), 2);
+});
+
+void test('computeVariance computes sample variance for a known set', () => {
+  // [2, 4, 4, 4, 5, 5, 7, 9]: sample variance = 32 / 7
+  const values = [2, 4, 4, 4, 5, 5, 7, 9];
+  assert.ok(Math.abs(computeVariance(values, true)! - 32 / 7) < 1e-9);
+});
+
+void test('computeStdDev computes sample standard deviation for a known set', () => {
+  const values = [2, 4, 4, 4, 5, 5, 7, 9];
+  assert.ok(Math.abs(computeStdDev(values, true)! - Math.sqrt(32 / 7)) < 1e-9);
+});
+
+void test('computeVariance and computeStdDev return null for all four when n=0', () => {
+  assert.equal(computeVariance([], false), null);
+  assert.equal(computeVariance([], true), null);
+  assert.equal(computeStdDev([], false), null);
+  assert.equal(computeStdDev([], true), null);
+});
+
+void test('computeVariance and computeStdDev: n=1 gives pop 0 and samp null', () => {
+  assert.equal(computeVariance([42], false), 0);
+  assert.equal(computeStdDev([42], false), 0);
+  assert.equal(computeVariance([42], true), null);
+  assert.equal(computeStdDev([42], true), null);
+});
+
+void test('computeVariance: pop vs samp divisor difference for n>=2', () => {
+  // [1, 2, 3, 4]: mean=2.5, sum sq dev = 5
+  // pop = 5/4 = 1.25, samp = 5/3
+  const values = [1, 2, 3, 4];
+  assert.equal(computeVariance(values, false), 1.25);
+  assert.ok(Math.abs(computeVariance(values, true)! - 5 / 3) < 1e-9);
+  // samp must always be >= pop for n>=2 (dividing by a smaller number)
+  assert.ok(computeVariance(values, true)! > computeVariance(values, false)!);
+});
+
+void test('computeVariance does not mutate the input array', () => {
+  const values = [3, 1, 2];
+  const copy = [...values];
+  computeVariance(values, false);
+  computeVariance(values, true);
+  assert.deepEqual(values, copy);
+});
+
+void test('computeVariance is numerically stable for large-magnitude, low-variance data (Welford anti-cancellation regression)', () => {
+  // Naive E[x^2] - E[x]^2 catastrophically cancels for values near 1e9;
+  // Welford must not return 0 or a negative variance here.
+  const values = [1e9, 1e9 + 1, 1e9 + 2];
+  const pop = computeVariance(values, false);
+  assert.ok(pop !== null);
+  assert.ok(pop > 0, `expected positive variance, got ${String(pop)}`);
+  assert.ok(
+    Math.abs(pop - 2 / 3) < 1e-6,
+    `expected variancePop ~= 2/3, got ${String(pop)}`,
   );
 });

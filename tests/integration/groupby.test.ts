@@ -555,6 +555,152 @@ void test('groupBy $percentile operand validation errors', async () => {
   }
 });
 
+void test('groupBy $stdDevPop/$stdDevSamp/$variancePop/$varianceSamp accumulators (string groupBy form)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users.find({}).groupBy('dept', {
+      sdPop: { $stdDevPop: 'salary' },
+      sdSamp: { $stdDevSamp: 'salary' },
+      varPop: { $variancePop: 'salary' },
+      varSamp: { $varianceSamp: 'salary' },
+    });
+
+    // eng salaries: u1=100, u2=80, u3='90' (string, skipped), u5=200 -> [80, 100, 200]
+    // mean = 380/3, pop variance and sample variance computed via Welford.
+    const eng = result.find((group) => group._key === 'eng');
+    assert.ok(eng);
+    const mean = (80 + 100 + 200) / 3;
+    const sumSqDev =
+      (80 - mean) ** 2 + (100 - mean) ** 2 + (200 - mean) ** 2;
+    const expectedVarPop = sumSqDev / 3;
+    const expectedVarSamp = sumSqDev / 2;
+    assert.ok(Math.abs((eng.varPop as number) - expectedVarPop) < 1e-9);
+    assert.ok(Math.abs((eng.varSamp as number) - expectedVarSamp) < 1e-9);
+    assert.ok(
+      Math.abs((eng.sdPop as number) - Math.sqrt(expectedVarPop)) < 1e-9,
+    );
+    assert.ok(
+      Math.abs((eng.sdSamp as number) - Math.sqrt(expectedVarSamp)) < 1e-9,
+    );
+
+    // design has a single active member (u4) with no salary field -> n=0 -> null for all four.
+    const design = result.find((group) => group._key === 'design');
+    assert.ok(design);
+    assert.equal(design.sdPop, null);
+    assert.equal(design.sdSamp, null);
+    assert.equal(design.varPop, null);
+    assert.equal(design.varSamp, null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $variancePop/$varianceSamp n=1 edge: pop is 0, samp is null', async () => {
+  const database = new Database({});
+  const single = database.collection<{
+    _id?: string;
+    category: string;
+    score: number;
+  }>('single');
+
+  try {
+    // A group with exactly one numeric value (n=1): population variance/stddev
+    // is 0 (zero dispersion from itself), sample variance/stddev is null
+    // (n-1=0 divisor is undefined).
+    await single.insert({ _id: 's1', category: 'solo', score: 42 });
+
+    const result = await single.find({}).groupBy('category', {
+      sdPop: { $stdDevPop: 'score' },
+      sdSamp: { $stdDevSamp: 'score' },
+      varPop: { $variancePop: 'score' },
+      varSamp: { $varianceSamp: 'score' },
+    });
+    assert.equal(result[0].sdPop, 0);
+    assert.equal(result[0].varPop, 0);
+    assert.equal(result[0].sdSamp, null);
+    assert.equal(result[0].varSamp, null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $variancePop accumulator (multi-dimension array groupBy form)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users.find({}).groupBy(['dept', 'profile.city'], {
+      varPop: { $variancePop: 'salary' },
+    });
+
+    const engTokyo = result.find((group) => {
+      const key = group._key as Record<string, unknown>;
+      return key.dept === 'eng' && key['profile.city'] === 'Tokyo';
+    });
+    assert.ok(engTokyo);
+    // u1=100 (Tokyo), u3='90' (Tokyo, skipped), u5=200 (Tokyo) -> [100, 200]
+    // mean=150, pop variance = ((100-150)^2 + (200-150)^2) / 2 = 2500
+    assert.equal(engTokyo.varPop, 2500);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy accumulator field path validation errors for $stdDevPop/$stdDevSamp/$variancePop/$varianceSamp', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const op of [
+      '$stdDevPop',
+      '$stdDevSamp',
+      '$variancePop',
+      '$varianceSamp',
+    ] as const) {
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { [op]: '__proto__.x' },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for ${op} with reserved field path`,
+      );
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy accumulator entry with $stdDevPop and another key still enforces exactly-one-key rule', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: {
+            $stdDevPop: 'salary',
+            $variancePop: 'salary',
+          },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
 void test('groupBy respects filter', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');
