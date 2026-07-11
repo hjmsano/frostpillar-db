@@ -43,13 +43,13 @@ frostpillar-cli         ← コマンドラインインターフェース（計�
 **1. インストール**
 
 ```bash
-npm install frostpillar-db
+npm install @frostpillar/frostpillar-db
 ```
 
 **2. `example.mjs` を作成**
 
 ```js
-import { Database } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
 
 const db = new Database({});
 const users = db.collection('users');
@@ -215,7 +215,7 @@ node example.mjs
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
 
 const db = new Database({});
 ```
@@ -343,7 +343,7 @@ import type {
   CapacityConfig,
   DatastoreKeyDefinition,
   IndexConfig,
-} from 'frostpillar-db';
+} from '@frostpillar/frostpillar-db';
 
 // 容量制限 — 10 MB 上限、FIFO 退避
 const logs = db.collection('logs', {
@@ -767,8 +767,8 @@ frostpillar-db はすべての永続化を frostpillar-storage-engine に委譲�
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from 'frostpillar-db';
-import { fileDriver } from 'frostpillar-db/drivers/file';
+import { Database } from '@frostpillar/frostpillar-db';
+import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
   driver: fileDriver({ filePath: './data/myapp.fpdb' }),
@@ -798,8 +798,8 @@ const db = new Database({
 デフォルトでは、各ドキュメントのサイズは 1 MB に制限されています。`payloadLimits` オプションでドキュメントごとのバリデーション制限をカスタマイズできます:
 
 ```ts
-import { Database } from 'frostpillar-db';
-import type { PayloadLimitsConfig } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
+import type { PayloadLimitsConfig } from '@frostpillar/frostpillar-db';
 
 const db = new Database({
   payloadLimits: {
@@ -902,8 +902,8 @@ frostpillar-db はデフォルトで B+ ツリーインデックスの**自動�
 固定ノードサイズを使用する場合は、`index` オプションを指定します:
 
 ```ts
-import { Database } from 'frostpillar-db';
-import type { IndexConfig } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
+import type { IndexConfig } from '@frostpillar/frostpillar-db';
 
 // 自動スケーリング（デフォルト — 設定不要）
 const db = new Database();
@@ -930,7 +930,7 @@ const dbFixed = new Database({
 **Node.js / TypeScript:**
 
 ```ts
-import { FrostpillarError } from 'frostpillar-db';
+import { FrostpillarError } from '@frostpillar/frostpillar-db';
 
 try {
   await users.insert({ _id: 'duplicate', name: 'Test' });

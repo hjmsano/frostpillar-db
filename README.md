@@ -43,13 +43,13 @@ frostpillar-cli         ← Command-line interface (planned)
 **1. Install**
 
 ```bash
-npm install frostpillar-db
+npm install @frostpillar/frostpillar-db
 ```
 
 **2. Create `example.mjs`**
 
 ```js
-import { Database } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
 
 const db = new Database({});
 const users = db.collection('users');
@@ -215,7 +215,7 @@ Both bundles are available from [GitHub Releases](https://github.com/hjmsano/fro
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
 
 const db = new Database({});
 ```
@@ -343,7 +343,7 @@ import type {
   CapacityConfig,
   DatastoreKeyDefinition,
   IndexConfig,
-} from 'frostpillar-db';
+} from '@frostpillar/frostpillar-db';
 
 // Capacity — cap a collection to 10 MB with FIFO eviction
 const logs = db.collection('logs', {
@@ -767,8 +767,8 @@ frostpillar-db delegates all persistence to frostpillar-storage-engine. Pass a d
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from 'frostpillar-db';
-import { fileDriver } from 'frostpillar-db/drivers/file';
+import { Database } from '@frostpillar/frostpillar-db';
+import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
   driver: fileDriver({ filePath: './data/myapp.fpdb' }),
@@ -798,8 +798,8 @@ See the [frostpillar-storage-engine documentation](https://github.com/hjmsano/fr
 By default, each document is limited to 1 MB. You can customize per-document validation limits via the `payloadLimits` option:
 
 ```ts
-import { Database } from 'frostpillar-db';
-import type { PayloadLimitsConfig } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
+import type { PayloadLimitsConfig } from '@frostpillar/frostpillar-db';
 
 const db = new Database({
   payloadLimits: {
@@ -902,8 +902,8 @@ By default, frostpillar-db enables **auto-scale** for B+ tree indexes — node c
 To use fixed node sizes instead, pass an `index` option:
 
 ```ts
-import { Database } from 'frostpillar-db';
-import type { IndexConfig } from 'frostpillar-db';
+import { Database } from '@frostpillar/frostpillar-db';
+import type { IndexConfig } from '@frostpillar/frostpillar-db';
 
 // Auto-scale (default — no configuration needed)
 const db = new Database();
@@ -930,7 +930,7 @@ All errors extend `FrostpillarError`.
 **Node.js / TypeScript:**
 
 ```ts
-import { FrostpillarError } from 'frostpillar-db';
+import { FrostpillarError } from '@frostpillar/frostpillar-db';
 
 try {
   await users.insert({ _id: 'duplicate', name: 'Test' });
