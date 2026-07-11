@@ -21,7 +21,6 @@ Per [ADR-005](./005-scan-based-query-execution.md), all aggregation runs as a si
 
 ```ts
 percentile(field: string, p: number): Promise<number | null>;
-percentile(field: string, p: number[]): Promise<(number | null)[]>;
 median(field: string): Promise<number | null>;
 ```
 
@@ -54,15 +53,11 @@ Properties:
 
 **Rejected — approximate algorithms (t-digest, KLL):** these exist to bound memory on unbounded streams. Frostpillar's aggregation is already an in-memory scan capped at `maxMatchedDocuments`; an exact `O(n log n)` sort of at most ~100,000 numbers is negligible, and exactness is a simpler contract to document and test.
 
-### 4. Multi-percentile form: `p: number[]`
+### 4. Scalar-only terminal API
 
-`percentile('latencyMs', [0.5, 0.95, 0.99])` returns `(number | null)[]` positionally matching the input array. Rationale: fetching the filtered set is the dominant cost of every aggregation terminal, and requesting several percentiles of one field is the canonical usage (p50/p95/p99). The array form fetches and sorts **once**. This mirrors MongoDB's `$percentile` (which takes an array of `p` values) and follows the `string | string[]` overload precedent set by `groupBy` ([ADR-017](./017-multi-dimension-group-by.md)).
+`percentile` accepts one `p` value and always returns one `number | null`. Callers request multiple percentiles with separate terminal calls. Each call performs its own filtered-set execution and sort, consistent with every other `ResultChain` terminal.
 
-- The array must be non-empty; every element is validated by the same rule as scalar `p`. Duplicates are allowed (harmless, positionally faithful).
-- When no numeric values exist, every position is `null` (the scalar rule applied positionally).
-- The array is defensively copied synchronously before the fetch `await`, so caller mutation during the await cannot change the computed set — the same pattern as `validateGroupByField`.
-
-**Rejected — scalar-only `p`:** forces one full datastore fetch per percentile for the most common usage pattern.
+**Rejected — overloading `p` with `number[]`:** makes the return shape depend on the argument type and requires a separate shared-sort execution path. Although that path can reduce repeated work for p50/p95/p99 requests, a single predictable return shape is easier to understand and maintain. The additional datastore work from separate calls is accepted for this feature. If real usage later demonstrates a need, an explicitly plural `percentiles(field, pValues)` method can add batch computation without changing the scalar method's contract.
 
 ### 5. New `groupBy` accumulators: `$median` and `$percentile`
 
@@ -105,16 +100,17 @@ await requests.find({}).groupBy('route', {
 
 - Parity with the standard database toolbox (SQL `PERCENTILE_CONT`, MongoDB `$percentile`/`$median`) for the most common distribution questions; `avg` is no longer the only central-tendency tool.
 - `median` comes for free once `percentile` exists.
-- The array-`p` form computes p50/p95/p99 in one fetch and one sort.
+- `percentile` has one input shape and one return shape, matching the scalar-only `$percentile` accumulator.
 - Reuses the existing extraction (`extractNumericValues`) and validation building blocks; value-selection semantics are identical to `sum`/`avg`/`min`/`max`, so the spec's "empty results" table extends without special cases.
 
 ### Negative
 
-- `percentile`'s return type depends on the overload chosen (`number | null` vs `(number | null)[]`) — the same polymorphism trade-off accepted in ADR-017.
+- Computing several percentiles requires separate terminal calls, so the filtered set is fetched and sorted once per requested percentile.
 - `$percentile` introduces the first object-shaped accumulator operand, so `validateAccumulators` can no longer assume "operand is a field-path string" uniformly.
 - Percentile accumulators sort each group's values: `groupBy` cost gains an `O(Σ nᵢ log nᵢ)` term per percentile accumulator. Bounded by the existing group limits; acceptable for an in-memory engine.
 
 ## Future Considerations
 
 - **`method` option** (`'linear' | 'nearest'`) on `percentile` and `$percentile`, mirroring `PERCENTILE_CONT` vs `PERCENTILE_DISC`, if discrete percentiles are requested. The linear default chosen here matches what such an option would default to.
+- **Plural `percentiles(field, pValues)` terminal** if repeated scalar calls become a measured bottleneck. A distinct method name would preserve predictable return types while allowing one fetch and one sort.
 - **Other aggregation candidates** identified while designing this (each would follow the same pattern — terminal method + `groupBy` accumulator — and each deserves its own ADR): standard deviation / variance (`$stdDevPop` / `$stdDevSamp`, MongoDB parity, single-pass Welford); `$first` / `$last` accumulators (field value of first/last document per group in storage order); `countDistinct` (per-group distinct counting is currently inexpressible); `$push` / `$addToSet` collectors (memory-bound caveats apply).

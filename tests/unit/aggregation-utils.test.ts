@@ -335,39 +335,9 @@ void test('validatePercentile rejects out-of-range values', () => {
   assert.throws(() => validatePercentile(1.1), ValidationError);
 });
 
-void test('validatePercentile rejects an empty array', () => {
-  assert.throws(() => validatePercentile([]), ValidationError);
-});
-
-void test('validatePercentile validates every element of an array', () => {
-  assert.throws(() => validatePercentile([0.5, 1.1]), ValidationError);
-  assert.throws(() => validatePercentile([-0.1, 0.5]), ValidationError);
+void test('validatePercentile rejects arrays', () => {
   assert.throws(
-    () => validatePercentile([0.5, Number.NaN]),
+    () => validatePercentile([0.5] as unknown as number),
     ValidationError,
   );
-});
-
-void test('validatePercentile accepts an array with duplicate values', () => {
-  assert.deepEqual(validatePercentile([0.5, 0.5, 0.95]), [0.5, 0.5, 0.95]);
-});
-
-void test('validatePercentile array form returns a defensive copy', () => {
-  const input = [0.5, 0.95];
-  const validated = validatePercentile(input) as number[];
-
-  assert.notEqual(validated, input);
-  assert.deepEqual(validated, [0.5, 0.95]);
-
-  // Mutating the input afterwards must not affect the returned copy.
-  input[0] = 0.1;
-  input.length = 1;
-  assert.deepEqual(validated, [0.5, 0.95]);
-
-  // Mutating the returned copy must not affect a fresh call using the same
-  // original input reference semantics (defensive both ways).
-  const secondInput = [0.5, 0.95];
-  const secondValidated = validatePercentile(secondInput) as number[];
-  secondValidated[0] = 0.99;
-  assert.deepEqual(secondInput, [0.5, 0.95]);
 });

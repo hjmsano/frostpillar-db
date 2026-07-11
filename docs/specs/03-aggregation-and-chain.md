@@ -196,11 +196,9 @@ const oldest = await users.find({}).max('age');
 
 #### `.percentile(field: string, p: number): Promise<number | null>`
 
-#### `.percentile(field: string, p: number[]): Promise<(number | null)[]>`
-
 Returns the `p`-th percentile of the specified numeric field. `p` is a fraction in `[0, 1]` (`p = 0.95` means the 95th percentile) — not the 0–100 percent scale. Like the other numeric terminals, operates on the **filtered** set (sort/skip/limit/projection not applied, §1.4), skips non-numeric and non-finite values via `extractNumericValues`, and returns `null` when no numeric values exist.
 
-`p` must be a finite number with `0 <= p <= 1`; otherwise `ValidationError` is thrown **eagerly, before any document is fetched**.
+`p` must be a finite scalar number with `0 <= p <= 1`; arrays and all other values throw `ValidationError` **eagerly, before any document is fetched**. Multiple percentiles require separate terminal calls; like every terminal invocation, each call performs a fresh filtered-set execution.
 
 **Computation — linear interpolation (`PERCENTILE_CONT`):** sort a copy of the extracted numeric values `v[0..n-1]` ascending, then:
 
@@ -214,14 +212,6 @@ Properties: `percentile(f, 0) === min(f)`; `percentile(f, 1) === max(f)`; a sing
 
 ```ts
 const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-```
-
-**Array form (`p: number[]`):** fetches and sorts the filtered set **once**, then computes each requested percentile positionally against that shared sorted set. The array must be non-empty; every element is validated by the same `[0, 1]` rule as the scalar form. Duplicates are allowed. The array is defensively copied synchronously before the fetch `await` (the same pattern used by `validateGroupByField`), so caller mutation during the await cannot change the computed set. When no numeric values exist, every position is `null`.
-
-```ts
-const [p50, p95, p99] = await requests
-  .find({ route: '/api' })
-  .percentile('latencyMs', [0.5, 0.95, 0.99]);
 ```
 
 #### `.median(field: string): Promise<number | null>`
@@ -393,11 +383,11 @@ Each terminal call triggers a fresh execution of the pipeline.
 
 ## 4. Empty Results
 
-| Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.percentile(f,p)` | `.percentile(f,p[])` | `.median(f)` | `.distinct(f)` | `.groupBy(f, acc)` |
-| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------- | --------------------- | ------------ | -------------- | ------------------ |
-| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`               | all-`null` array       | `null`       | `[]`           | `[]`               |
-| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`               | all-`null` array       | `null`       | `[]`           | (grouped)          |
-| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`               | all-`null` array       | `null`       | (values)       | (grouped)          |
+| Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.percentile(f,p)` | `.median(f)` | `.distinct(f)` | `.groupBy(f, acc)` |
+| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------- | ------------ | -------------- | ------------------ |
+| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `[]`           | `[]`               |
+| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `[]`           | (grouped)          |
+| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | (values)       | (grouped)          |
 
 ## 5. Error Handling
 
@@ -414,7 +404,6 @@ Each terminal call triggers a fresh execution of the pipeline.
 | `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max` operands) fail the same eager validation                                                                                                         |
 | `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
 | `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
-| `ValidationError`     | `percentile` / `$percentile` `p` is not a finite number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                               |
-| `ValidationError`     | `percentile` array-form `p` is an empty array                                                                                                                                                                      |
+| `ValidationError`     | `percentile` / `$percentile` `p` is not a finite scalar number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                        |
 | `ValidationError`     | `groupBy` `$percentile` operand is not a plain object, or does not contain exactly the keys `field` and `p`                                                                                                       |
 | `ClosedDatabaseError` | Terminal method called on a closed database (for `.cursor()`, thrown when iteration starts)                                                                                                                        |

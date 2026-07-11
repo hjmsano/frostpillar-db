@@ -625,15 +625,12 @@ Non-numeric values are skipped. `avg`/`min`/`max` return `null` when no numeric 
 
 ```ts
 const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-const [p50, p95all, p99] = await requests
-  .find({ route: '/api' })
-  .percentile('latencyMs', [0.5, 0.95, 0.99]);
 const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
 ```
 
 `p` is a fraction in `[0, 1]` (`0.95` = 95th percentile), not the 0–100 percent scale. Percentiles are computed with linear interpolation between closest ranks (`PERCENTILE_CONT` — the same definition used by SQL, numpy, and pandas): `percentile(f, 0)` equals `min(f)`, `percentile(f, 1)` equals `max(f)`, and the median of an even-count set is the average of the two middle values.
 
-Passing an array of fractions fetches and sorts the filtered set **once**, then returns each percentile positionally — the efficient way to compute p50/p95/p99 together. `median(field)` is exactly `percentile(field, 0.5)`. Both skip non-numeric values and return `null` (or an all-`null` array, for the array form) when no numeric values exist.
+`percentile(field, p)` accepts one scalar `p` value and always returns one `number | null`; call it separately for each percentile you need. `median(field)` is exactly `percentile(field, 0.5)`. Both skip non-numeric values and return `null` when no numeric values exist.
 
 #### Distinct
 
@@ -1051,7 +1048,6 @@ try {
 | `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                         |
 | `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                         |
 | `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                 |
-| `.percentile(field, p[])`       | `Promise<(number \| null)[]>` | Multiple percentiles, computed from one fetch/sort              |
 | `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                            |
 | `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |

@@ -230,31 +230,12 @@ const validateScalarPercentile = (p: unknown): number => {
 };
 
 /**
- * Validates the `p` argument of `.percentile()`, which accepts either a
- * single fraction (scalar form) or an array of fractions (multi-percentile
- * form). Every element must independently satisfy `0 <= p <= 1` and be
- * finite; anything else throws `ValidationError` eagerly.
- *
- * Array form: the array must be non-empty (duplicates are allowed) and is
- * defensively copied before returning — the same pattern as
- * `validateGroupByField` — so a caller mutating the original array during a
- * pending `await` cannot change the set of percentiles actually computed.
+ * Validates the scalar `p` argument of `.percentile()`. It must be a finite
+ * fraction in `[0, 1]`; arrays and all other values throw `ValidationError`
+ * eagerly.
  */
-export const validatePercentile = (p: number | number[]): number | number[] => {
-  if (Array.isArray(p)) {
-    if (p.length === 0) {
-      throw new ValidationError('percentile p array must not be empty.');
-    }
-
-    const copy = [...p];
-    for (const element of copy) {
-      validateScalarPercentile(element);
-    }
-    return copy;
-  }
-
-  return validateScalarPercentile(p);
-};
+export const validatePercentile = (p: unknown): number =>
+  validateScalarPercentile(p);
 
 const VALID_ACCUMULATOR_KEYS = new Set([
   '$count',

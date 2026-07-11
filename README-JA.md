@@ -625,15 +625,12 @@ const max = await users.find({ dept: 'eng' }).max('salary');
 
 ```ts
 const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-const [p50, p95all, p99] = await requests
-  .find({ route: '/api' })
-  .percentile('latencyMs', [0.5, 0.95, 0.99]);
 const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
 ```
 
 `p` は `[0, 1]` の範囲の割合です（`0.95` が 95 パーセンタイル）。0–100 のパーセントスケールではありません。パーセンタイルは最も近いランク間の線形補間（`PERCENTILE_CONT` — SQL、numpy、pandas と同じ定義）で計算されます: `percentile(f, 0)` は `min(f)` と等しく、`percentile(f, 1)` は `max(f)` と等しく、要素数が偶数の場合の中央値は中央 2 値の平均です。
 
-`p` に配列を渡すと、フィルタ後のデータセットを**一度だけ**取得・ソートし、各パーセンタイルを位置対応で返します — p50/p95/p99 をまとめて計算する効率的な方法です。`median(field)` は `percentile(field, 0.5)` と完全に同じです。いずれも非数値は無視され、数値が存在しない場合は `null`（配列形式ではすべて `null` の配列）を返します。
+`percentile(field, p)` はスカラー値 `p` を 1 つ受け取り、常に 1 つの `number | null` を返します。複数のパーセンタイルが必要な場合は、個別に呼び出してください。`median(field)` は `percentile(field, 0.5)` と完全に同じです。いずれも非数値は無視され、数値が存在しない場合は `null` を返します。
 
 #### Distinct
 
@@ -1051,7 +1048,6 @@ try {
 | `.min(field)`                   | `Promise<number \| null>`     | 数値の最小値                                                           |
 | `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                           |
 | `.percentile(field, p)`         | `Promise<number \| null>`     | `p` パーセンタイル（`p` は `[0, 1]` の割合）                            |
-| `.percentile(field, p[])`       | `Promise<(number \| null)[]>` | 複数パーセンタイルを 1 回の取得・ソートで計算                          |
 | `.median(field)`                | `Promise<number \| null>`     | 中央値（`percentile(field, 0.5)` と等価）                              |
 | `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                 |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールド（`string \| string[]`）でグループ化しアキュムレータを計算。配列形式は複合 `_key` を生成 |

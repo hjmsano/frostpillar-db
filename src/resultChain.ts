@@ -236,26 +236,13 @@ export class ResultChain<
     );
   }
 
-  /**
-   * `p` (and `field`) are validated synchronously, before `getNumericValues`'s
-   * internal fetch `await` — for the array form, `validatePercentile` returns
-   * a defensive copy taken before that await, so a caller mutating `p` during
-   * the pending promise cannot change the set of percentiles computed.
-   */
-  public async percentile(field: string, p: number): Promise<number | null>;
+  /** `p` and `field` are validated before documents are fetched. */
   public async percentile(
     field: string,
-    p: number[],
-  ): Promise<(number | null)[]>;
-  public async percentile(
-    field: string,
-    p: number | number[],
-  ): Promise<number | null | (number | null)[]> {
+    p: number,
+  ): Promise<number | null> {
     const validatedP = validatePercentile(p);
     const values = await this.getNumericValues(field);
-    if (Array.isArray(validatedP)) {
-      return validatedP.map((element) => computePercentile(values, element));
-    }
     return computePercentile(values, validatedP);
   }
 

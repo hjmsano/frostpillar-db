@@ -327,10 +327,6 @@ void test('aggregation supports dot notation and empty result defaults', async (
     assert.equal(await noMatch.max('salary'), null);
     assert.equal(await noMatch.median('salary'), null);
     assert.equal(await noMatch.percentile('salary', 0.5), null);
-    assert.deepEqual(await noMatch.percentile('salary', [0.5, 0.95]), [
-      null,
-      null,
-    ]);
   } finally {
     await database.close();
   }
@@ -376,10 +372,6 @@ void test('terminal methods throw ClosedDatabaseError after close', async () => 
   await assert.rejects(() => chain.median('salary'), ClosedDatabaseError);
   await assert.rejects(
     () => chain.percentile('salary', 0.5),
-    ClosedDatabaseError,
-  );
-  await assert.rejects(
-    () => chain.percentile('salary', [0.5, 0.95]),
     ClosedDatabaseError,
   );
   await assert.rejects(() => chain.distinct('name'), ClosedDatabaseError);
@@ -479,7 +471,11 @@ void test('percentile validates p (and field) eagerly before checking closed dat
   // eager-validation ordering as the other numeric terminals.
   await assert.rejects(() => chain.percentile('salary', 1.5), ValidationError);
   await assert.rejects(() => chain.percentile('', 0.5), ValidationError);
-  await assert.rejects(() => chain.percentile('salary', []), ValidationError);
+  const arrayP = [0.5, 0.95] as unknown as number;
+  await assert.rejects(
+    () => chain.percentile('salary', arrayP),
+    ValidationError,
+  );
   await assert.rejects(() => chain.median(''), ValidationError);
 });
 
@@ -498,32 +494,6 @@ void test('result chain supports percentile/median reuse across multiple calls',
     assert.equal(median1, median2);
     assert.equal(median1, 150);
     assert.ok(p95 !== null);
-  } finally {
-    await database.close();
-  }
-});
-
-void test('percentile array form is unaffected by caller mutating p mid-execution', async () => {
-  const database = new Database({});
-  const users = database.collection<UserDocument>('users');
-
-  try {
-    await users.insertMany([
-      { _id: 'p1', name: 'A', salary: 10 },
-      { _id: 'p2', name: 'B', salary: 20 },
-      { _id: 'p3', name: 'C', salary: 30 },
-      { _id: 'p4', name: 'D', salary: 40 },
-    ]);
-
-    const ps = [0, 1];
-    // Do not await yet: validatePercentile copies `ps` synchronously before
-    // the internal fetch await, so mutations below cannot leak in.
-    const pending = users.find({}).percentile('salary', ps);
-    ps[0] = 0.5;
-    ps.length = 1;
-
-    const result = await pending;
-    assert.deepEqual(result, [10, 40]);
   } finally {
     await database.close();
   }

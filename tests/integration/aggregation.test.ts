@@ -310,42 +310,6 @@ void test('percentile computes p-th percentile with linear interpolation', async
   }
 });
 
-void test('percentile array form fetches once and returns positional results', async () => {
-  const database = new Database({});
-  const users = database.collection<UserDocument>('users');
-
-  try {
-    await users.insertMany([
-      { _id: 'p1', name: 'A', salary: 10 },
-      { _id: 'p2', name: 'B', salary: 20 },
-      { _id: 'p3', name: 'C', salary: 30 },
-      { _id: 'p4', name: 'D', salary: 40 },
-    ]);
-
-    const result = await users.find({}).percentile('salary', [0, 0.5, 1]);
-    assert.deepEqual(result, [10, 25, 40]);
-  } finally {
-    await database.close();
-  }
-});
-
-void test('percentile array form allows duplicate p values', async () => {
-  const database = new Database({});
-  const users = database.collection<UserDocument>('users');
-
-  try {
-    await users.insertMany([
-      { _id: 'p1', name: 'A', salary: 10 },
-      { _id: 'p2', name: 'B', salary: 20 },
-    ]);
-
-    const result = await users.find({}).percentile('salary', [0.5, 0.5, 0]);
-    assert.deepEqual(result, [15, 15, 10]);
-  } finally {
-    await database.close();
-  }
-});
-
 void test('median is equivalent to percentile(field, 0.5)', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');
@@ -387,10 +351,6 @@ void test('percentile and median return null for no matching documents', async (
     const noMatch = users.find({ status: 'suspended' });
     assert.equal(await noMatch.median('salary'), null);
     assert.equal(await noMatch.percentile('salary', 0.5), null);
-    assert.deepEqual(await noMatch.percentile('salary', [0.5, 0.95]), [
-      null,
-      null,
-    ]);
   } finally {
     await database.close();
   }
@@ -414,12 +374,9 @@ void test('percentile and median throw ValidationError for invalid p', async () 
       () => users.find().percentile('salary', Number.NaN),
       ValidationError,
     );
+    const arrayP = [0.5, 0.95] as unknown as number;
     await assert.rejects(
-      () => users.find().percentile('salary', []),
-      ValidationError,
-    );
-    await assert.rejects(
-      () => users.find().percentile('salary', [0.5, 1.1]),
+      () => users.find().percentile('salary', arrayP),
       ValidationError,
     );
   } finally {
