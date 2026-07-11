@@ -27,7 +27,7 @@ frostpillar-cli         ← Command-line interface (planned)
 - **Fluent query API** — method chaining with `$`-operator filters and lazy execution (`find`, `sort`, `skip`, `limit`, `project`, `toArray`, `count`)
 - **CRUD + update operators** — `insert`, `insertMany`, `find`, `findOne`, `update`, `remove`, `count` with `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet`
 - **Upsert support** — `update` with `{ upsert: true }` inserts when no document matches
-- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `distinct`, `groupBy` on filtered result sets
+- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `distinct`, `groupBy` (single- or multi-field) on filtered result sets
 - **Change events** — `watch()` listeners for insert, update, and remove operations
 - **TTL (Time-To-Live)** — automatic document expiration per collection
 - **Async cursor** — iterate results with `for await...of`
@@ -630,7 +630,7 @@ const departments = await users.find().distinct('dept');
 
 ### Grouping
 
-`groupBy` groups filtered documents by a field and computes accumulators per group:
+`groupBy` groups filtered documents by a field and computes accumulators per group. Pass a single field path to group by one dimension, or an array of field paths to group by a composite key across multiple dimensions:
 
 ```ts
 const result = await users.find().groupBy('dept', {
@@ -644,9 +644,24 @@ const result = await users.find().groupBy('dept', {
 // ]
 ```
 
+**Multi-dimension grouping** — pass an array of field paths to group by a composite key. `_key` becomes an object with one property per requested path, keyed by the literal path string:
+
+```ts
+const result = await users.find().groupBy(['dept', 'address.city'], {
+  count: { $count: true },
+});
+// [
+//   { _key: { dept: 'engineering', 'address.city': 'Tokyo' }, count: 7 },
+//   { _key: { dept: 'engineering', 'address.city': 'Osaka' }, count: 5 },
+//   { _key: { dept: 'design',      'address.city': 'Tokyo' }, count: 3 },
+// ]
+```
+
+A document missing one of the requested fields contributes `null` for that dimension. A single-element array (e.g. `['dept']`) still produces an object `_key` — it is not collapsed to the scalar form used by the single-field form.
+
 Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`.
 
-> **Object key ordering:** When grouping by a field whose value is an object or array, keys are serialized via `JSON.stringify`. Objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) become **different** groups. Normalize property order before insertion if consistent grouping is required.
+> **Object key ordering:** When grouping by a field whose value is an object or array, keys are serialized via `JSON.stringify`. Objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) become **different** groups. Normalize property order before insertion if consistent grouping is required. This applies independently to each dimension in the multi-dimension form.
 
 ### Update Operators
 
@@ -1012,7 +1027,7 @@ try {
 | `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                         |
 | `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                         |
 | `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
-| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field with accumulators                              |
+| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |
 
 ---
 

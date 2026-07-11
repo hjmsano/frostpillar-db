@@ -27,7 +27,7 @@ frostpillar-cli         ← コマンドラインインターフェース（計�
 - **流暢なクエリ API** — `$` 演算子フィルタと遅延実行（`find`、`sort`、`skip`、`limit`、`project`、`toArray`、`count`）
 - **CRUD + 更新演算子** — `insert`、`insertMany`、`find`、`findOne`、`update`、`remove`、`count` と `$set`、`$unset`、`$inc`、`$rename`、`$push`、`$pull`、`$addToSet`
 - **Upsert サポート** — `update` に `{ upsert: true }` を指定すると、マッチするドキュメントがない場合に新規挿入
-- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`distinct`、`groupBy`
+- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`distinct`、`groupBy`（単一または複数フィールド）
 - **変更イベント** — `watch()` リスナーで insert、update、remove 操作を監視
 - **TTL（Time-To-Live）** — コレクション単位でドキュメントの自動有効期限を設定
 - **非同期カーソル** — `for await...of` による結果のイテレーション
@@ -630,7 +630,7 @@ const departments = await users.find().distinct('dept');
 
 ### グルーピング
 
-`groupBy` はフィルタ後のドキュメントをフィールドでグループ化し、グループごとにアキュムレータを計算します:
+`groupBy` はフィルタ後のドキュメントをフィールドでグループ化し、グループごとにアキュムレータを計算します。単一のフィールドパスを渡すと1次元でグループ化し、フィールドパスの配列を渡すと複数次元の複合キーでグループ化します:
 
 ```ts
 const result = await users.find().groupBy('dept', {
@@ -644,9 +644,24 @@ const result = await users.find().groupBy('dept', {
 // ]
 ```
 
+**複数次元のグルーピング** — フィールドパスの配列を渡すと、複合キーでグループ化できます。`_key` はリクエストされたパスごとに1つのプロパティを持つオブジェクトとなり、そのプロパティキーはリテラルのパス文字列です:
+
+```ts
+const result = await users.find().groupBy(['dept', 'address.city'], {
+  count: { $count: true },
+});
+// [
+//   { _key: { dept: 'engineering', 'address.city': 'Tokyo' }, count: 7 },
+//   { _key: { dept: 'engineering', 'address.city': 'Osaka' }, count: 5 },
+//   { _key: { dept: 'design',      'address.city': 'Tokyo' }, count: 3 },
+// ]
+```
+
+リクエストされたフィールドのいずれかが欠けているドキュメントは、その次元について `null` を返します。単一要素の配列（例: `['dept']`）でもオブジェクトの `_key` を生成します。単一フィールド形式で使われるスカラー形式には変換されません。
+
 利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`。
 
-> **オブジェクトキーの順序:** グループ化対象フィールドの値がオブジェクトまたは配列の場合、`JSON.stringify` でシリアライズされます。同じプロパティを持つオブジェクトでも挿入順序が異なる場合（例: `{a:1, b:2}` と `{b:2, a:1}`）は**別のグループ**として扱われます。一貫したグルーピングが必要な場合は、挿入前にプロパティの順序を正規化してください。
+> **オブジェクトキーの順序:** グループ化対象フィールドの値がオブジェクトまたは配列の場合、`JSON.stringify` でシリアライズされます。同じプロパティを持つオブジェクトでも挿入順序が異なる場合（例: `{a:1, b:2}` と `{b:2, a:1}`）は**別のグループ**として扱われます。一貫したグルーピングが必要な場合は、挿入前にプロパティの順序を正規化してください。この挙動は複数次元形式の各次元にも個別に適用されます。
 
 ### 更新演算子
 
@@ -1012,7 +1027,7 @@ try {
 | `.min(field)`                   | `Promise<number \| null>`     | 数値の最小値                                                           |
 | `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                           |
 | `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                 |
-| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールドでグループ化しアキュムレータを計算                           |
+| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールド（`string \| string[]`）でグループ化しアキュムレータを計算。配列形式は複合 `_key` を生成 |
 
 ---
 
