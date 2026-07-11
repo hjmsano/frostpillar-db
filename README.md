@@ -27,7 +27,7 @@ frostpillar-cli         ← Command-line interface (planned)
 - **Fluent query API** — method chaining with `$`-operator filters and lazy execution (`find`, `sort`, `skip`, `limit`, `project`, `toArray`, `count`)
 - **CRUD + update operators** — `insert`, `insertMany`, `find`, `findOne`, `update`, `remove`, `count` with `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet`
 - **Upsert support** — `update` with `{ upsert: true }` inserts when no document matches
-- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `distinct`, `groupBy` (single- or multi-field) on filtered result sets
+- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `distinct`, `groupBy` (single- or multi-field) on filtered result sets
 - **Change events** — `watch()` listeners for insert, update, and remove operations
 - **TTL (Time-To-Live)** — automatic document expiration per collection
 - **Async cursor** — iterate results with `for await...of`
@@ -621,6 +621,17 @@ const max = await users.find({ dept: 'eng' }).max('salary');
 
 Non-numeric values are skipped. `avg`/`min`/`max` return `null` when no numeric values exist. `sum` returns `0`.
 
+#### Percentile and Median
+
+```ts
+const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
+const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
+```
+
+`p` is a fraction in `[0, 1]` (`0.95` = 95th percentile), not the 0–100 percent scale. Percentiles are computed with linear interpolation between closest ranks (`PERCENTILE_CONT` — the same definition used by SQL, numpy, and pandas): `percentile(f, 0)` equals `min(f)`, `percentile(f, 1)` equals `max(f)`, and the median of an even-count set is the average of the two middle values.
+
+`percentile(field, p)` accepts one scalar `p` value and always returns one `number | null`; call it separately for each percentile you need. `median(field)` is exactly `percentile(field, 0.5)`. Both skip non-numeric values and return `null` when no numeric values exist.
+
 #### Distinct
 
 ```ts
@@ -659,7 +670,17 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 A document missing one of the requested fields contributes `null` for that dimension. A single-element array (e.g. `['dept']`) still produces an object `_key` — it is not collapsed to the scalar form used by the single-field form.
 
-Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`.
+Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`.
+
+`$median: 'fieldPath'` and `$percentile: { field: 'fieldPath', p: 0.95 }` mirror `.median()` / `.percentile()`: same interpolation, same `null`-when-empty behavior. `p` is **scalar-only** inside `groupBy` — request multiple percentiles as multiple output fields:
+
+```ts
+const result = await requests.find({}).groupBy('route', {
+  p50: { $percentile: { field: 'latencyMs', p: 0.5 } },
+  p95: { $percentile: { field: 'latencyMs', p: 0.95 } },
+  p99: { $percentile: { field: 'latencyMs', p: 0.99 } },
+});
+```
 
 > **Object key ordering:** When grouping by a field whose value is an object or array, keys are serialized via `JSON.stringify`. Objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) become **different** groups. Normalize property order before insertion if consistent grouping is required. This applies independently to each dimension in the multi-dimension form.
 
@@ -1026,6 +1047,8 @@ try {
 | `.avg(field)`                   | `Promise<number \| null>`     | Average of numeric field                                      |
 | `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                         |
 | `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                         |
+| `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                 |
+| `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                            |
 | `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |
 

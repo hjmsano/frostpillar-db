@@ -255,11 +255,15 @@ void test('aggregation terminals use filtered set and skip non-numeric values', 
 
     // count respects skip/limit
     assert.equal(await chain.count(), 1);
-    // sum/avg/min/max operate on the full filtered set (ignoring skip/limit)
+    // sum/avg/min/max/percentile/median operate on the full filtered set
+    // (ignoring skip/limit): active salaries are [100, 200]
     assert.equal(await chain.sum('salary'), 300);
     assert.equal(await chain.avg('salary'), 150);
     assert.equal(await chain.min('salary'), 100);
     assert.equal(await chain.max('salary'), 200);
+    assert.equal(await chain.median('salary'), 150);
+    assert.equal(await chain.percentile('salary', 0), 100);
+    assert.equal(await chain.percentile('salary', 1), 200);
   } finally {
     await database.close();
   }
@@ -312,11 +316,17 @@ void test('aggregation supports dot notation and empty result defaults', async (
     assert.equal(await scoreChain.min('profile.score'), 1);
     assert.equal(await scoreChain.max('profile.score'), 2);
 
+    assert.equal(await scoreChain.median('profile.score'), 1.5);
+    assert.equal(await scoreChain.percentile('profile.score', 0), 1);
+    assert.equal(await scoreChain.percentile('profile.score', 1), 2);
+
     const noMatch = users.find({ status: 'suspended' });
     assert.equal(await noMatch.sum('salary'), 0);
     assert.equal(await noMatch.avg('salary'), null);
     assert.equal(await noMatch.min('salary'), null);
     assert.equal(await noMatch.max('salary'), null);
+    assert.equal(await noMatch.median('salary'), null);
+    assert.equal(await noMatch.percentile('salary', 0.5), null);
   } finally {
     await database.close();
   }
@@ -359,6 +369,11 @@ void test('terminal methods throw ClosedDatabaseError after close', async () => 
   await assert.rejects(() => chain.avg('salary'), ClosedDatabaseError);
   await assert.rejects(() => chain.min('salary'), ClosedDatabaseError);
   await assert.rejects(() => chain.max('salary'), ClosedDatabaseError);
+  await assert.rejects(() => chain.median('salary'), ClosedDatabaseError);
+  await assert.rejects(
+    () => chain.percentile('salary', 0.5),
+    ClosedDatabaseError,
+  );
   await assert.rejects(() => chain.distinct('name'), ClosedDatabaseError);
   await assert.rejects(
     () => chain.groupBy('name', { count: { $count: true } }),
@@ -438,6 +453,47 @@ void test('find().sort().limit(k) is stable and matches sort().toArray().slice(k
         `limit(${String(k)}) should match full-sort slice`,
       );
     }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('percentile validates p (and field) eagerly before checking closed database', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+  await users.insert({ _id: 'u1', name: 'Alice', salary: 100 });
+
+  const chain = users.find();
+  await database.close();
+
+  // Invalid p/field must surface as ValidationError, not ClosedDatabaseError,
+  // proving validation runs before the closed-database check -- the same
+  // eager-validation ordering as the other numeric terminals.
+  await assert.rejects(() => chain.percentile('salary', 1.5), ValidationError);
+  await assert.rejects(() => chain.percentile('', 0.5), ValidationError);
+  const arrayP = [0.5, 0.95] as unknown as number;
+  await assert.rejects(
+    () => chain.percentile('salary', arrayP),
+    ValidationError,
+  );
+  await assert.rejects(() => chain.median(''), ValidationError);
+});
+
+void test('result chain supports percentile/median reuse across multiple calls', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    const activeUsers = users.find({ status: 'active' });
+
+    const median1 = await activeUsers.median('salary');
+    const p95 = await activeUsers.percentile('salary', 0.95);
+    const median2 = await activeUsers.median('salary');
+
+    assert.equal(median1, median2);
+    assert.equal(median1, 150);
+    assert.ok(p95 !== null);
   } finally {
     await database.close();
   }

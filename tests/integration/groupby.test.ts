@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Database, ValidationError } from '../../src/index.js';
-import type { Collection } from '../../src/index.js';
+import type { Collection, GroupAccumulators } from '../../src/index.js';
 
 interface UserDocument {
   _id?: string;
@@ -434,6 +434,122 @@ void test('groupBy array form is unaffected by caller mutating the field array m
     });
     assert.ok(engTokyo);
     assert.equal(engTokyo.count, 3);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $median and $percentile accumulators (string groupBy form)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users.find({}).groupBy('dept', {
+      medianSalary: { $median: 'salary' },
+      p95Salary: { $percentile: { field: 'salary', p: 0.95 } },
+    });
+
+    // eng salaries: u1=100, u2=80, u3='90' (string, skipped), u5=200 -> [80, 100, 200]
+    const eng = result.find((group) => group._key === 'eng');
+    assert.ok(eng);
+    assert.equal(eng.medianSalary, 100);
+    // rank = 0.95 * 2 = 1.9, lo=1, frac=0.9 -> 100 + 0.9*(200-100) = 190
+    assert.equal(eng.p95Salary, 190);
+
+    const design = result.find((group) => group._key === 'design');
+    assert.ok(design);
+    assert.equal(design.medianSalary, null);
+    assert.equal(design.p95Salary, null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $median accumulator (multi-dimension array groupBy form)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const result = await users.find({}).groupBy(['dept', 'profile.city'], {
+      medianSalary: { $median: 'salary' },
+    });
+
+    const engTokyo = result.find((group) => {
+      const key = group._key as Record<string, unknown>;
+      return key.dept === 'eng' && key['profile.city'] === 'Tokyo';
+    });
+    assert.ok(engTokyo);
+    // u1=100 (Tokyo), u3='90' (Tokyo, skipped), u5=200 (Tokyo) -> [100, 200]
+    assert.equal(engTokyo.medianSalary, 150);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy supports multiple percentile output fields (p50/p95/p99) per group', async () => {
+  const database = new Database({});
+  const requests = database.collection<{
+    _id?: string;
+    route: string;
+    latencyMs: number;
+  }>('requests');
+
+  try {
+    await requests.insertMany(
+      Array.from({ length: 100 }, (_, i) => ({
+        _id: String(i),
+        route: '/api',
+        latencyMs: i + 1,
+      })),
+    );
+
+    const result = await requests.find({}).groupBy('route', {
+      p50: { $percentile: { field: 'latencyMs', p: 0.5 } },
+      p95: { $percentile: { field: 'latencyMs', p: 0.95 } },
+      p99: { $percentile: { field: 'latencyMs', p: 0.99 } },
+      medianLatency: { $median: 'latencyMs' },
+    });
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].p50, 50.5);
+    assert.equal(result[0].p95, 95.05);
+    assert.equal(result[0].p99, 99.01);
+    assert.equal(result[0].medianLatency, result[0].p50);
+  } finally {
+    await database.close();
+  }
+});
+
+const badPercentileOperands: unknown[] = [
+  'salary',
+  { field: 'salary' },
+  { p: 0.5 },
+  { field: 'salary', p: 1.5 },
+  { field: 'salary', p: 0.5, extra: true },
+  { field: 'salary', p: [0.5, 0.95] },
+];
+
+void test('groupBy $percentile operand validation errors', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const operand of badPercentileOperands) {
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { $percentile: operand },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for operand ${JSON.stringify(operand)}`,
+      );
+    }
   } finally {
     await database.close();
   }

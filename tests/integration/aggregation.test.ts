@@ -288,6 +288,118 @@ void test('distinct dedupes a large set of objects in linear time', async () => 
   }
 });
 
+void test('percentile computes p-th percentile with linear interpolation', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insertMany([
+      { _id: 'p1', name: 'A', salary: 10 },
+      { _id: 'p2', name: 'B', salary: 20 },
+      { _id: 'p3', name: 'C', salary: 30 },
+      { _id: 'p4', name: 'D', salary: 40 },
+    ]);
+
+    const chain = users.find({});
+    assert.equal(await chain.percentile('salary', 0), 10);
+    assert.equal(await chain.percentile('salary', 1), 40);
+    assert.equal(await chain.percentile('salary', 0.5), 25);
+    assert.equal(await chain.percentile('salary', 0.25), 17.5);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('median is equivalent to percentile(field, 0.5)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    const chain = users.find({ status: 'active' });
+    assert.equal(
+      await chain.median('salary'),
+      await chain.percentile('salary', 0.5),
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('percentile and median skip non-numeric values and respect filter', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    // active salaries: u1=100, u3='90' (string, skipped), u4 missing, u5=200 -> [100, 200]
+    const chain = users.find({ status: 'active' });
+    assert.equal(await chain.median('salary'), 150);
+    assert.equal(await chain.percentile('salary', 0), 100);
+    assert.equal(await chain.percentile('salary', 1), 200);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('percentile and median return null for no matching documents', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    const noMatch = users.find({ status: 'suspended' });
+    assert.equal(await noMatch.median('salary'), null);
+    assert.equal(await noMatch.percentile('salary', 0.5), null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('percentile and median throw ValidationError for invalid p', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    await assert.rejects(
+      () => users.find().percentile('salary', -0.1),
+      ValidationError,
+    );
+    await assert.rejects(
+      () => users.find().percentile('salary', 1.1),
+      ValidationError,
+    );
+    await assert.rejects(
+      () => users.find().percentile('salary', Number.NaN),
+      ValidationError,
+    );
+    const arrayP = [0.5, 0.95] as unknown as number;
+    await assert.rejects(
+      () => users.find().percentile('salary', arrayP),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('percentile and median throw ValidationError for empty field', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    await assert.rejects(
+      () => users.find().percentile('', 0.5),
+      ValidationError,
+    );
+    await assert.rejects(() => users.find().median(''), ValidationError);
+  } finally {
+    await database.close();
+  }
+});
+
 void test('aggregation terminals ignore skip/limit when no sort is present', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');
@@ -305,6 +417,10 @@ void test('aggregation terminals ignore skip/limit when no sort is present', asy
     assert.equal(await chain.max('salary'), 200);
     assert.equal(await chain.avg('salary'), 380 / 3);
     assert.deepEqual((await chain.distinct('salary')).sort(), [100, 200, 80]);
+    // percentile/median also operate on the full filtered set (sorted: [80, 100, 200])
+    assert.equal(await chain.median('salary'), 100);
+    assert.equal(await chain.percentile('salary', 0), 80);
+    assert.equal(await chain.percentile('salary', 1), 200);
 
     // .count(), by contrast, still honours limit for pagination parity.
     assert.equal(await chain.count(), 1);

@@ -98,7 +98,7 @@ void test('computeGroupBy throws when an accumulator has multiple keys', () => {
 
 void test('computeGroupBy throws on unknown accumulator key', () => {
   const accumulators = {
-    bad: { $median: 'score' },
+    bad: { $bogus: 'score' },
   } as unknown as GroupAccumulators;
   assert.throws(
     () =>
@@ -113,7 +113,7 @@ void test('computeGroupBy throws on unknown accumulator key', () => {
 });
 
 void test('computeGroupBy throws ValidationError when accumulator operand is not a string', () => {
-  for (const op of ['$sum', '$avg', '$min', '$max'] as const) {
+  for (const op of ['$sum', '$avg', '$min', '$max', '$median'] as const) {
     assert.throws(
       () =>
         computeGroupBy(
@@ -503,6 +503,271 @@ void test('computeGroupBy composite _key holds correct values under integer-like
   const second = result[1]._key as Record<string, unknown>;
   assert.equal(second.dept, 'eng');
   assert.equal(second['2024'], 200);
+});
+
+// ---------------------------------------------------------------------------
+// computeGroupBy — $median / $percentile accumulators
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy computes $median per group (string groupBy form)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 1 }),
+    doc('2', { category: 'a', score: 2 }),
+    doc('3', { category: 'a', score: 3 }),
+    doc('4', { category: 'a', score: 4 }),
+    doc('5', { category: 'b', score: 10 }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { medianScore: { $median: 'score' } },
+    pathCache,
+  );
+  const byKey = new Map(result.map((entry) => [entry._key, entry]));
+  assert.equal(byKey.get('a')?.medianScore, 2.5);
+  assert.equal(byKey.get('b')?.medianScore, 10);
+});
+
+void test('computeGroupBy computes $median per group (array groupBy form)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 1 }),
+    doc('2', { category: 'a', score: 3 }),
+    doc('3', { category: 'a', score: 5 }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { medianScore: { $median: 'score' } },
+    pathCache,
+  );
+  assert.equal(result[0].medianScore, 3);
+});
+
+void test('computeGroupBy $median returns null when a group has no numeric values', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 'x' }),
+    doc('2', { category: 'a', score: null }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { medianScore: { $median: 'score' } },
+    pathCache,
+  );
+  assert.equal(result[0].medianScore, null);
+});
+
+void test('computeGroupBy computes $percentile per group (string groupBy form)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 10 }),
+    doc('2', { category: 'a', score: 20 }),
+    doc('3', { category: 'a', score: 30 }),
+    doc('4', { category: 'a', score: 40 }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      p25: { $percentile: { field: 'score', p: 0.25 } },
+      p75: { $percentile: { field: 'score', p: 0.75 } },
+    },
+    pathCache,
+  );
+  assert.equal(result[0].p25, 17.5);
+  assert.equal(result[0].p75, 32.5);
+});
+
+void test('computeGroupBy computes $percentile per group (array groupBy form)', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 10 }),
+    doc('2', { category: 'a', score: 20 }),
+  ];
+  const result = computeGroupBy(
+    docs,
+    ['category'],
+    { p50: { $percentile: { field: 'score', p: 0.5 } } },
+    pathCache,
+  );
+  assert.equal(result[0].p50, 15);
+});
+
+void test('computeGroupBy $percentile returns null when a group has no numeric values', () => {
+  const docs = [doc('1', { category: 'a', score: 'x' })];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { p50: { $percentile: { field: 'score', p: 0.5 } } },
+    pathCache,
+  );
+  assert.equal(result[0].p50, null);
+});
+
+void test('computeGroupBy supports multiple percentile output fields (p50/p95/p99) in one call', () => {
+  const docs = Array.from({ length: 100 }, (_, i) =>
+    doc(String(i), { category: 'a', latencyMs: i + 1 }),
+  );
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      p50: { $percentile: { field: 'latencyMs', p: 0.5 } },
+      p95: { $percentile: { field: 'latencyMs', p: 0.95 } },
+      p99: { $percentile: { field: 'latencyMs', p: 0.99 } },
+      medianLatency: { $median: 'latencyMs' },
+    },
+    pathCache,
+  );
+  assert.equal(result[0].p50, result[0].medianLatency);
+  assert.equal(result[0].p50, 50.5);
+  assert.equal(result[0].p95, 95.05);
+  assert.equal(result[0].p99, 99.01);
+});
+
+// ---------------------------------------------------------------------------
+// computeGroupBy — $percentile operand validation
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy throws when $percentile operand is not an object', () => {
+  for (const badOperand of ['score', 123, null, true, ['score', 0.5]]) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          {
+            result: { $percentile: badOperand },
+          } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for operand ${JSON.stringify(badOperand)}`,
+    );
+  }
+});
+
+void test('computeGroupBy throws when $percentile operand is missing "p"', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $percentile: { field: 'score' } },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy throws when $percentile operand is missing "field"', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $percentile: { p: 0.5 } },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy throws when $percentile operand has an extra key', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: {
+            $percentile: { field: 'score', p: 0.5, extra: true },
+          },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy throws when $percentile "field" is invalid', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $percentile: { field: '__proto__', p: 0.5 } },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $percentile: { field: 123, p: 0.5 } },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy throws when $percentile "p" is invalid', () => {
+  for (const badP of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY, '0.5']) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          [],
+          'category',
+          {
+            result: { $percentile: { field: 'score', p: badP } },
+          } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+      `Expected ValidationError for p=${JSON.stringify(badP)}`,
+    );
+  }
+});
+
+void test('computeGroupBy throws when $percentile "p" is an array (scalar-only inside groupBy)', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: { $percentile: { field: 'score', p: [0.5, 0.95] } },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy $percentile entry still enforces exactly-one-accumulator-key rule', () => {
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [],
+        'category',
+        {
+          result: {
+            $percentile: { field: 'score', p: 0.5 },
+            $median: 'score',
+          },
+        } as unknown as GroupAccumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
 });
 
 // ---------------------------------------------------------------------------

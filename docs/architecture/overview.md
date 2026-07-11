@@ -74,7 +74,7 @@ Processes queries in a pipeline:
 1. **Filter Evaluator** — evaluates `$`-operator filter predicates against documents.
 2. **Update Applier** — applies `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet` operations to documents.
 3. **ResultChain Pipeline** — orchestrates sort → skip → limit → project for `toArray()`.
-4. **Aggregation Functions** — computes `count`, `sum`, `avg`, `min`, `max`, `distinct`, `groupBy` over filtered sets.
+4. **Aggregation Functions** — computes `count`, `sum`, `avg`, `min`, `max`, `percentile`, `median`, `distinct`, `groupBy` over filtered sets.
 
 ## Data Flow
 
@@ -137,3 +137,9 @@ All architectural decisions are recorded in [docs/adr/](../adr/):
 | [010](../adr/010-ttl-support.md)                             | TTL (Time-To-Live) support                                |
 | [011](../adr/011-lazy-field-level-deserialization.md)        | Lazy field-level deserialization (future optimization)    |
 | [012](../adr/012-per-collection-datastore-isolation.md)      | Per-collection Datastore isolation                        |
+| [013](../adr/013-internal-deep-equal.md)                     | Internal `deepEqual` utility to replace `node:util.isDeepStrictEqual` |
+| [014](../adr/014-strict-collection-option-reaccess.md)       | Strict collection option re-access                        |
+| [015](../adr/015-weakmap-inclusion-set-cache.md)              | WeakMap cache for `$in` / `$nin` inclusion sets            |
+| [016](../adr/016-ttl-createdat-automatic-protection.md)      | Automatic `_createdAt` protection on TTL collections       |
+| [017](../adr/017-multi-dimension-group-by.md)                | Multi-dimension `groupBy`                                  |
+| [018](../adr/018-percentile-and-median-aggregation.md)       | Percentile and median aggregation                          |
