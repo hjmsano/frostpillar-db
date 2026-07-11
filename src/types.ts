@@ -120,6 +120,8 @@ export interface GroupAccumulator {
   $first?: string;
   $last?: string;
   $countDistinct?: string;
+  $push?: string;
+  $addToSet?: string;
 }
 
 export type GroupAccumulators = Record<string, GroupAccumulator>;

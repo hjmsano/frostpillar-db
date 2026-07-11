@@ -373,6 +373,8 @@ const VALID_ACCUMULATOR_KEYS = new Set([
   '$first',
   '$last',
   '$countDistinct',
+  '$push',
+  '$addToSet',
 ]);
 
 /**
@@ -540,6 +542,70 @@ const computeFirstLast = <TDocument extends FrostpillarDocument>(
   return cloneAccumulatorValue(resolved);
 };
 
+/**
+ * Implements `$push` (ADR-023): collects the resolved value of `fieldPath`
+ * for every document in the group, in aggregation input order (ADR-020 --
+ * the chain's `.sort()` order when present, otherwise storage order; no
+ * re-sorting happens here). Missing/`undefined` values are skipped; `null`
+ * is included; duplicates are preserved. Object/array values are
+ * defensively cloned via `cloneAccumulatorValue` before entering the result
+ * array, since group documents are references to stored documents;
+ * primitives/`null` pass through unchanged. An empty group field set (no
+ * present values) yields `[]`. No dedicated limit is needed: a group holds
+ * at most `MAX_GROUP_DOCUMENTS` documents and `$push` emits at most one
+ * value per document, so the output is already bounded.
+ */
+const computePush = <TDocument extends FrostpillarDocument>(
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): unknown[] => {
+  const result: unknown[] = [];
+  for (const document of groupDocs) {
+    const resolved = getValueByPath(
+      document as Record<string, unknown>,
+      fieldPath,
+      pathCache,
+    );
+    if (resolved === PATH_NOT_FOUND || resolved === undefined) {
+      continue;
+    }
+    result.push(cloneAccumulatorValue(resolved));
+  }
+  return result;
+};
+
+/**
+ * Implements `$addToSet` (ADR-023): collects the *distinct* resolved values
+ * of `fieldPath` within the group, in first-occurrence order within the
+ * aggregation input order, using exactly `scanDistinctValues`'s equality
+ * semantics (identical to `.distinct()`: missing/`undefined` skipped, `null`
+ * a valid member, deep equality for objects/arrays, strict equality for
+ * primitives). Reuses the shared `scanDistinctValues` core so the per-group
+ * `MAX_DISTINCT_COUNT` cap (and its `ValidationError`) is inherited for
+ * free, identifying the failing operation as the `$addToSet` accumulator.
+ * Each newly-distinct value is defensively cloned via `cloneAccumulatorValue`
+ * before entering the result array, since group documents are references to
+ * stored documents. An empty group field set yields `[]`.
+ */
+const computeAddToSet = <TDocument extends FrostpillarDocument>(
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): unknown[] => {
+  const result: unknown[] = [];
+  scanDistinctValues(
+    groupDocs,
+    fieldPath,
+    pathCache,
+    '$addToSet accumulator',
+    (value) => {
+      result.push(cloneAccumulatorValue(value));
+    },
+  );
+  return result;
+};
+
 const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
   groupDocs: FrostpillarStoredDocument<TDocument>[],
   accumulator: GroupAccumulator,
@@ -579,6 +645,14 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
       pathCache,
       '$countDistinct accumulator',
     );
+  }
+
+  if (key === '$push') {
+    return computePush(groupDocs, accumulator.$push!, pathCache);
+  }
+
+  if (key === '$addToSet') {
+    return computeAddToSet(groupDocs, accumulator.$addToSet!, pathCache);
   }
 
   const fieldPath = accumulator[key]!;

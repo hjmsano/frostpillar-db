@@ -27,7 +27,7 @@ frostpillar-cli         ← Command-line interface (planned)
 - **Fluent query API** — method chaining with `$`-operator filters and lazy execution (`find`, `sort`, `skip`, `limit`, `project`, `toArray`, `count`)
 - **CRUD + update operators** — `insert`, `insertMany`, `find`, `findOne`, `update`, `remove`, `count` with `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet`
 - **Upsert support** — `update` with `{ upsert: true }` inserts when no document matches
-- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `countDistinct`, `groupBy` (single- or multi-field, with `$first`/`$last`/`$countDistinct` per-group value accumulators) on filtered result sets
+- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `countDistinct`, `groupBy` (single- or multi-field, with `$first`/`$last`/`$countDistinct`/`$push`/`$addToSet` per-group value accumulators) on filtered result sets
 - **Change events** — `watch()` listeners for insert, update, and remove operations
 - **TTL (Time-To-Live)** — automatic document expiration per collection
 - **Async cursor** — iterate results with `for await...of`
@@ -698,7 +698,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 A document missing one of the requested fields contributes `null` for that dimension. A single-element array (e.g. `['dept']`) still produces an object `_key` — it is not collapsed to the scalar form used by the single-field form.
 
-Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct`.
+Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct`, `$push`, `$addToSet`.
 
 `$median: 'fieldPath'` and `$percentile: { field: 'fieldPath', p: 0.95 }` mirror `.median()` / `.percentile()`: same interpolation, same `null`-when-empty behavior. `p` is **scalar-only** inside `groupBy` — request multiple percentiles as multiple output fields:
 
@@ -736,6 +736,25 @@ const result = await users.find().groupBy('dept', {
 });
 // [{ _key: 'engineering', uniqueCities: 2 }, { _key: 'design', uniqueCities: 1 }]
 ```
+
+`$push: 'fieldPath'` / `$addToSet: 'fieldPath'` ([ADR-023](docs/adr/023-push-addtoset-accumulators.md)) are the final pair of accumulators — the array-valued **collectors**. Both consume the group's documents in the same aggregation input order as `$first`/`$last` (ADR-020), and both defensively clone object/array values, so mutating a returned value never touches stored data:
+
+- `$push: 'fieldPath'` collects the value of `fieldPath` for **every** document in the group, in order, with duplicates preserved. Missing/`undefined` values are skipped; `null` is included.
+- `$addToSet: 'fieldPath'` collects the **distinct** values of `fieldPath`, in first-occurrence order, using the identical equality rules as `.distinct()`/`$countDistinct` (deep equality for objects/arrays, strict equality for primitives, `null` a valid member).
+
+Both return `[]` for a group with no present values.
+
+```ts
+const result = await posts.find().groupBy('author', {
+  allTags: { $push: 'tag' },       // every tag, in order, with duplicates
+  cities: { $addToSet: 'city' },   // the set of distinct cities
+});
+// [{ _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] }]
+```
+
+> **Memory caveat:** `$push` and `$addToSet` are memory-bound collectors — a high-cardinality group produces a large output array. `$push` is bounded only by `MAX_GROUP_DOCUMENTS` (100,000 documents per group); `$addToSet` is additionally capped at `MAX_DISTINCT_COUNT` (100,000 distinct values) **per group**, the same cap and `ValidationError` as `$countDistinct`. Prefer a scalar accumulator, or narrow the group, when cardinality is high.
+>
+> **Name reuse note:** `$push`/`$addToSet` are also update operators (see [Update Operators](#update-operators) below). The two are unrelated: inside `groupBy` the operand is a field-path **string**; inside an update spec the operand is an update **instruction** (e.g. `{ $push: { tags: 'new' } }`). They never appear on the same object.
 
 > **Object key ordering:** When grouping by a field whose value is an object or array, keys are serialized via `JSON.stringify`. Objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) become **different** groups. Normalize property order before insertion if consistent grouping is required. This applies independently to each dimension in the multi-dimension form.
 
@@ -968,6 +987,7 @@ In addition to per-document payload limits, frostpillar-db enforces fixed operat
 | Max `groupBy` docs per group    | 100,000 | Documents collected into a single `groupBy()` group               |
 | Max `distinct` value count      | 100,000 | Distinct values returned by a single `distinct()`                 |
 | Max `countDistinct` value count | 100,000 | Unique values counted by a single `countDistinct()`, or by a single `$countDistinct` group |
+| Max `$addToSet` value count     | 100,000 | Distinct values collected by a single `$addToSet` group (same cap as `$countDistinct`)     |
 
 `$regex` patterns are additionally screened for catastrophic-backtracking shapes and rejected with `ValidationError` before compilation. Exceeding any of the limits above throws `ValidationError` at operation time. Three mechanisms cover this:
 

@@ -1342,6 +1342,506 @@ void test('groupBy $countDistinct throws ValidationError when a single group exc
   }
 });
 
+// --- $push / $addToSet accumulators (ADR-023) -------------------------------
+
+interface TaggedDocument {
+  _id?: string;
+  author: string;
+  tag: string | null;
+  rank: number;
+}
+
+void test('groupBy $push collects every value in aggregation input order, following .sort() ascending', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: 'c', rank: 3 },
+      { _id: 'p2', author: 'alice', tag: 'a', rank: 1 },
+      { _id: 'p3', author: 'alice', tag: 'b', rank: 2 },
+    ]);
+
+    const result = await posts
+      .find({})
+      .sort({ rank: 1 })
+      .groupBy('author', { tags: { $push: 'tag' } });
+
+    assert.deepEqual(result[0].tags, ['a', 'b', 'c']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push collects every value in aggregation input order, following .sort() descending', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: 'c', rank: 3 },
+      { _id: 'p2', author: 'alice', tag: 'a', rank: 1 },
+      { _id: 'p3', author: 'alice', tag: 'b', rank: 2 },
+    ]);
+
+    const result = await posts
+      .find({})
+      .sort({ rank: -1 })
+      .groupBy('author', { tags: { $push: 'tag' } });
+
+    assert.deepEqual(result[0].tags, ['c', 'b', 'a']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push without .sort() uses storage order', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: 'c', rank: 3 },
+      { _id: 'p2', author: 'alice', tag: 'a', rank: 1 },
+      { _id: 'p3', author: 'alice', tag: 'b', rank: 2 },
+    ]);
+
+    const result = await posts.find({}).groupBy('author', {
+      tags: { $push: 'tag' },
+    });
+
+    // Storage order (insertion order): c, a, b -- NOT sorted by rank.
+    assert.deepEqual(result[0].tags, ['c', 'a', 'b']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push skips missing/undefined, keeps null, preserves duplicates and position', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: 'x', rank: 1 },
+      { _id: 'p2', author: 'alice', rank: 2 } as TaggedDocument, // missing tag
+      { _id: 'p3', author: 'alice', tag: null, rank: 3 },
+      { _id: 'p4', author: 'alice', tag: 'x', rank: 4 }, // duplicate
+    ]);
+
+    const result = await posts.find({}).groupBy('author', {
+      tags: { $push: 'tag' },
+    });
+
+    assert.deepEqual(result[0].tags, ['x', null, 'x']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push returns [] for a group with no present values', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', rank: 1 } as TaggedDocument,
+    ]);
+
+    const result = await posts.find({}).groupBy('author', {
+      tags: { $push: 'tag' },
+    });
+
+    assert.deepEqual(result[0].tags, []);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push: mutating a returned array or an object inside it does not affect the stored document', async () => {
+  const database = new Database({});
+  const items = database.collection<{
+    _id?: string;
+    category: string;
+    meta: { tag: string };
+  }>('items');
+
+  try {
+    await items.insert({ _id: 'i1', category: 'a', meta: { tag: 'orig' } });
+
+    const result = await items.find({}).groupBy('category', {
+      metas: { $push: 'meta' },
+    });
+
+    const metas = result[0].metas as { tag: string }[];
+    metas.push({ tag: 'INJECTED' });
+    metas[0].tag = 'MUTATED';
+
+    const stored = await items.find({ _id: 'i1' }).toArray();
+    assert.deepEqual(stored[0]?.meta, { tag: 'orig' });
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push: string and array groupBy forms', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const stringForm = await users.find({}).groupBy('dept', {
+      names: { $push: 'name' },
+    });
+    const eng = stringForm.find((group) => group._key === 'eng');
+    assert.ok(eng);
+    assert.deepEqual(eng.names, ['Alice', 'Bob', 'Carol', 'Erin']);
+
+    const arrayForm = await users.find({}).groupBy(['dept'], {
+      names: { $push: 'name' },
+    });
+    const engArray = arrayForm.find(
+      (group) => (group._key as Record<string, unknown>).dept === 'eng',
+    );
+    assert.ok(engArray);
+    assert.deepEqual(engArray.names, ['Alice', 'Bob', 'Carol', 'Erin']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push operand validation: non-string operand rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const badOperand of [123, null, true, { field: 'name' }]) {
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { $push: badOperand },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for $push with operand ${JSON.stringify(badOperand)}`,
+      );
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push operand validation: bad field path rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $push: '__proto__.x' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+      'Expected ValidationError for $push with reserved field path',
+    );
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $push: '' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+      'Expected ValidationError for $push with empty field path',
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push: exactly-one-accumulator-key rule still enforced', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $push: 'name', $last: 'name' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet collects distinct values in first-occurrence order, following .sort()', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: 'b', rank: 3 },
+      { _id: 'p2', author: 'alice', tag: 'a', rank: 1 },
+      { _id: 'p3', author: 'alice', tag: 'b', rank: 2 }, // duplicate of p1's tag
+    ]);
+
+    const result = await posts
+      .find({})
+      .sort({ rank: 1 })
+      .groupBy('author', { tags: { $addToSet: 'tag' } });
+
+    // Aggregation input order (rank asc): a(1), b(2), b(3) -> distinct first-occurrence: a, b.
+    assert.deepEqual(result[0].tags, ['a', 'b']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet dedupes object values by deep equality regardless of key insertion order', async () => {
+  const database = new Database({});
+  const items = database.collection<{
+    _id?: string;
+    category: string;
+    coords: { lat: number; lng: number };
+  }>('items');
+
+  try {
+    await items.insertMany([
+      { _id: 'i1', category: 'a', coords: { lat: 1, lng: 2 } },
+      { _id: 'i2', category: 'a', coords: { lng: 2, lat: 1 } }, // same object, reordered keys
+      { _id: 'i3', category: 'a', coords: { lat: 3, lng: 4 } },
+    ]);
+
+    const result = await items.find({}).groupBy('category', {
+      distinctCoords: { $addToSet: 'coords' },
+    });
+
+    assert.deepEqual(result[0].distinctCoords, [
+      { lat: 1, lng: 2 },
+      { lat: 3, lng: 4 },
+    ]);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet: null is a valid distinct member, distinct from missing and from the string "null"', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: null, rank: 1 },
+      { _id: 'p2', author: 'alice', rank: 2 } as TaggedDocument, // missing
+      { _id: 'p3', author: 'alice', tag: null, rank: 3 }, // duplicate null
+      { _id: 'p4', author: 'alice', tag: 'null', rank: 4 }, // the string "null"
+    ]);
+
+    const result = await posts.find({}).groupBy('author', {
+      tags: { $addToSet: 'tag' },
+    });
+
+    assert.deepEqual(result[0].tags, [null, 'null']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet returns [] for a group with no present values', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', rank: 1 } as TaggedDocument,
+    ]);
+
+    const result = await posts.find({}).groupBy('author', {
+      tags: { $addToSet: 'tag' },
+    });
+
+    assert.deepEqual(result[0].tags, []);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet: mutating a returned array or an object inside it does not affect the stored document', async () => {
+  const database = new Database({});
+  const items = database.collection<{
+    _id?: string;
+    category: string;
+    meta: { tag: string };
+  }>('items');
+
+  try {
+    await items.insert({ _id: 'i1', category: 'a', meta: { tag: 'orig' } });
+
+    const result = await items.find({}).groupBy('category', {
+      metas: { $addToSet: 'meta' },
+    });
+
+    const metas = result[0].metas as { tag: string }[];
+    metas.push({ tag: 'INJECTED' });
+    metas[0].tag = 'MUTATED';
+
+    const stored = await items.find({ _id: 'i1' }).toArray();
+    assert.deepEqual(stored[0]?.meta, { tag: 'orig' });
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet: string and array groupBy forms', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const stringForm = await users.find({}).groupBy('dept', {
+      cities: { $addToSet: 'profile.city' },
+    });
+    const eng = stringForm.find((group) => group._key === 'eng');
+    assert.ok(eng);
+    assert.deepEqual(eng.cities, ['Tokyo', 'Osaka']);
+
+    const arrayForm = await users.find({}).groupBy(['dept'], {
+      cities: { $addToSet: 'profile.city' },
+    });
+    const engArray = arrayForm.find(
+      (group) => (group._key as Record<string, unknown>).dept === 'eng',
+    );
+    assert.ok(engArray);
+    assert.deepEqual(engArray.cities, ['Tokyo', 'Osaka']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet operand validation: non-string operand rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    for (const badOperand of [123, null, true, { field: 'name' }]) {
+      await assert.rejects(
+        () =>
+          users.find().groupBy('dept', {
+            result: { $addToSet: badOperand },
+          } as unknown as GroupAccumulators),
+        ValidationError,
+        `Expected ValidationError for $addToSet with operand ${JSON.stringify(badOperand)}`,
+      );
+    }
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet operand validation: bad field path rejected', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $addToSet: '__proto__.x' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+      'Expected ValidationError for $addToSet with reserved field path',
+    );
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $addToSet: '' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+      'Expected ValidationError for $addToSet with empty field path',
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet: exactly-one-accumulator-key rule still enforced', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    await assert.rejects(
+      () =>
+        users.find().groupBy('dept', {
+          result: { $addToSet: 'profile.city', $first: 'name' },
+        } as unknown as GroupAccumulators),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $addToSet throws ValidationError when a single group exceeds MAX_DISTINCT_COUNT unique values (per-group cap)', async () => {
+  const database = new Database({});
+  const metrics = database.collection<CardinalityDocument>('metrics');
+
+  try {
+    // MAX_DISTINCT_COUNT (100,000) + 1 unique `value`s, all in one group.
+    const docs = Array.from({ length: 100_001 }, (_, i) => ({
+      _id: String(i),
+      group: 'only',
+      value: i,
+    }));
+    await metrics.insertMany(docs);
+
+    await assert.rejects(
+      () =>
+        metrics.find({}).groupBy('group', {
+          uniqueValues: { $addToSet: 'value' },
+        }),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy $push and $addToSet coexist as separate output fields in the same accumulators object', async () => {
+  const database = new Database({});
+  const posts = database.collection<TaggedDocument>('posts');
+
+  try {
+    await posts.insertMany([
+      { _id: 'p1', author: 'alice', tag: 'x', rank: 1 },
+      { _id: 'p2', author: 'alice', tag: 'x', rank: 2 },
+      { _id: 'p3', author: 'alice', tag: 'y', rank: 3 },
+    ]);
+
+    const result = await posts.find({}).groupBy('author', {
+      all: { $push: 'tag' },
+      distinctTags: { $addToSet: 'tag' },
+    });
+
+    assert.deepEqual(result[0].all, ['x', 'x', 'y']);
+    assert.deepEqual(result[0].distinctTags, ['x', 'y']);
+  } finally {
+    await database.close();
+  }
+});
+
 void test('groupBy preserves storage order for equal sort keys (tie stability)', async () => {
   const database = new Database({});
   const items = database.collection<GroupRankedDocument>('items');

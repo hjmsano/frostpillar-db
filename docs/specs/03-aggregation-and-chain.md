@@ -317,6 +317,8 @@ interface GroupAccumulator {
   $first?: string; // field path
   $last?: string; // field path
   $countDistinct?: string; // field path
+  $push?: string; // field path
+  $addToSet?: string; // field path
 }
 
 type GroupAccumulators = Record<string, GroupAccumulator>;
@@ -352,6 +354,12 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
   - `$stdDevPop: 'fieldPath'` / `$stdDevSamp: 'fieldPath'` / `$variancePop: 'fieldPath'` / `$varianceSamp: 'fieldPath'` — population/sample standard deviation and variance of numeric values, computed via `computeWelford`, same `n = 0` → `null` / `n = 1` → pop `0`, samp `null` edge rules as the terminals (§1.3 above).
   - `$first: 'fieldPath'` / `$last: 'fieldPath'` ([ADR-021](../adr/021-first-last-accumulators.md)) — the value of `fieldPath` on the first (resp. last) document of the group, in **aggregation input order** (§1.4): the chain's `.sort()` order when present, otherwise storage order. This is **positional-then-read**: the first/last document of the group is selected first, and only then is `fieldPath` read from it — it is not "the first/last document that has the field". If the selected document does not have `fieldPath`, the result is `null`. Unlike every other accumulator, `$first`/`$last` return the value **of any type** (string, number, boolean, `null`, object, or array) — the first non-numeric accumulators; they do not use `extractNumericValues`. Object/array values are defensively cloned via `cloneAccumulatorValue` (an exported alias of `cloneDocument`, `src/internal/objectUtils.ts`) before being placed in the result, since group documents are references to stored documents; primitives and `null` pass through unchanged. A group always has at least one document, so a selected document always exists.
   - `$countDistinct: 'fieldPath'` ([ADR-022](../adr/022-count-distinct.md)) — the count of unique values of `fieldPath` within the group, per the exact `.countDistinct()` semantics above (`=== distinct(fieldPath).length`, evaluated within the group): missing/`undefined` skipped, `null` counted, deep equality for objects/arrays, strict equality for primitives. Returns `0` for a group with no present values (never `null`) — consistent with `$count`/`$sum`. The `MAX_DISTINCT_COUNT` cap applies **per group**: if a single group's unique-value count would exceed the cap, the resulting `ValidationError` identifies the failing operation as the `$countDistinct` accumulator rather than the `countDistinct()` terminal. With the current equal 100,000 limits, however, each document contributes at most one distinct field value, so `MAX_GROUP_DOCUMENTS` is reached before `$countDistinct` can exceed `MAX_DISTINCT_COUNT`; the group document-cap error therefore takes precedence.
+  - `$push: 'fieldPath'` / `$addToSet: 'fieldPath'` ([ADR-023](../adr/023-push-addtoset-accumulators.md)) — the array-valued **collector** accumulators, the final pair in the aggregation suite. Both consume the group's documents in **aggregation input order** (§1.4: the chain's `.sort()` order when present, otherwise storage order) — no re-sorting happens inside the accumulator, since ADR-020 already establishes that order before `groupBy` runs.
+    - `$push: 'fieldPath'` — an array of the resolved value of `fieldPath` for **every document in the group**, in aggregation input order. Missing/`undefined` values are **skipped**; `null` is **included**; duplicates are **preserved**. An empty group field set (no present values) yields `[]`.
+    - `$addToSet: 'fieldPath'` — an array of the **distinct** resolved values of `fieldPath`, in first-occurrence order within the aggregation input order, using **exactly `.distinct()`'s equality semantics** (missing/`undefined` skipped, `null` a valid member, deep equality for objects/arrays, strict equality for primitives). An empty group field set yields `[]`.
+    - Like `$first`/`$last`, `$push`/`$addToSet` return values of **any type**; object/array values are defensively cloned via `cloneAccumulatorValue` before entering the result array, since group documents are references to stored documents — primitives and `null` pass through unchanged. This applies to every element `$push` collects and every distinct value `$addToSet` collects, not just a single positional value.
+    - **Limits:** `$push` needs no dedicated limit — a group holds at most `MAX_GROUP_DOCUMENTS` (100,000) documents and `$push` emits at most one value per document, so its output is already bounded. `$addToSet` reuses the **same per-group `MAX_DISTINCT_COUNT` (100,000) cap** as `$countDistinct` (built on the identical shared distinct-value scan core): if a single group's unique-value count would exceed the cap, `ValidationError` is thrown, identifying the failing operation as the `$addToSet` accumulator. As with `$countDistinct`, the equal 100,000 limits mean `MAX_GROUP_DOCUMENTS` is reached before `$addToSet` can exceed `MAX_DISTINCT_COUNT` in practice, so the group document-cap error takes precedence.
+    - **Name reuse note:** `$push`/`$addToSet` are also `UpdateOperations` operator names (the update DSL). The two contexts are structurally distinct — an update spec's `$push`/`$addToSet` operand is an update instruction (`Record<string, unknown>`), while a `groupBy` accumulator's operand is a field-path string — and never coexist on the same interface, so there is no ambiguity in practice (ADR-023 §3).
 - **`$percentile` operand validation:** the operand must be a plain object with **exactly** the keys `field` (a valid field path, same eager validation as the other accumulators' field-path operands) and `p` (the same `[0, 1]` finite-number rule as the `.percentile()` terminal). Extra or missing keys throw `ValidationError`. The existing "exactly one accumulator key per entry" rule is unchanged — `$percentile` still occupies exactly one key of its `GroupAccumulator` entry.
 - Groups are returned in order of first occurrence of each key value, evaluated over the **aggregation input order** (§1.4): storage order, or `.sort()` order when a sort is specified on the chain (unchanged behavior when no sort is specified; unchanged for both single-field and multi-dimension forms).
 - Each group's internal document order (as consumed by order-sensitive accumulators) likewise follows the aggregation input order.
@@ -361,6 +369,7 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
 - Throws `ValidationError` if the number of distinct groups would exceed `MAX_GROUP_COUNT` (100,000).
 - Throws `ValidationError` if any single group would exceed `MAX_GROUP_DOCUMENTS` (100,000) documents. (Reachable only when `maxMatchedDocuments` is configured above 100,000, since the scan cap would otherwise be hit first.)
 - Throws `ValidationError` if a `$countDistinct` accumulator's unique-value count within any single group would exceed `MAX_DISTINCT_COUNT` (100,000). At the current equal limits, `MAX_GROUP_DOCUMENTS` is reached first and its error takes precedence.
+- Throws `ValidationError` if an `$addToSet` accumulator's unique-value count within any single group would exceed `MAX_DISTINCT_COUNT` (100,000), identically to `$countDistinct` above (and subject to the same `MAX_GROUP_DOCUMENTS`-reached-first precedence at the current equal limits).
 - Returns `[]` if no matching documents.
 
 **Example (single field):**
@@ -399,6 +408,18 @@ const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
 });
 // → [
 //   { _key: 'u1', latestStatus: 'shipped' },
+// ]
+```
+
+**Example (`$push` / `$addToSet`, all tags and the set of cities per author):**
+
+```ts
+const result = await posts.find({}).groupBy('author', {
+  allTags: { $push: 'tag' },
+  cities: { $addToSet: 'city' },
+});
+// → [
+//   { _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] },
 // ]
 ```
 
@@ -485,6 +506,8 @@ Each terminal call triggers a fresh execution of the pipeline.
 
 **`$first` / `$last` nuance:** these accumulators are not numeric, so they are not represented as a column above. A group always has at least one document (there is no "no matching documents" case for an individual group — the row above already covers `groupBy` returning `[]` when nothing matches at all). Within a non-empty group, `$first`/`$last` return `null` only when the selected (first or last) document lacks the requested field path — not when the group as a whole lacks numeric values. See §1.3.
 
+**`$push` / `$addToSet` nuance:** also not numeric, not represented as a column above. Within a non-empty group, both return **`[]`** (not `null`) when the group has no present values for the field — a collector's empty result is an empty array, consistent with `.distinct()`'s `[]`-on-empty (not `.avg()`/`.min()`/`.max()`/`.median()`'s `null`-on-empty). See §1.3.
+
 ## 5. Error Handling
 
 | Error                 | Condition                                                                                                                                                                                                          |
@@ -501,8 +524,9 @@ Each terminal call triggers a fresh execution of the pipeline.
 | `ValidationError`     | `countDistinct` field path fails the same eager validation as above                                                                                                                                                |
 | `ValidationError`     | `countDistinct` unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000) — the identical cap and boundary as `distinct`                                                                                     |
 | `ValidationError`     | `groupBy` field fails the same eager validation as above (string form), or, for the array form, `field` is an empty array, an array element is not a non-empty string or fails the same eager field-path validation, or the array contains duplicate field paths                                                                          |
-| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct` operands) fail the same eager validation                          |
+| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct`, `$push`, `$addToSet` operands) fail the same eager validation                          |
 | `ValidationError`     | `groupBy` `$countDistinct` accumulator's per-group unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000)                                                                                                 |
+| `ValidationError`     | `groupBy` `$addToSet` accumulator's per-group unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000) — the identical per-group cap and boundary as `$countDistinct`                                      |
 | `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
 | `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
 | `ValidationError`     | `percentile` / `$percentile` `p` is not a finite scalar number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                        |
