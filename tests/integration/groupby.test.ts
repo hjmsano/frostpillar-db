@@ -728,3 +728,113 @@ void test('groupBy respects filter', async () => {
     await database.close();
   }
 });
+
+// --- Chain-sort-aware aggregation (ADR-020) --------------------------------
+
+interface GroupRankedDocument {
+  _id?: string;
+  group: string;
+  rank: number;
+}
+
+void test('groupBy group order follows .sort() ascending', async () => {
+  const database = new Database({});
+  const items = database.collection<GroupRankedDocument>('items');
+
+  try {
+    await items.insertMany([
+      { _id: '1', group: 'b', rank: 3 },
+      { _id: '2', group: 'a', rank: 1 },
+      { _id: '3', group: 'c', rank: 2 },
+      { _id: '4', group: 'a', rank: 4 },
+    ]);
+
+    // Storage order (no sort): first occurrence is b, a, c.
+    const noSort = await items.find({}).groupBy('group', {
+      count: { $count: true },
+    });
+    assert.deepEqual(
+      noSort.map((entry) => entry._key),
+      ['b', 'a', 'c'],
+    );
+
+    // Ascending by rank: 2(a,1), 3(c,2), 1(b,3), 4(a,4 dup) -> a, c, b.
+    const sorted = await items
+      .find({})
+      .sort({ rank: 1 })
+      .groupBy('group', { count: { $count: true } });
+    assert.deepEqual(
+      sorted.map((entry) => entry._key),
+      ['a', 'c', 'b'],
+    );
+
+    // Group contents (not just order) are unchanged by the sort.
+    const groupA = sorted.find((entry) => entry._key === 'a');
+    assert.ok(groupA);
+    assert.equal(groupA.count, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy group order follows .sort() descending', async () => {
+  const database = new Database({});
+  const items = database.collection<GroupRankedDocument>('items');
+
+  try {
+    await items.insertMany([
+      { _id: '1', group: 'b', rank: 3 },
+      { _id: '2', group: 'a', rank: 1 },
+      { _id: '3', group: 'c', rank: 2 },
+      { _id: '4', group: 'a', rank: 4 },
+    ]);
+
+    // Descending by rank: 4(a,4), 1(b,3), 3(c,2), 2(a,1 dup) -> a, b, c.
+    const sorted = await items
+      .find({})
+      .sort({ rank: -1 })
+      .groupBy('group', { count: { $count: true } });
+    assert.deepEqual(
+      sorted.map((entry) => entry._key),
+      ['a', 'b', 'c'],
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('groupBy preserves storage order for equal sort keys (tie stability)', async () => {
+  const database = new Database({});
+  const items = database.collection<GroupRankedDocument>('items');
+
+  try {
+    await items.insertMany([
+      { _id: 'A', group: 'p', rank: 1 },
+      { _id: 'B', group: 'q', rank: 2 },
+      { _id: 'C', group: 'r', rank: 1 }, // tie with A
+      { _id: 'D', group: 's', rank: 2 }, // tie with B
+    ]);
+
+    // Storage order (no sort): p, q, r, s.
+    const noSort = await items.find({}).groupBy('group', {
+      count: { $count: true },
+    });
+    assert.deepEqual(
+      noSort.map((entry) => entry._key),
+      ['p', 'q', 'r', 's'],
+    );
+
+    // Ascending by rank, stable: ties keep storage order within each rank
+    // bucket (A before C, B before D) -> p, r, q, s.
+    const sorted = await items
+      .find({})
+      .sort({ rank: 1 })
+      .groupBy('group', { count: { $count: true } });
+    assert.deepEqual(
+      sorted.map((entry) => entry._key),
+      ['p', 'r', 'q', 's'],
+    );
+  } finally {
+    await database.close();
+  }
+});

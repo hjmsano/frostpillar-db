@@ -617,7 +617,11 @@ const min = await users.find({ dept: 'eng' }).min('salary');
 const max = await users.find({ dept: 'eng' }).max('salary');
 ```
 
-`sum`, `avg`, `min`, and `max` operate on the full filtered set — sort, skip, and limit are not applied. `count()` is an exception: it applies skip and limit so it matches what `.toArray()` would return. See [ResultChain](#resultchain) for `count()`.
+`sum`, `avg`, `min`, and `max` operate on the full filtered set and are order-independent — skip, limit, and projection are not applied. `count()` is an exception: it applies skip and limit so it matches what `.toArray()` would return. See [ResultChain](#resultchain) for `count()`.
+
+**Aggregation input order (ADR-020):** aggregation input is storage order, or `.sort()` order when a `.sort()` precedes the terminal on the chain. `sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp` are mathematically order-independent, so they return identical results with or without a preceding `.sort()`. `distinct()` and `groupBy()` are order-sensitive: `distinct()`'s first-occurrence order and `groupBy()`'s group order (plus each group's internal document order) follow the `.sort()` order when one is present. `skip`/`limit`/`projection` are still never applied to aggregation input.
+
+> **Migration note:** Aggregation now honors a preceding `.sort()`. If you relied on storage-ordered `distinct`/`groupBy` results while also calling `.sort()` on the same chain, remove the `.sort()` to keep storage order.
 
 Non-numeric values are skipped. `avg`/`min`/`max` return `null` when no numeric values exist. `sum` returns `0`.
 
@@ -652,9 +656,11 @@ const departments = await users.find().distinct('dept');
 // ['design', 'engineering', 'marketing']
 ```
 
+Returned values follow first occurrence in aggregation input order (ADR-020): storage order, or `.sort()` order when a `.sort()` precedes `distinct()` on the chain.
+
 ### Grouping
 
-`groupBy` groups filtered documents by a field and computes accumulators per group. Pass a single field path to group by one dimension, or an array of field paths to group by a composite key across multiple dimensions:
+`groupBy` groups filtered documents by a field and computes accumulators per group. Pass a single field path to group by one dimension, or an array of field paths to group by a composite key across multiple dimensions. Group order (first occurrence of each key) and each group's internal document order follow the aggregation input order (ADR-020): storage order, or `.sort()` order when a `.sort()` precedes `groupBy()` on the chain.
 
 ```ts
 const result = await users.find().groupBy('dept', {

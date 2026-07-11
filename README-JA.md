@@ -617,7 +617,11 @@ const min = await users.find({ dept: 'eng' }).min('salary');
 const max = await users.find({ dept: 'eng' }).max('salary');
 ```
 
-`sum`、`avg`、`min`、`max` はフィルタ後の全データに対して実行されます（sort/skip/limit は適用されません）。`count()` は例外で、skip と limit を適用し、`.toArray()` が返すのと同じ件数を返します。`count()` については [ResultChain](#resultchain) を参照してください。
+`sum`、`avg`、`min`、`max` はフィルタ後の全データに対して実行され、順序に依存しません（skip/limit/projection は適用されません）。`count()` は例外で、skip と limit を適用し、`.toArray()` が返すのと同じ件数を返します。`count()` については [ResultChain](#resultchain) を参照してください。
+
+**集計の入力順序（ADR-020）:** 集計の入力順序は、ストレージ順、またはチェーン上で集計端末メソッドより前に `.sort()` が呼ばれていればその `.sort()` 順になります。`sum`/`avg`/`min`/`max`/`percentile`/`median`/`stdDevPop`/`stdDevSamp`/`variancePop`/`varianceSamp` は数学的に順序に依存しないため、`.sort()` の有無にかかわらず同じ結果を返します。`distinct()` と `groupBy()` は順序に影響を受けます: `distinct()` の初出順序と `groupBy()` のグループ順序（および各グループ内のドキュメント順序）は、`.sort()` が指定されていればその順序に従います。`skip`/`limit`/`projection` は引き続き集計の入力には適用されません。
+
+> **移行時の注意:** 集計はチェーン上で先行する `.sort()` を尊重するようになりました。同じチェーンで `.sort()` を呼びながら `distinct`/`groupBy` の結果がストレージ順であることに依存していた場合は、`.sort()` を削除するとストレージ順が維持されます。
 
 非数値は無視されます。`avg`/`min`/`max` は数値がない場合 `null` を返します。`sum` は `0` を返します。
 
@@ -652,9 +656,11 @@ const departments = await users.find().distinct('dept');
 // ['design', 'engineering', 'marketing']
 ```
 
+返される値は、集計の入力順序（ADR-020）における初出順に従います: ストレージ順、またはチェーン上で `distinct()` より前に `.sort()` が指定されていればその順序になります。
+
 ### グルーピング
 
-`groupBy` はフィルタ後のドキュメントをフィールドでグループ化し、グループごとにアキュムレータを計算します。単一のフィールドパスを渡すと1次元でグループ化し、フィールドパスの配列を渡すと複数次元の複合キーでグループ化します:
+`groupBy` はフィルタ後のドキュメントをフィールドでグループ化し、グループごとにアキュムレータを計算します。単一のフィールドパスを渡すと1次元でグループ化し、フィールドパスの配列を渡すと複数次元の複合キーでグループ化します。グループの順序（各キーの初出順）と各グループ内のドキュメント順序は、集計の入力順序（ADR-020）に従います: ストレージ順、またはチェーン上で `groupBy()` より前に `.sort()` が指定されていればその順序になります。
 
 ```ts
 const result = await users.find().groupBy('dept', {
