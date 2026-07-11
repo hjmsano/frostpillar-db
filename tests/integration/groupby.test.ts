@@ -403,6 +403,42 @@ void test('groupBy throws ValidationError for duplicate field paths in array', a
   }
 });
 
+void test('groupBy array form is unaffected by caller mutating the field array mid-execution', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+
+    const fields = ['dept', 'profile.city'];
+    // Do not await yet: validateGroupByField copies `fields` synchronously
+    // before the internal fetch await, so mutations below cannot leak in.
+    const pending = users
+      .find({})
+      .groupBy(fields, { count: { $count: true } });
+    fields[0] = 'status';
+    fields.length = 1;
+
+    const result = await pending;
+
+    // Results must reflect the ORIGINAL paths: dept x profile.city.
+    assert.equal(result.length, 3);
+    for (const group of result) {
+      const key = group._key as Record<string, unknown>;
+      assert.deepEqual(Object.keys(key).sort(), ['dept', 'profile.city']);
+    }
+
+    const engTokyo = result.find((group) => {
+      const key = group._key as Record<string, unknown>;
+      return key.dept === 'eng' && key['profile.city'] === 'Tokyo';
+    });
+    assert.ok(engTokyo);
+    assert.equal(engTokyo.count, 3);
+  } finally {
+    await database.close();
+  }
+});
+
 void test('groupBy respects filter', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');

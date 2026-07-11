@@ -39,7 +39,10 @@ export const validateAggregationField = (field: string): string => {
  * Array form: the array must be non-empty; each element must independently
  * pass the same `validateAggregationField` check (non-empty string + eager
  * `validateFieldPath`); duplicate field paths within the array are rejected.
- * Validation runs eagerly, before any document is touched.
+ * Validation runs eagerly, before any document is touched, and returns a
+ * defensive shallow copy of the input array: the validated set of paths is
+ * exactly the set used during execution, even if the caller mutates their
+ * array afterwards (e.g. during `ResultChain.groupBy`'s fetch await).
  */
 export const validateGroupByField = (
   field: string | string[],
@@ -52,8 +55,10 @@ export const validateGroupByField = (
     throw new ValidationError('groupBy field array must not be empty.');
   }
 
+  const copy = [...field];
+
   const seen = new Set<string>();
-  for (const element of field) {
+  for (const element of copy) {
     validateAggregationField(element);
     if (seen.has(element)) {
       throw new ValidationError(
@@ -63,7 +68,7 @@ export const validateGroupByField = (
     seen.add(element);
   }
 
-  return field;
+  return copy;
 };
 
 /**
@@ -357,36 +362,42 @@ export const computeGroupBy = <TDocument extends FrostpillarDocument>(
   accumulators: GroupAccumulators,
   pathCache: Map<string, string[]>,
 ): GroupResultEntry[] => {
-  validateGroupByField(field);
+  // For the array form the validated value is a defensive copy of the input,
+  // so it is what must be iterated below -- not the caller's `field`.
+  const validatedField = validateGroupByField(field);
   validateAccumulators(accumulators);
 
   const groups: GroupsMap<TDocument> = new Map();
 
-  if (Array.isArray(field)) {
-    // Composite (array) form. Resolve every requested dimension per document;
-    // a dimension whose path is not found contributes `null`, mirroring the
-    // string form's "missing field -> null" rule, independently per dimension.
+  if (Array.isArray(validatedField)) {
+    // Composite (array) form. Resolve every requested dimension per document
+    // in a single pass; a dimension whose path is not found contributes
+    // `null`, mirroring the string form's "missing field -> null" rule,
+    // independently per dimension. Each dimension is serialized via the
+    // existing type-aware serializeGroupKey, then the parts are combined
+    // collision-free via JSON.stringify of the ordered array (ADR-017): this
+    // guarantees no cross-dimension collision, unlike a plain string join.
+    const len = validatedField.length;
     for (const document of documents) {
-      const resolvedValues = field.map((path) => {
+      const resolvedValues = new Array<unknown>(len);
+      const serializedParts = new Array<string>(len);
+      for (let i = 0; i < len; i += 1) {
         const resolved = getValueByPath(
           document as Record<string, unknown>,
-          path,
+          validatedField[i],
           pathCache,
         );
-        return resolved !== PATH_NOT_FOUND ? resolved : null;
-      });
-
-      // Each dimension is serialized independently via the existing type-aware
-      // serializeGroupKey, then combined collision-free via JSON.stringify of
-      // the ordered array of serialized parts (ADR-017): this guarantees no
-      // cross-dimension collision, unlike a plain string join/concatenation.
-      const serialized = JSON.stringify(resolvedValues.map(serializeGroupKey));
+        const value: unknown = resolved !== PATH_NOT_FOUND ? resolved : null;
+        resolvedValues[i] = value;
+        serializedParts[i] = serializeGroupKey(value);
+      }
+      const serialized = JSON.stringify(serializedParts);
 
       if (addDocumentToGroups(groups, serialized, document)) {
         // The composite _key object is built only now, on first occurrence
         // of this group -- never per document.
         groups.set(serialized, {
-          key: buildCompositeGroupKey(field, resolvedValues),
+          key: buildCompositeGroupKey(validatedField, resolvedValues),
           docs: [document],
         });
       }
@@ -397,7 +408,7 @@ export const computeGroupBy = <TDocument extends FrostpillarDocument>(
     for (const document of documents) {
       const resolved = getValueByPath(
         document as Record<string, unknown>,
-        field,
+        validatedField,
         pathCache,
       );
       const groupKey: unknown = resolved !== PATH_NOT_FOUND ? resolved : null;

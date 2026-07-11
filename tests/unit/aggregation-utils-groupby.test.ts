@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ValidationError } from '../../src/errors.js';
-import { computeGroupBy } from '../../src/internal/aggregationUtils.js';
+import {
+  computeGroupBy,
+  validateGroupByField,
+} from '../../src/internal/aggregationUtils.js';
 import { MAX_FIELD_PATH_DEPTH } from '../../src/internal/limits.js';
 import type {
   FrostpillarDocument,
@@ -500,4 +503,22 @@ void test('computeGroupBy composite _key holds correct values under integer-like
   const second = result[1]._key as Record<string, unknown>;
   assert.equal(second.dept, 'eng');
   assert.equal(second['2024'], 200);
+});
+
+// ---------------------------------------------------------------------------
+// validateGroupByField — defensive copy semantics
+// ---------------------------------------------------------------------------
+
+void test('validateGroupByField returns a defensive copy for the array form', () => {
+  const input = ['category', 'score'];
+  const validated = validateGroupByField(input);
+
+  assert.ok(Array.isArray(validated));
+  assert.notEqual(validated, input);
+  assert.deepEqual(validated, ['category', 'score']);
+
+  // Mutating the input afterwards must not affect the returned copy.
+  input[0] = 'mutated';
+  input.length = 1;
+  assert.deepEqual(validated, ['category', 'score']);
 });
