@@ -27,7 +27,7 @@ frostpillar-cli         ← コマンドラインインターフェース（計�
 - **流暢なクエリ API** — `$` 演算子フィルタと遅延実行（`find`、`sort`、`skip`、`limit`、`project`、`toArray`、`count`）
 - **CRUD + 更新演算子** — `insert`、`insertMany`、`find`、`findOne`、`update`、`remove`、`count` と `$set`、`$unset`、`$inc`、`$rename`、`$push`、`$pull`、`$addToSet`
 - **Upsert サポート** — `update` に `{ upsert: true }` を指定すると、マッチするドキュメントがない場合に新規挿入
-- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`distinct`、`groupBy`（単一または複数フィールド）
+- **組み込み集約** — フィルタ後データセットに対する `sum`、`avg`、`min`、`max`、`percentile`、`median`、`stdDevPop`、`stdDevSamp`、`variancePop`、`varianceSamp`、`distinct`、`groupBy`（単一または複数フィールド）
 - **変更イベント** — `watch()` リスナーで insert、update、remove 操作を監視
 - **TTL（Time-To-Live）** — コレクション単位でドキュメントの自動有効期限を設定
 - **非同期カーソル** — `for await...of` による結果のイテレーション
@@ -632,6 +632,19 @@ const medianLatency = await requests.find({ route: '/api' }).median('latencyMs')
 
 `percentile(field, p)` はスカラー値 `p` を 1 つ受け取り、常に 1 つの `number | null` を返します。複数のパーセンタイルが必要な場合は、個別に呼び出してください。`median(field)` は `percentile(field, 0.5)` と完全に同じです。いずれも非数値は無視され、数値が存在しない場合は `null` を返します。
 
+#### 標準偏差と分散
+
+```ts
+const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
+const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
+const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+```
+
+`stdDevPop`/`variancePop` は `n` で除算します（対象データが母集団そのものである場合に使用）。`stdDevSamp`/`varianceSamp` は `n - 1` で除算します（ベッセルの補正 — 標本から母集団の分散を推定する不偏推定量）。いずれもウェルフォードのアルゴリズムで1回のスキャンで計算され、素朴な `Σx² − (Σx)²/n` の公式と異なり、大きな値で分散が小さいデータでも数値的に安定しています。
+
+4つとも非数値は無視され、数値が存在しない場合は `null` を返します。**`n = 1` の場合の注意点:** 数値が1件のみの場合、`stdDevPop`/`variancePop` は `0`（単一の点自身からの分散はゼロ）を返しますが、`stdDevSamp`/`varianceSamp` は `null`（`n - 1 = 0` の除算は未定義）を返します。
+
 #### Distinct
 
 ```ts
@@ -670,7 +683,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 リクエストされたフィールドのいずれかが欠けているドキュメントは、その次元について `null` を返します。単一要素の配列（例: `['dept']`）でもオブジェクトの `_key` を生成します。単一フィールド形式で使われるスカラー形式には変換されません。
 
-利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`。
+利用可能なアキュムレータ: `$count`、`$sum`、`$avg`、`$min`、`$max`、`$median`、`$percentile`、`$stdDevPop`、`$stdDevSamp`、`$variancePop`、`$varianceSamp`。
 
 `$median: 'fieldPath'` と `$percentile: { field: 'fieldPath', p: 0.95 }` は `.median()` / `.percentile()` と同じ挙動です（同じ補間、数値がない場合は同じく `null`）。`p` は `groupBy` 内では**スカラーのみ**です — 複数のパーセンタイルが必要な場合は、複数の出力フィールドとして指定します:
 
@@ -679,6 +692,15 @@ const result = await requests.find({}).groupBy('route', {
   p50: { $percentile: { field: 'latencyMs', p: 0.5 } },
   p95: { $percentile: { field: 'latencyMs', p: 0.95 } },
   p99: { $percentile: { field: 'latencyMs', p: 0.99 } },
+});
+```
+
+`$stdDevPop: 'fieldPath'` / `$stdDevSamp: 'fieldPath'` / `$variancePop: 'fieldPath'` / `$varianceSamp: 'fieldPath'` はグループごとに `.stdDevPop()` / `.stdDevSamp()` / `.variancePop()` / `.varianceSamp()` と同じ挙動です（`n = 1` の場合の注意点も同様: 母集団は `0`、標本は `null`）:
+
+```ts
+const result = await requests.find({}).groupBy('route', {
+  jitterPop: { $stdDevPop: 'latencyMs' },
+  jitterSamp: { $stdDevSamp: 'latencyMs' },
 });
 ```
 
@@ -1049,6 +1071,10 @@ try {
 | `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                           |
 | `.percentile(field, p)`         | `Promise<number \| null>`     | `p` パーセンタイル（`p` は `[0, 1]` の割合）                            |
 | `.median(field)`                | `Promise<number \| null>`     | 中央値（`percentile(field, 0.5)` と等価）                              |
+| `.stdDevPop(field)`             | `Promise<number \| null>`     | 母標準偏差（`n=0`→`null`、`n=1`→`0`）                                  |
+| `.stdDevSamp(field)`            | `Promise<number \| null>`     | 標本標準偏差（`n<2`→`null`）                                           |
+| `.variancePop(field)`           | `Promise<number \| null>`     | 母分散（`n=0`→`null`、`n=1`→`0`）                                      |
+| `.varianceSamp(field)`          | `Promise<number \| null>`     | 標本分散（`n<2`→`null`）                                               |
 | `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                 |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールド（`string \| string[]`）でグループ化しアキュムレータを計算。配列形式は複合 `_key` を生成 |
 

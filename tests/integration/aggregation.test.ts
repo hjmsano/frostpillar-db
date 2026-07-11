@@ -431,3 +431,142 @@ void test('aggregation terminals ignore skip/limit when no sort is present', asy
     await database.close();
   }
 });
+
+void test('stdDevPop/stdDevSamp/variancePop/varianceSamp compute correct values with filter', async () => {
+  const database = new Database({});
+  const scores = database.collection<{ _id?: string; score: number }>(
+    'scores',
+  );
+
+  try {
+    // [2, 4, 4, 4, 5, 5, 7, 9]: mean=5, sum sq dev=32
+    // population variance = 32/8 = 4, stdDevPop = 2
+    // sample variance = 32/7, stdDevSamp = sqrt(32/7)
+    await scores.insertMany(
+      [2, 4, 4, 4, 5, 5, 7, 9].map((score, i) => ({
+        _id: `s${String(i)}`,
+        score,
+      })),
+    );
+
+    const chain = scores.find({});
+    assert.equal(await chain.variancePop('score'), 4);
+    assert.equal(await chain.stdDevPop('score'), 2);
+    const varSamp = await chain.varianceSamp('score');
+    assert.ok(varSamp !== null);
+    assert.ok(Math.abs(varSamp - 32 / 7) < 1e-9);
+    const sdSamp = await chain.stdDevSamp('score');
+    assert.ok(sdSamp !== null);
+    assert.ok(Math.abs(sdSamp - Math.sqrt(32 / 7)) < 1e-9);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('stdDevPop/stdDevSamp/variancePop/varianceSamp skip non-numeric values and respect filter', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    // active salaries: u1=100, u3='90' (string, skipped), u4 missing, u5=200 -> [100, 200]
+    // mean=150, sum sq dev = 2500+2500=5000; pop var=2500, samp var=5000
+    const chain = users.find({ status: 'active' });
+    assert.equal(await chain.variancePop('salary'), 2500);
+    assert.equal(await chain.stdDevPop('salary'), 50);
+    assert.equal(await chain.varianceSamp('salary'), 5000);
+    assert.equal(await chain.stdDevSamp('salary'), Math.sqrt(5000));
+  } finally {
+    await database.close();
+  }
+});
+
+void test('stdDevPop/stdDevSamp/variancePop/varianceSamp return null for no matching documents (n=0)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    const noMatch = users.find({ status: 'suspended' });
+    assert.equal(await noMatch.stdDevPop('salary'), null);
+    assert.equal(await noMatch.stdDevSamp('salary'), null);
+    assert.equal(await noMatch.variancePop('salary'), null);
+    assert.equal(await noMatch.varianceSamp('salary'), null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('stdDevPop/variancePop are 0 and stdDevSamp/varianceSamp are null for a single numeric value (n=1)', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insert({ _id: 'u1', name: 'Alice', salary: 100 });
+    const chain = users.find({});
+    assert.equal(await chain.stdDevPop('salary'), 0);
+    assert.equal(await chain.variancePop('salary'), 0);
+    assert.equal(await chain.stdDevSamp('salary'), null);
+    assert.equal(await chain.varianceSamp('salary'), null);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('stdDevPop/stdDevSamp/variancePop/varianceSamp throw ValidationError for empty field', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    await assert.rejects(() => users.find().stdDevPop(''), ValidationError);
+    await assert.rejects(() => users.find().stdDevSamp(''), ValidationError);
+    await assert.rejects(() => users.find().variancePop(''), ValidationError);
+    await assert.rejects(
+      () => users.find().varianceSamp(''),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('stdDevPop/stdDevSamp/variancePop/varianceSamp validate field eagerly before checking closed database', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+  await users.insert({ _id: 'u1', name: 'Alice', salary: 100 });
+
+  const chain = users.find();
+  await database.close();
+
+  // Invalid field must surface as ValidationError, not ClosedDatabaseError,
+  // proving field validation runs before the closed-database check -- the
+  // same eager-validation ordering as the other numeric terminals.
+  await assert.rejects(() => chain.stdDevPop('__proto__'), ValidationError);
+  await assert.rejects(() => chain.stdDevSamp('__proto__'), ValidationError);
+  await assert.rejects(() => chain.variancePop('__proto__'), ValidationError);
+  await assert.rejects(
+    () => chain.varianceSamp('__proto__'),
+    ValidationError,
+  );
+});
+
+void test('result chain supports stdDevPop/stdDevSamp/variancePop/varianceSamp reuse across multiple calls', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await seedUsers(users);
+    const activeUsers = users.find({ status: 'active' });
+
+    const varPop1 = await activeUsers.variancePop('salary');
+    const stdDevSamp = await activeUsers.stdDevSamp('salary');
+    const varPop2 = await activeUsers.variancePop('salary');
+
+    assert.equal(varPop1, varPop2);
+    assert.equal(varPop1, 2500);
+    assert.ok(stdDevSamp !== null);
+  } finally {
+    await database.close();
+  }
+});

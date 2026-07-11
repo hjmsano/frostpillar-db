@@ -3,6 +3,8 @@ import {
   computeDistinct,
   computeGroupBy,
   computePercentile,
+  computeStdDev,
+  computeVariance,
   extractNumericValues,
   validateAggregationField,
   validateGroupByField,
@@ -248,6 +250,30 @@ export class ResultChain<
 
   public async median(field: string): Promise<number | null> {
     return this.percentile(field, 0.5);
+  }
+
+  /** Population standard deviation. `n = 0` -> `null`; `n = 1` -> `0`. */
+  public async stdDevPop(field: string): Promise<number | null> {
+    const values = await this.getNumericValues(field);
+    return computeStdDev(values, false);
+  }
+
+  /** Sample standard deviation. `n = 0` or `n = 1` -> `null`. */
+  public async stdDevSamp(field: string): Promise<number | null> {
+    const values = await this.getNumericValues(field);
+    return computeStdDev(values, true);
+  }
+
+  /** Population variance. `n = 0` -> `null`; `n = 1` -> `0`. */
+  public async variancePop(field: string): Promise<number | null> {
+    const values = await this.getNumericValues(field);
+    return computeVariance(values, false);
+  }
+
+  /** Sample variance. `n = 0` or `n = 1` -> `null`. */
+  public async varianceSamp(field: string): Promise<number | null> {
+    const values = await this.getNumericValues(field);
+    return computeVariance(values, true);
   }
 
   public async distinct(field: string): Promise<unknown[]> {

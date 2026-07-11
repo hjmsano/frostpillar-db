@@ -220,6 +220,68 @@ export const computePercentile = (
   return sorted[lo] + frac * (sorted[lo + 1] - sorted[lo]);
 };
 
+/**
+ * Welford's single-pass online algorithm: accumulates `count`, the running
+ * `mean`, and `m2` (the sum of squared deviations from the running mean) in
+ * one pass over `values`. This is the numerically stable building block for
+ * variance/standard deviation — unlike the naive `E[x^2] - E[x]^2` formula,
+ * it never subtracts two large nearly-equal numbers, so it stays accurate
+ * even for large-magnitude, low-variance data (spec 03 §1.3, ADR-019 §3).
+ */
+export const computeWelford = (
+  values: number[],
+): { count: number; mean: number; m2: number } => {
+  let count = 0;
+  let mean = 0;
+  let m2 = 0;
+
+  for (const x of values) {
+    count += 1;
+    const delta = x - mean;
+    mean += delta / count;
+    m2 += delta * (x - mean);
+  }
+
+  return { count, mean, m2 };
+};
+
+/**
+ * Derives population (`sample = false`) or sample (`sample = true`) variance
+ * from `computeWelford`'s accumulators, applying the MongoDB-aligned edge
+ * rules (ADR-019 §4): `count === 0` -> `null` (no numeric values); `count
+ * === 1` -> `0` for population (a single point has zero dispersion from
+ * itself) or `null` for sample (the `count - 1 = 0` divisor is undefined);
+ * `count >= 2` -> the computed variance. No `NaN` or negative value can
+ * leak from this function.
+ */
+export const computeVariance = (
+  values: number[],
+  sample: boolean,
+): number | null => {
+  const { count, m2 } = computeWelford(values);
+
+  if (count === 0) {
+    return null;
+  }
+  if (count === 1) {
+    return sample ? null : 0;
+  }
+
+  return sample ? m2 / (count - 1) : m2 / count;
+};
+
+/**
+ * Standard deviation is the square root of the corresponding variance;
+ * `null` propagates unchanged (ADR-019 §3) so no `NaN` can leak here either.
+ */
+export const computeStdDev = (
+  values: number[],
+  sample: boolean,
+): number | null => {
+  const variance = computeVariance(values, sample);
+  return variance === null ? null : Math.sqrt(variance);
+};
+
 const validateScalarPercentile = (p: unknown): number => {
   if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) {
     throw new ValidationError(
@@ -245,6 +307,10 @@ const VALID_ACCUMULATOR_KEYS = new Set([
   '$max',
   '$median',
   '$percentile',
+  '$stdDevPop',
+  '$stdDevSamp',
+  '$variancePop',
+  '$varianceSamp',
 ]);
 
 /**
@@ -362,6 +428,14 @@ const computeNumericAccumulator = (
       );
     case '$median':
       return computePercentile(numericValues, 0.5);
+    case '$stdDevPop':
+      return computeStdDev(numericValues, false);
+    case '$stdDevSamp':
+      return computeStdDev(numericValues, true);
+    case '$variancePop':
+      return computeVariance(numericValues, false);
+    case '$varianceSamp':
+      return computeVariance(numericValues, true);
     default:
       return null;
   }

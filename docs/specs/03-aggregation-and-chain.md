@@ -222,6 +222,45 @@ Returns the median of the specified numeric field. Defined as exactly `percentil
 const medianAge = await users.find({ status: 'active' }).median('age');
 ```
 
+#### `.stdDevPop(field: string): Promise<number | null>` / `.stdDevSamp(field: string): Promise<number | null>` / `.variancePop(field: string): Promise<number | null>` / `.varianceSamp(field: string): Promise<number | null>`
+
+Return the population/sample standard deviation and variance of the specified numeric field. Like the other numeric terminals, operate on the **filtered** set (sort/skip/limit/projection not applied, §1.4), skip non-numeric and non-finite values via `extractNumericValues`.
+
+- **Population** (`stdDevPop`, `variancePop`) divides the sum of squared deviations from the mean by `n`. Use when the matched set *is* the whole population.
+- **Sample** (`stdDevSamp`, `varianceSamp`) divides by `n - 1` (Bessel's correction), the unbiased estimator of a larger population's variance from a sample.
+
+**Computation — Welford's single-pass algorithm:** rather than the naive `Σx² - (Σx)²/n` formula (numerically unstable for large-magnitude, low-variance data), variance is computed with Welford's online recurrence, which accumulates `count`, running `mean`, and `m2` (sum of squared deviations from the running mean) in one pass:
+
+```
+for each value x:
+  count += 1
+  delta = x - mean
+  mean += delta / count
+  m2 += delta * (x - mean)
+
+variancePop  = m2 / count        // n
+varianceSamp = m2 / (count - 1)  // n - 1
+stdDevPop    = sqrt(variancePop)
+stdDevSamp   = sqrt(varianceSamp)
+```
+
+**Edge semantics (MongoDB-aligned):**
+
+| `n` (numeric values) | `variancePop` / `stdDevPop` | `varianceSamp` / `stdDevSamp` |
+| --------------------- | ---------------------------- | ------------------------------ |
+| `0`                    | `null`                        | `null`                          |
+| `1`                    | `0`                           | `null`                          |
+| `>= 2`                 | computed                      | computed                        |
+
+`n = 0` → `null` for all four, consistent with `avg`/`min`/`max`/`median`. `n = 1` → population variance/stddev is `0` (a single point has zero dispersion from itself); sample variance/stddev is `null` because `n - 1 = 0` makes the sample estimator undefined.
+
+```ts
+const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
+const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
+const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+```
+
 #### `.distinct(field: string): Promise<unknown[]>`
 
 Returns an array of unique values for the specified field across all matching documents. Supports dot notation for nested fields. Documents where the field is missing or `undefined` are skipped; `null` is a valid distinct value. Values are returned in order of first occurrence. Deep equality is used for objects/arrays; strict equality for primitives.
@@ -248,6 +287,10 @@ interface GroupAccumulator {
   $max?: string; // field path
   $median?: string; // field path
   $percentile?: { field: string; p: number }; // field path + fraction in [0, 1]
+  $stdDevPop?: string; // field path
+  $stdDevSamp?: string; // field path
+  $variancePop?: string; // field path
+  $varianceSamp?: string; // field path
 }
 
 type GroupAccumulators = Record<string, GroupAccumulator>;
@@ -280,6 +323,7 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
   - `$max: 'fieldPath'` — maximum numeric value (`null` if none).
   - `$median: 'fieldPath'` — median of numeric values, i.e. the 50th percentile (`null` if none).
   - `$percentile: { field: 'fieldPath', p: 0.95 }` — the `p`-th percentile of numeric values, same interpolation as `.percentile()` (`null` if none). `p` is **scalar-only** inside `groupBy`; multiple percentiles of the same group are expressed as multiple output fields (see example below).
+  - `$stdDevPop: 'fieldPath'` / `$stdDevSamp: 'fieldPath'` / `$variancePop: 'fieldPath'` / `$varianceSamp: 'fieldPath'` — population/sample standard deviation and variance of numeric values, computed via `computeWelford`, same `n = 0` → `null` / `n = 1` → pop `0`, samp `null` edge rules as the terminals (§1.3 above).
 - **`$percentile` operand validation:** the operand must be a plain object with **exactly** the keys `field` (a valid field path, same eager validation as the other accumulators' field-path operands) and `p` (the same `[0, 1]` finite-number rule as the `.percentile()` terminal). Extra or missing keys throw `ValidationError`. The existing "exactly one accumulator key per entry" rule is unchanged — `$percentile` still occupies exactly one key of its `GroupAccumulator` entry.
 - Groups are returned in order of first occurrence of each key value (unchanged for both forms).
 - Like other aggregation terminals, operates on filtered set (sort/skip/limit not applied).
@@ -333,7 +377,7 @@ const result = await users.find({}).groupBy(['department', 'address.city'], {
 
 ### 1.4 Aggregation Terminal Methods — Scope
 
-Aggregation methods (`sum`, `avg`, `min`, `max`, `percentile`, `median`, `distinct`, `groupBy`) operate on the **filtered** result set (after applying the filter from `find()`). Sort, skip, limit, and projection are **not applied** to the dataset before aggregation — they only affect `.toArray()`, `.cursor()`, and `.count()`.
+Aggregation methods (`sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy`) operate on the **filtered** result set (after applying the filter from `find()`). Sort, skip, limit, and projection are **not applied** to the dataset before aggregation — they only affect `.toArray()`, `.cursor()`, and `.count()`.
 
 `.count()` is an exception among terminal methods: it applies `skip` and `limit` so that it returns the same number of documents that `.toArray()` would return. This makes `.count()` useful for pagination scenarios. Sort and projection do not affect `.count()`.
 
@@ -351,7 +395,7 @@ When a terminal method is called, the `ResultChain` executes the following pipel
    See Spec 02 §2 (Find) for the full fast-path rules including
    Range Query Optimization.
 2. Filter: Apply filter predicates (Spec 02 §8)
-3. Aggregate: If terminal is sum/avg/min/max/percentile/median/distinct/groupBy → compute and return
+3. Aggregate: If terminal is sum/avg/min/max/percentile/median/stdDevPop/stdDevSamp/variancePop/varianceSamp/distinct/groupBy → compute and return
 4. Count: If terminal is count → apply skip/limit to filtered count and return
 5. Sort: Apply sort specification
 6. Skip: Discard first N documents
@@ -383,11 +427,13 @@ Each terminal call triggers a fresh execution of the pipeline.
 
 ## 4. Empty Results
 
-| Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.percentile(f,p)` | `.median(f)` | `.distinct(f)` | `.groupBy(f, acc)` |
-| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------- | ------------ | -------------- | ------------------ |
-| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `[]`           | `[]`               |
-| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `[]`           | (grouped)          |
-| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | (values)       | (grouped)          |
+| Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.percentile(f,p)` | `.median(f)` | `.stdDevPop(f)` / `.variancePop(f)` | `.stdDevSamp(f)` / `.varianceSamp(f)` | `.distinct(f)` | `.groupBy(f, acc)` |
+| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------- | ------------ | ------------------------------------- | ---------------------------------------- | -------------- | ------------------ |
+| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `null`                                 | `null`                                    | `[]`           | `[]`               |
+| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `null`                                 | `null`                                    | `[]`           | (grouped)          |
+| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `null`                                 | `null`                                    | (values)       | (grouped)          |
+
+**`n = 1` numeric value nuance:** when the numeric set has exactly one value (`n = 1`), `stdDevPop`/`variancePop` return `0` (a single point has zero dispersion from itself), while `stdDevSamp`/`varianceSamp` return `null` (the `n - 1 = 0` divisor makes the sample estimator undefined). This differs from the `n = 0` row above, where all four return `null`. See §1.3 for the full `n` → result table.
 
 ## 5. Error Handling
 
@@ -399,9 +445,10 @@ Each terminal call triggers a fresh execution of the pipeline.
 | `ValidationError`     | Invalid projection spec value (not `0` or `1`)                                                                                                                                                                     |
 | `ValidationError`     | Mixed inclusion/exclusion in projection                                                                                                                                                                            |
 | `ValidationError`     | Aggregation field path is not a non-empty string, contains reserved segments (`__proto__`, `constructor`, `prototype`), exceeds max depth, or exceeds max length — validated eagerly regardless of result set size |
+| `ValidationError`     | `stdDevPop` / `stdDevSamp` / `variancePop` / `varianceSamp` field path fails the same eager validation as above, before any document is fetched                                                                    |
 | `ValidationError`     | `distinct` field path fails the same eager validation as above                                                                                                                                                     |
 | `ValidationError`     | `groupBy` field fails the same eager validation as above (string form), or, for the array form, `field` is an empty array, an array element is not a non-empty string or fails the same eager field-path validation, or the array contains duplicate field paths                                                                          |
-| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max` operands) fail the same eager validation                                                                                                         |
+| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp` operands) fail the same eager validation                                            |
 | `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
 | `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
 | `ValidationError`     | `percentile` / `$percentile` `p` is not a finite scalar number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                        |

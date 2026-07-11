@@ -374,6 +374,16 @@ void test('terminal methods throw ClosedDatabaseError after close', async () => 
     () => chain.percentile('salary', 0.5),
     ClosedDatabaseError,
   );
+  await assert.rejects(() => chain.stdDevPop('salary'), ClosedDatabaseError);
+  await assert.rejects(() => chain.stdDevSamp('salary'), ClosedDatabaseError);
+  await assert.rejects(
+    () => chain.variancePop('salary'),
+    ClosedDatabaseError,
+  );
+  await assert.rejects(
+    () => chain.varianceSamp('salary'),
+    ClosedDatabaseError,
+  );
   await assert.rejects(() => chain.distinct('name'), ClosedDatabaseError);
   await assert.rejects(
     () => chain.groupBy('name', { count: { $count: true } }),

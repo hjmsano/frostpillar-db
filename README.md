@@ -27,7 +27,7 @@ frostpillar-cli         ← Command-line interface (planned)
 - **Fluent query API** — method chaining with `$`-operator filters and lazy execution (`find`, `sort`, `skip`, `limit`, `project`, `toArray`, `count`)
 - **CRUD + update operators** — `insert`, `insertMany`, `find`, `findOne`, `update`, `remove`, `count` with `$set`, `$unset`, `$inc`, `$rename`, `$push`, `$pull`, `$addToSet`
 - **Upsert support** — `update` with `{ upsert: true }` inserts when no document matches
-- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `distinct`, `groupBy` (single- or multi-field) on filtered result sets
+- **Built-in aggregation** — `sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `distinct`, `groupBy` (single- or multi-field) on filtered result sets
 - **Change events** — `watch()` listeners for insert, update, and remove operations
 - **TTL (Time-To-Live)** — automatic document expiration per collection
 - **Async cursor** — iterate results with `for await...of`
@@ -632,6 +632,19 @@ const medianLatency = await requests.find({ route: '/api' }).median('latencyMs')
 
 `percentile(field, p)` accepts one scalar `p` value and always returns one `number | null`; call it separately for each percentile you need. `median(field)` is exactly `percentile(field, 0.5)`. Both skip non-numeric values and return `null` when no numeric values exist.
 
+#### Standard Deviation and Variance
+
+```ts
+const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
+const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
+const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+```
+
+`stdDevPop`/`variancePop` divide by `n` (use when the matched set *is* the whole population); `stdDevSamp`/`varianceSamp` divide by `n - 1` (Bessel's correction — the unbiased estimator of a larger population's variance from a sample). Both are computed in one pass with Welford's algorithm, which stays numerically stable even for large-magnitude, low-variance data (unlike the naive `Σx² − (Σx)²/n` formula).
+
+All four skip non-numeric values and return `null` when no numeric values exist. **`n = 1` nuance:** with exactly one numeric value, `stdDevPop`/`variancePop` return `0` (no dispersion from a single point), while `stdDevSamp`/`varianceSamp` return `null` (the `n - 1 = 0` divisor is undefined).
+
 #### Distinct
 
 ```ts
@@ -670,7 +683,7 @@ const result = await users.find().groupBy(['dept', 'address.city'], {
 
 A document missing one of the requested fields contributes `null` for that dimension. A single-element array (e.g. `['dept']`) still produces an object `_key` — it is not collapsed to the scalar form used by the single-field form.
 
-Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`.
+Available accumulators: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$median`, `$percentile`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`.
 
 `$median: 'fieldPath'` and `$percentile: { field: 'fieldPath', p: 0.95 }` mirror `.median()` / `.percentile()`: same interpolation, same `null`-when-empty behavior. `p` is **scalar-only** inside `groupBy` — request multiple percentiles as multiple output fields:
 
@@ -679,6 +692,15 @@ const result = await requests.find({}).groupBy('route', {
   p50: { $percentile: { field: 'latencyMs', p: 0.5 } },
   p95: { $percentile: { field: 'latencyMs', p: 0.95 } },
   p99: { $percentile: { field: 'latencyMs', p: 0.99 } },
+});
+```
+
+`$stdDevPop: 'fieldPath'` / `$stdDevSamp: 'fieldPath'` / `$variancePop: 'fieldPath'` / `$varianceSamp: 'fieldPath'` mirror `.stdDevPop()` / `.stdDevSamp()` / `.variancePop()` / `.varianceSamp()` per group, including the same `n = 1` nuance (population `0`, sample `null`):
+
+```ts
+const result = await requests.find({}).groupBy('route', {
+  jitterPop: { $stdDevPop: 'latencyMs' },
+  jitterSamp: { $stdDevSamp: 'latencyMs' },
 });
 ```
 
@@ -1049,6 +1071,10 @@ try {
 | `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                         |
 | `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                 |
 | `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                            |
+| `.stdDevPop(field)`             | `Promise<number \| null>`     | Population standard deviation (`n=0`→`null`, `n=1`→`0`)        |
+| `.stdDevSamp(field)`            | `Promise<number \| null>`     | Sample standard deviation (`n<2`→`null`)                       |
+| `.variancePop(field)`           | `Promise<number \| null>`     | Population variance (`n=0`→`null`, `n=1`→`0`)                  |
+| `.varianceSamp(field)`          | `Promise<number \| null>`     | Sample variance (`n<2`→`null`)                                 |
 | `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |
 
