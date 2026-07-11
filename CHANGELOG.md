@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.0](https://github.com/hjmsano/frostpillar-db/compare/v0.0.3...v0.1.0) (2026-07-11)
+
+
+### Features
+
+* support multi-dimension groupBy with composite keys ([066b8e6](https://github.com/hjmsano/frostpillar-db/commit/066b8e699e9abe907d7a754ba59cb9f571b973e4))
+* support multi-dimension groupBy with composite keys ([9a47fab](https://github.com/hjmsano/frostpillar-db/commit/9a47fabb10b52dea521aebe79b5b781a2be9bdbb))
+
 ## [0.0.3](https://github.com/hjmsano/frostpillar-db/compare/v0.0.2...v0.0.3) (2026-07-04)
 
 
