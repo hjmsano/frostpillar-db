@@ -333,6 +333,12 @@ interface GroupResultEntry {
 
 Each `GroupAccumulator` entry must contain exactly one accumulator key.
 
+**Output-field name validation:** the keys of `accumulators` become the property names of each `GroupResultEntry`, so they are validated eagerly, before any document is read:
+
+- An output name must be a non-empty string (a name that is empty or only whitespace throws `ValidationError`).
+- `_key` is reserved: it carries the group key, so an accumulator may not overwrite it.
+- The reserved keys of Spec 01 §1.2 (`__proto__`, `constructor`, `prototype`, `__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`) are rejected — the same prototype-pollution defence applied to payload keys and filter keys. Without this, an accumulator map built from JSON with a `__proto__` output name changed the prototype of the returned entry object.
+
 **Behavior:**
 
 - **String form (single field):** Groups by field value (supports dot notation via `getValueByPath`). `_key` is the raw group value. This form is unchanged from prior versions.

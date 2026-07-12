@@ -4,7 +4,12 @@ import {
   PATH_NOT_FOUND,
   validateFieldPath,
 } from './documentPath.js';
-import { cloneAccumulatorValue, hasOwn, isObjectRecord } from './objectUtils.js';
+import {
+  cloneAccumulatorValue,
+  hasOwn,
+  isObjectRecord,
+  isReservedKey,
+} from './objectUtils.js';
 import {
   MAX_DISTINCT_COUNT,
   MAX_GROUP_COUNT,
@@ -17,6 +22,9 @@ import type {
   GroupAccumulators,
   GroupResultEntry,
 } from '../types.js';
+
+/** Property of every `GroupResultEntry` that carries the group key. */
+const GROUP_KEY_FIELD = '_key';
 
 export const validateAggregationField = (field: string): string => {
   if (typeof field !== 'string' || field.length === 0) {
@@ -190,9 +198,15 @@ export const computeDistinct = <TDocument extends FrostpillarDocument>(
   validateFieldPath(field);
 
   const result: unknown[] = [];
-  scanDistinctValues(documents, field, pathCache, 'distinct() result', (value) => {
-    result.push(cloneAccumulatorValue(value));
-  });
+  scanDistinctValues(
+    documents,
+    field,
+    pathCache,
+    'distinct() result',
+    (value) => {
+      result.push(cloneAccumulatorValue(value));
+    },
+  );
 
   return result;
 };
@@ -403,11 +417,7 @@ const validatePercentileOperand = (
   }
 
   const keys = Object.keys(operand);
-  if (
-    keys.length !== 2 ||
-    !hasOwn(operand, 'field') ||
-    !hasOwn(operand, 'p')
-  ) {
+  if (keys.length !== 2 || !hasOwn(operand, 'field') || !hasOwn(operand, 'p')) {
     throw new ValidationError(
       `groupBy accumulator "${outputField}" operand for "$percentile" must contain exactly the keys "field" and "p".`,
     );
@@ -424,6 +434,31 @@ const validatePercentileOperand = (
   validateScalarPercentile(operand.p);
 };
 
+/**
+ * Validates an accumulator's output-field name. The name becomes a property of
+ * every `GroupResultEntry`, so it may neither shadow the group key nor be a
+ * reserved key: an accumulator map parsed from JSON with a `__proto__` output
+ * name would otherwise change the prototype of the returned entry object, and a
+ * `_key` output name would overwrite the group key with the accumulator result.
+ */
+const validateOutputField = (outputField: string): void => {
+  if (outputField.trim().length === 0) {
+    throw new ValidationError(
+      'groupBy accumulator output names must be non-empty strings.',
+    );
+  }
+  if (outputField === GROUP_KEY_FIELD) {
+    throw new ValidationError(
+      `groupBy accumulator output name "${GROUP_KEY_FIELD}" is reserved for the group key.`,
+    );
+  }
+  if (isReservedKey(outputField)) {
+    throw new ValidationError(
+      `groupBy accumulator output name "${outputField}" is reserved and not allowed.`,
+    );
+  }
+};
+
 const validateAccumulators = (accumulators: GroupAccumulators): void => {
   const entries = Object.entries(accumulators);
   if (entries.length === 0) {
@@ -431,6 +466,7 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
   }
 
   for (const [outputField, accumulator] of entries) {
+    validateOutputField(outputField);
     const keys = Object.keys(accumulator);
     if (keys.length !== 1) {
       throw new ValidationError(

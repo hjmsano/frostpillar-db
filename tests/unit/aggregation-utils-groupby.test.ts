@@ -1833,3 +1833,43 @@ void test('computeGroupBy accepts $count: true', () => {
   );
   assert.equal(result[0].total, 1);
 });
+
+// --- accumulator output-field name validation ---
+
+void test('computeGroupBy rejects "_key" as an accumulator output name', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  assert.throws(
+    () =>
+      computeGroupBy(docs, 'category', { _key: { $count: true } }, pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy rejects a reserved accumulator output name', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  const accumulators = JSON.parse(
+    '{"__proto__": {"$count": true}}',
+  ) as GroupAccumulators;
+  assert.throws(
+    () => computeGroupBy(docs, 'category', accumulators, pathCache),
+    ValidationError,
+  );
+  // `constructor` is contextually typed against Object.prototype's member, so
+  // the literal needs the cast that a runtime-built accumulator map implies.
+  const constructorAccumulators = {
+    constructor: { $count: true },
+  } as unknown as GroupAccumulators;
+  assert.throws(
+    () => computeGroupBy(docs, 'category', constructorAccumulators, pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy rejects a blank accumulator output name', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  assert.throws(
+    () =>
+      computeGroupBy(docs, 'category', { '  ': { $count: true } }, pathCache),
+    ValidationError,
+  );
+});
