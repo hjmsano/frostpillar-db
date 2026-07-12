@@ -1,6 +1,7 @@
 import { ValidationError } from '../errors.js';
 import {
   MAX_REGEX_ALTERNATION_GROUPS,
+  MAX_REGEX_OPTIONAL_QUANTIFIERS,
   MAX_REGEX_PATTERN_LENGTH,
   MAX_REGEX_QUANTIFIERS,
 } from './limits.js';
@@ -224,6 +225,120 @@ const quantifierRepeats = (bound: string): boolean => {
   const max = bound.slice(commaIndex + 1);
   // `{n,}` (open-ended) always reaches >= 2; `{n,m}` repeats iff m >= 2.
   return max === '' || Number(max) >= 2;
+};
+
+/**
+ * Decide whether a `{n}` / `{n,}` / `{n,m}` bound lets its target match zero
+ * times — i.e. whether it makes the atom skippable. `bound` is the
+ * digits/comma between `{` and `}` (e.g. `"0,5"`, `"1,10"`, `"3"`).
+ */
+const quantifierAllowsZero = (bound: string): boolean => {
+  const commaIndex = bound.indexOf(',');
+  const min = commaIndex === -1 ? bound : bound.slice(0, commaIndex);
+  return Number(min) === 0;
+};
+
+/**
+ * Count *optional* quantifier tokens: those whose minimum repetition count is
+ * zero, so the atom they quantify can be skipped — `?`, `*`, and `{0}`/`{0,}`/
+ * `{0,m}` bounds. `+`, `{1,m}`, `{n}` (n >= 1) are mandatory and not counted.
+ *
+ * Each optional quantifier is an independent binary choice (take the atom or
+ * skip it) for the backtracking engine, so a chain of k of them costs up to
+ * 2^k paths whenever the overall match *fails* — and a failing match is the
+ * common case during a scan. This is the one catastrophic shape none of the
+ * other screens see: `^.?.?...aaa...$` (20 `.?` atoms, then 20 literal `a`s)
+ * repeats no atom, nests no quantifier, contains no alternation, and has no
+ * adjacent-duplicate pair for `CATASTROPHIC_PATTERNS` to match, yet it burns
+ * ~2^20 paths per failing test. `MAX_REGEX_OPTIONAL_QUANTIFIERS` caps the
+ * exponent; see `assertSafeRegexPattern`.
+ *
+ * The count is over the whole pattern, not over the longest adjacent run: a
+ * mandatory atom interleaved between the optional ones (`.?\w.?\w…`) always
+ * matches and therefore prunes no branch, so it does not make the chain safe.
+ *
+ * Deliberately conservative in two spots: the lazy marker of `*?` / `+?` /
+ * `{n,m}?` is itself a `?` token and is counted, and `{0}` (which can never
+ * match at all) counts as optional. Both over-count harmlessly.
+ *
+ * Scanning conventions mirror `countQuantifiers` above: tokens inside `[...]`
+ * are ignored, escaped tokens (`\?`, `\*`) do not count, and a `?` immediately
+ * after an unescaped `(` is group syntax (`(?:`, `(?=`, `(?<name>`), not a
+ * quantifier.
+ */
+export const countOptionalQuantifiers = (pattern: string): number => {
+  let count = 0;
+  let inClass = false;
+  let escaped = false;
+  let afterOpenParen = false;
+
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+
+    if (escaped) {
+      escaped = false;
+      afterOpenParen = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      escaped = true;
+      afterOpenParen = false;
+      continue;
+    }
+
+    if (inClass) {
+      if (ch === ']') {
+        inClass = false;
+      }
+      continue;
+    }
+
+    if (ch === '[') {
+      inClass = true;
+      afterOpenParen = false;
+      continue;
+    }
+
+    if (ch === '(') {
+      afterOpenParen = true;
+      continue;
+    }
+
+    if (ch === '*') {
+      count += 1;
+      afterOpenParen = false;
+      continue;
+    }
+
+    if (ch === '?') {
+      if (!afterOpenParen) {
+        // Real quantifier — not a group-syntax prefix.
+        count += 1;
+      }
+      afterOpenParen = false;
+      continue;
+    }
+
+    if (ch === '{') {
+      const rest = pattern.slice(i + 1);
+      const match = /^\d+,?\d*\}/.exec(rest);
+      if (match !== null) {
+        const bound = match[0].slice(0, -1); // strip the closing '}'
+        if (quantifierAllowsZero(bound)) {
+          count += 1;
+        }
+        // Advance past the closing '}'.
+        i += match[0].length;
+      }
+      afterOpenParen = false;
+      continue;
+    }
+
+    afterOpenParen = false;
+  }
+
+  return count;
 };
 
 /**
@@ -551,6 +666,12 @@ const assertSafeRegexPattern = (pattern: string): void => {
   if (countQuantifiers(pattern) > MAX_REGEX_QUANTIFIERS) {
     throw new ValidationError(
       `$regex pattern exceeds the maximum of ${String(MAX_REGEX_QUANTIFIERS)} quantifiers.`,
+    );
+  }
+
+  if (countOptionalQuantifiers(pattern) > MAX_REGEX_OPTIONAL_QUANTIFIERS) {
+    throw new ValidationError(
+      `$regex pattern exceeds the maximum of ${String(MAX_REGEX_OPTIONAL_QUANTIFIERS)} optional quantifiers (a chain of skippable atoms risks exponential backtracking).`,
     );
   }
 
