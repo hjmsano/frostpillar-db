@@ -1726,3 +1726,73 @@ void test('validateGroupByField returns a defensive copy for the array form', ()
   input.length = 1;
   assert.deepEqual(validated, ['category', 'score']);
 });
+
+// ---------------------------------------------------------------------------
+// computeGroupBy — _key isolation (ADR-026)
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy clones an object _key so mutating it cannot alter the source document (string form)', () => {
+  const source = doc('1', { category: { name: 'eng', tags: ['a'] } });
+  const accumulators: GroupAccumulators = { count: { $count: true } };
+
+  const result = computeGroupBy([source], 'category', accumulators, pathCache);
+
+  const key = result[0]._key as { name: string; tags: string[] };
+  assert.notEqual(key, (source as { category?: unknown }).category);
+
+  key.name = 'mutated';
+  key.tags.push('injected');
+
+  assert.deepEqual((source as { category?: unknown }).category, {
+    name: 'eng',
+    tags: ['a'],
+  });
+});
+
+void test('computeGroupBy clones each composite _key dimension so mutating it cannot alter the source document (array form)', () => {
+  const source = doc('1', {
+    category: { name: 'eng' },
+    score: [1, [2]],
+  });
+  const accumulators: GroupAccumulators = { count: { $count: true } };
+
+  const result = computeGroupBy(
+    [source],
+    ['category', 'score'],
+    accumulators,
+    pathCache,
+  );
+
+  const key = result[0]._key as Record<string, unknown>;
+  const categoryKey = key.category as { name: string };
+  const scoreKey = key.score as [number, number[]];
+
+  assert.notEqual(categoryKey, (source as { category?: unknown }).category);
+  assert.notEqual(scoreKey, (source as { score?: unknown }).score);
+
+  categoryKey.name = 'mutated';
+  scoreKey.push(99);
+  scoreKey[1].push(99);
+
+  assert.deepEqual((source as { category?: unknown }).category, {
+    name: 'eng',
+  });
+  assert.deepEqual((source as { score?: unknown }).score, [1, [2]]);
+});
+
+void test('computeGroupBy still groups documents with deep-equal object keys of identical shape together', () => {
+  const accumulators: GroupAccumulators = { count: { $count: true } };
+  const docs = [
+    doc('1', { category: { name: 'eng' } }),
+    doc('2', { category: { name: 'eng' } }),
+    doc('3', { category: { name: 'sales' } }),
+  ];
+
+  const result = computeGroupBy(docs, 'category', accumulators, pathCache);
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(result[0]._key, { name: 'eng' });
+  assert.equal(result[0].count, 2);
+  assert.deepEqual(result[1]._key, { name: 'sales' });
+  assert.equal(result[1].count, 1);
+});

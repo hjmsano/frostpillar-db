@@ -55,4 +55,4 @@ The copy is taken **after** validation, not before, so the graph that was valida
 
 ### Not covered
 
-Documents **returned** from reads (`find()`, `findOne()`, and `watch()` event payloads) are still references to stored records, not copies. They are read-only snapshots by contract, and copying them would tax the read path. Aggregation results are already defensively copied (see ADR-021).
+Documents **returned** from reads (`find()`, `findOne()`, and `watch()` event payloads) are still references to stored records, not copies. They are read-only snapshots by contract, and copying them would tax the read path. Aggregation results are defensively copied — for the value accumulators by ADR-021/ADR-023, and for `distinct()` values and `groupBy()` `_key` values by [ADR-026](./026-aggregation-result-isolation.md).

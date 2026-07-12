@@ -672,6 +672,8 @@ const departments = await users.find().distinct('dept');
 
 返される値は、集計の入力順序（ADR-020）における初出順に従います: ストレージ順、またはチェーン上で `distinct()` より前に `.sort()` が指定されていればその順序になります。
 
+オブジェクト/配列の値は防御的にディープコピーされます（[ADR-026](docs/adr/026-aggregation-result-isolation.md)）。したがって返された値を変更しても保存済みデータには影響しません。`groupBy()` の `_key` も同様です。
+
 #### Count Distinct
 
 ```ts

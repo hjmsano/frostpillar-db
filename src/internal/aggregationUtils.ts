@@ -174,6 +174,14 @@ const scanDistinctValues = <TDocument extends FrostpillarDocument>(
   return count;
 };
 
+/**
+ * Object/array values are defensively cloned via `cloneAccumulatorValue`
+ * before entering the result array (ADR-026), since the scanned documents are
+ * references to stored documents; primitives and `null` pass through
+ * unchanged. Dedup happens inside `scanDistinctValues` on the original value,
+ * so equality semantics are unaffected and at most one clone is taken per
+ * distinct value.
+ */
 export const computeDistinct = <TDocument extends FrostpillarDocument>(
   documents: FrostpillarStoredDocument<TDocument>[],
   field: string,
@@ -183,7 +191,7 @@ export const computeDistinct = <TDocument extends FrostpillarDocument>(
 
   const result: unknown[] = [];
   scanDistinctValues(documents, field, pathCache, 'distinct() result', (value) => {
-    result.push(value);
+    result.push(cloneAccumulatorValue(value));
   });
 
   return result;
@@ -698,6 +706,12 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
  * one property per requested field path, keyed by the literal path string
  * (not re-parsed into a nested structure), in the caller's array order.
  * Only invoked once per newly-created group, never per document.
+ *
+ * Each dimension's value is defensively cloned via `cloneAccumulatorValue`
+ * (ADR-026): the resolved values are references into the stored documents, so
+ * an object/array dimension would otherwise let a caller mutate stored data
+ * through `_key`. The key is already serialized by the time this runs, so the
+ * clone cannot affect grouping.
  */
 const buildCompositeGroupKey = (
   fieldPaths: readonly string[],
@@ -705,7 +719,7 @@ const buildCompositeGroupKey = (
 ): Record<string, unknown> => {
   const key: Record<string, unknown> = {};
   for (let index = 0; index < fieldPaths.length; index += 1) {
-    key[fieldPaths[index]] = values[index];
+    key[fieldPaths[index]] = cloneAccumulatorValue(values[index]);
   }
   return key;
 };
@@ -805,7 +819,14 @@ export const computeGroupBy = <TDocument extends FrostpillarDocument>(
       const serialized = serializeGroupKey(groupKey);
 
       if (addDocumentToGroups(groups, serialized, document)) {
-        groups.set(serialized, { key: groupKey, docs: [document] });
+        // An object/array group key is a reference into the stored document,
+        // so it is cloned before it becomes the result's `_key` (ADR-026).
+        // Serialization above ran on the original, so grouping is unaffected,
+        // and the clone is taken once per group, never per document.
+        groups.set(serialized, {
+          key: cloneAccumulatorValue(groupKey),
+          docs: [document],
+        });
       }
     }
   }

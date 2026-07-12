@@ -672,6 +672,8 @@ const departments = await users.find().distinct('dept');
 
 Returned values follow first occurrence in aggregation input order (ADR-020): storage order, or `.sort()` order when a `.sort()` precedes `distinct()` on the chain.
 
+Object/array values are defensively cloned ([ADR-026](docs/adr/026-aggregation-result-isolation.md)), so mutating a returned value never touches stored data. The same holds for `groupBy()`'s `_key`.
+
 #### Count Distinct
 
 ```ts

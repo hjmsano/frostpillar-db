@@ -269,6 +269,8 @@ const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs')
 
 Returns an array of unique values for the specified field across all matching documents. Supports dot notation for nested fields. Documents where the field is missing or `undefined` are skipped; `null` is a valid distinct value. Values are returned in order of first occurrence **within the aggregation input order** (§1.4): storage order, or `.sort()` order if a sort is specified on the chain. Deep equality is used for objects/arrays; strict equality for primitives.
 
+**Isolation ([ADR-026](../adr/026-aggregation-result-isolation.md)):** object/array values are defensively cloned via `cloneAccumulatorValue` before entering the result array, since the scanned documents are references to stored documents; primitives and `null` pass through unchanged. Mutating a returned value never touches stored data. Dedup still compares the *original* values, so equality semantics are unaffected.
+
 **Limit:** The result set is capped at `MAX_DISTINCT_COUNT` (100,000) unique values. Exceeding the cap throws `ValidationError`.
 
 ```ts
@@ -343,6 +345,7 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
 - Documents where the group field is missing are grouped under `_key: null` (string form) or `null` for that dimension (array form).
 - Group key serialization is type-aware, per dimension: values of different types (e.g., the string `"123"` and the number `123`, or the string `"null"` and `null`) are always treated as distinct groups, and this holds independently for each field in the array form — there is no cross-dimension collision between, say, the first field's `"123"` and the second field's `123`.
 - **Object/array key ordering:** When a group key value (or a dimension's value, in the array form) is an object or array, it is serialized via `JSON.stringify`. This means objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) are treated as **different** group keys. To ensure consistent grouping, callers should normalize key property order before insertion.
+- **Key isolation ([ADR-026](../adr/026-aggregation-result-isolation.md)):** an object/array group key value is defensively cloned via `cloneAccumulatorValue` before it is placed in `_key` — in the string form, and per dimension in the composite `_key` object of the array form. Group key values are resolved from stored documents, so without the clone a caller could mutate stored data through `_key`. Primitives and `null` pass through unchanged. The clone is taken once per group (on first occurrence), never per document, and *after* the key is serialized, so grouping semantics are unaffected.
 - Each accumulator operates on the group's documents (unchanged for both forms):
   - `$count: true` — count of documents in the group.
   - `$sum: 'fieldPath'` — sum of numeric values (skip non-numeric, `0` if none).
