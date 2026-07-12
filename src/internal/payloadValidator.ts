@@ -1,7 +1,7 @@
 import type { PayloadLimitsConfig } from '@frostpillar/frostpillar-storage-engine';
 
 import { ValidationError } from '../errors.js';
-import { isObjectRecord, isReservedKey } from './objectUtils.js';
+import { isPlainObject, isReservedKey } from './objectUtils.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
 
 const DEFAULT_MAX_KEY_BYTES = 1024;
@@ -95,14 +95,6 @@ const validateKey = (key: string, state: ValidationState): void => {
   }
   // JSON overhead: "key": → quoted string + colon
   addBytes(state, keyBytes + JSON_KEY_OVERHEAD_BYTES);
-};
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 };
 
 // validateValue, validateArray, and validateObject are mutually recursive const
@@ -279,7 +271,7 @@ export const validatePayloadSecurity = (
   payload: unknown,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): void => {
-  if (!isObjectRecord(payload)) {
+  if (!isPlainObject(payload)) {
     throw new ValidationError('Document must be a non-null plain object.');
   }
   validateSecurityValue(payload, new WeakSet<object>(), 1, maxDepth);
@@ -303,7 +295,7 @@ export const validateInsertPayload = (
   payload: unknown,
   payloadLimits?: PayloadLimitsConfig,
 ): void => {
-  if (!isObjectRecord(payload)) {
+  if (!isPlainObject(payload)) {
     throw new ValidationError('Document must be a non-null plain object.');
   }
   const limits = resolveLimits(payloadLimits);

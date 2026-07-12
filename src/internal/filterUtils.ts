@@ -1,7 +1,7 @@
 import type { Filter } from '../types.js';
 import { ValidationError } from '../errors.js';
 import { setValueByPath } from './documentPath.js';
-import { isObjectRecord, isReservedKey } from './objectUtils.js';
+import { isObjectRecord, isPlainObject, isReservedKey } from './objectUtils.js';
 
 const MAX_ID_LENGTH = 1024;
 
@@ -28,9 +28,15 @@ export const validateIdString = (value: string): void => {
 
 /**
  * Validates that a filter argument is a plain object (or `undefined` when the
- * API explicitly allows it). Throws `ValidationError` for `null`, arrays, and
- * primitives. This is applied at `Collection` entry points so downstream
- * extractor helpers may safely assume a `Record<string, unknown>` input.
+ * API explicitly allows it). Throws `ValidationError` for `null`, arrays,
+ * primitives, and non-plain objects (class instances, `Object.create(proto)`).
+ * This is applied at `Collection` entry points so downstream extractor helpers
+ * may safely assume a `Record<string, unknown>` input.
+ *
+ * The plain-object requirement is a fail-open guard, not pedantry: filter
+ * conditions are read from own enumerable keys only, so an inherited-only
+ * object such as `Object.create({ _id: 'x' })` would look like an empty filter
+ * and turn `remove()`/`update()` into a match-all.
  */
 export const validateFilterArgument = (
   filter: unknown,
@@ -43,7 +49,7 @@ export const validateFilterArgument = (
       `${methodName}: filter argument is required and must be a plain object.`,
     );
   }
-  if (!isObjectRecord(filter)) {
+  if (!isPlainObject(filter)) {
     throw new ValidationError(`${methodName}: filter must be a plain object.`);
   }
 };

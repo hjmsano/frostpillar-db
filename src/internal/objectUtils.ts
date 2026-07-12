@@ -4,6 +4,26 @@ export const isObjectRecord = (
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
+/**
+ * Narrower than `isObjectRecord`: the value must be an object literal, i.e. its
+ * prototype is `Object.prototype` or `null`. Class instances (`Date`, `Map`,
+ * `Set`, …) and objects created with `Object.create(proto)` are rejected.
+ *
+ * Required at every caller-input boundary (documents, filters, update values),
+ * because Frostpillar only ever reads *own* enumerable keys: an inherited-only
+ * object looks empty, so accepting one would silently degrade a targeted filter
+ * into a match-all, and a `Date` document into a bare generated `_id`.
+ */
+export const isPlainObject = (
+  value: unknown,
+): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
 export const hasOwn = (
   target: Record<string, unknown>,
   key: string,

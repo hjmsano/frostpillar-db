@@ -15,7 +15,7 @@ import {
 import {
   hasAnyKey,
   hasOwn,
-  isObjectRecord,
+  isPlainObject,
   isReservedKey,
 } from './objectUtils.js';
 import {
@@ -212,9 +212,9 @@ const assertLogicalOperand = (
   }
 
   for (const element of value) {
-    if (!isObjectRecord(element)) {
+    if (!isPlainObject(element)) {
       throw new ValidationError(
-        `${operator} array elements must be filter objects.`,
+        `${operator} array elements must be plain filter objects.`,
       );
     }
   }
@@ -241,10 +241,14 @@ const matchesFilterInternal = (
   depth: number,
   caches: DatabaseCaches,
 ): boolean => {
-  if (filter === undefined || !hasAnyKey(filter)) return true;
-  if (!isObjectRecord(filter)) {
-    throw new ValidationError('Filter must be an object.');
+  if (filter === undefined) return true;
+  // The plain-object check must precede the empty-filter short-circuit: an
+  // inherited-only object has no own keys, so treating it as empty would match
+  // every document instead of rejecting the input.
+  if (!isPlainObject(filter)) {
+    throw new ValidationError('Filter must be a plain object.');
   }
+  if (!hasAnyKey(filter)) return true;
   if (depth > MAX_FILTER_NESTING_DEPTH) {
     throw new ValidationError(
       `Filter nesting depth exceeds maximum of ${String(MAX_FILTER_NESTING_DEPTH)}.`,

@@ -2,7 +2,12 @@ import { ValidationError } from '../errors.js';
 import type { UpdateOperations } from '../types.js';
 import { validateFieldPath } from './documentPath.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
-import { hasOwn, isObjectRecord, isReservedKey } from './objectUtils.js';
+import {
+  hasOwn,
+  isObjectRecord,
+  isPlainObject,
+  isReservedKey,
+} from './objectUtils.js';
 
 const UPDATE_OPERATORS = new Set([
   '$set',
@@ -62,14 +67,6 @@ const assertUpdatablePath = (
       `${operator} cannot modify _createdAt on an immutableCreatedAt collection.`,
     );
   }
-};
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 };
 
 const validateUpdateValueObject = (

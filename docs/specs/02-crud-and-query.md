@@ -46,7 +46,9 @@ Returns a `ResultChain` for lazy query composition. The query is **not executed*
 
 If `filter` is omitted or `{}`, all documents in the collection are matched.
 
-**Filter shape validation:** When `filter` is provided, it must be a plain object (`Record<string, unknown>`). Passing `null`, arrays, or primitives throws `ValidationError` synchronously at the entry point. This applies to all query methods (`find`, `findOne`, `count`, `update`, `remove`).
+**Filter shape validation:** When `filter` is provided, it must be a plain object (`Record<string, unknown>`) — an object whose prototype is `Object.prototype` or `null`. Passing `null`, arrays, primitives, class instances (including `Date`, `Map`, `Set`), or objects created with `Object.create(proto)` throws `ValidationError` synchronously at the entry point. This applies to all query methods (`find`, `findOne`, `count`, `update`, `remove`).
+
+The prototype rule matters because filter conditions are read from **own** enumerable keys only: an object such as `Object.create({ _id: 'missing' })` has no own keys, so accepting it would make it indistinguishable from `{}` and turn a targeted `update`/`remove` into a match-all. The same rule is enforced on every nested sub-filter (`$and` / `$or` array elements, `$elemMatch` and `$not` operands), so a non-plain sub-filter throws instead of silently matching every document.
 
 ### `collection.findOne(filter?: Filter): Promise<Document | null>`
 

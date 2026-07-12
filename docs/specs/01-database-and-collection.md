@@ -124,6 +124,8 @@ The payload validator accepts the following JSON-compatible value types for docu
 
 `bigint`, class instances, functions, `undefined`, `Symbol`, and circular references are rejected with `ValidationError`. Arrays are supported as field values and may be nested — each element is validated using the same rules as top-level field values.
 
+**The document itself must also be a plain object** (prototype `Object.prototype` or `null`). Passing a class instance such as `new Date()` or `new Map()` — or an object created with `Object.create(proto)` whose fields live on the prototype — throws `ValidationError`. Only own enumerable keys are ever persisted, so accepting such a value would store a document holding nothing but a generated `_id`. This check runs on both validation paths, so it also applies when `skipPayloadValidation` is `true`.
+
 #### Reserved Keys
 
 To defend against prototype-pollution, the payload validator rejects the keys `__proto__`, `constructor`, `prototype`, `__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, and `__lookupSetter__` at any nesting level. Attempting to insert a document containing any of these keys throws `ValidationError`. The restriction is centralised in `src/internal/objectUtils.ts` and also applies to filter keys and dot-notation path segments (see Spec 02 §8 Reserved Keys).
