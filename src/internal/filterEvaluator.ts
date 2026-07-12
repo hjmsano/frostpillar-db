@@ -8,10 +8,7 @@ import {
   PATH_NOT_FOUND,
   type PathValue,
 } from './documentPath.js';
-import {
-  MAX_FILTER_NESTING_DEPTH,
-  MAX_LOGICAL_OPERAND_COUNT,
-} from './limits.js';
+import { MAX_FILTER_NESTING_DEPTH } from './limits.js';
 import {
   hasAnyKey,
   hasOwn,
@@ -26,23 +23,7 @@ import {
   isOperatorExpression,
   isPrimitive,
 } from './filterOperatorEvaluators.js';
-
-const FIELD_OPERATORS = new Set([
-  '$eq',
-  '$ne',
-  '$gt',
-  '$gte',
-  '$lt',
-  '$lte',
-  '$in',
-  '$nin',
-  '$not',
-  '$regex',
-  '$exists',
-  '$elemMatch',
-  '$all',
-  '$size',
-]);
+import { assertLogicalOperand, FIELD_OPERATORS } from './filterValidator.js';
 
 type ComparableValue = string | number | boolean;
 
@@ -195,33 +176,6 @@ const evaluateConditionValue = (
   return resolved !== PATH_NOT_FOUND && deepEqual(resolved, condition);
 };
 
-const assertLogicalOperand = (
-  operator: '$and' | '$or',
-  value: unknown,
-): Filter[] => {
-  if (!Array.isArray(value)) {
-    throw new ValidationError(
-      `${operator} expects an array of filter objects.`,
-    );
-  }
-
-  if (value.length > MAX_LOGICAL_OPERAND_COUNT) {
-    throw new ValidationError(
-      `${operator} array exceeds maximum of ${String(MAX_LOGICAL_OPERAND_COUNT)} elements.`,
-    );
-  }
-
-  for (const element of value) {
-    if (!isPlainObject(element)) {
-      throw new ValidationError(
-        `${operator} array elements must be plain filter objects.`,
-      );
-    }
-  }
-
-  return value as Filter[];
-};
-
 const evaluateLogicalOperator = (
   operator: '$and' | '$or',
   condition: unknown,
@@ -287,19 +241,4 @@ export const matchesFilter = (
   caches: DatabaseCaches,
 ): boolean => {
   return matchesFilterInternal(document, filter, 0, caches);
-};
-
-/**
- * Eagerly validates a filter's structure (reserved keys, unknown operators,
- * logical operand shape, nesting depth) independently of the data being
- * queried. Without this, validation only runs while iterating candidate
- * records, so an invalid filter silently passes on an empty collection but
- * throws on a populated one (see FP-03). Validation reuses the evaluation path
- * against an empty document so there is a single source of truth.
- */
-export const validateFilter = (
-  filter: Filter | undefined,
-  caches: DatabaseCaches,
-): void => {
-  matchesFilterInternal({}, filter, 0, caches);
 };

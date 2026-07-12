@@ -5,7 +5,8 @@ import type {
 
 import { ValidationError } from '../errors.js';
 import { cloneDocument, isEmptyFilter } from './objectUtils.js';
-import { matchesFilter, validateFilter } from './filterEvaluator.js';
+import { matchesFilter } from './filterEvaluator.js';
+import { validateFilter } from './filterValidator.js';
 import {
   extractEqualityFields,
   extractIdEquality,

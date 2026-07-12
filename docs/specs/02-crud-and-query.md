@@ -516,6 +516,22 @@ Adds a value to an array field only if it does not already exist (using deep equ
 - Empty update objects (`{}`) are no-ops and return `{ modifiedCount: 0, upsertedId: null }`.
 - Combining `$set` and `$unset` on the same field in one operation throws `ValidationError`.
 
+### 10.0 Structural Filter Validation
+
+Every query path (`find`, `findOne`, `count`, `update`, `remove`) validates the **whole filter tree** before evaluating it against any document. Validation is performed by a dedicated walk (`internal/filterValidator.ts`), not by evaluating the filter against an empty document: `matchesFilter` short-circuits on the first false predicate, so an evaluation-based check stops at `a` in `{ a: 1, b: { $nope: 2 } }` and never inspects `b`. Such a filter was consequently accepted on an empty collection — and with `upsert: true` inserted a document — while throwing on a populated one.
+
+The validator visits every branch regardless of match outcome and throws `ValidationError` for:
+
+- Reserved keys (§8) at any level, including inside `$and` / `$or` branches.
+- Invalid field paths (empty, over-long, too many segments, restricted segments).
+- Unknown operators, at the top level and inside any field condition, `$not`, or `$elemMatch` sub-condition.
+- Field conditions that mix operator keys with regular keys (e.g. `{ a: { $eq: 1, b: 2 } }`).
+- Malformed operands: non-array or over-sized `$in` / `$nin` / `$all`, non-boolean `$exists`, non-integer or negative `$size`, non-string/RegExp or unsafe `$regex` pattern (§8.5).
+- Non-plain-object `$and` / `$or` elements, non-array `$and` / `$or` operands, and operand arrays over `MAX_LOGICAL_OPERAND_COUNT`.
+- Nesting beyond `MAX_FILTER_NESTING_DEPTH`.
+
+Comparison operands (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`) accept any value: a type mismatch against the stored value is a non-match, not an error (§8.2). Operand-shape rules are enforced by assertions shared with the evaluator, so validation and evaluation raise identical errors.
+
 ### 9.8 Operator Application Order
 
 When multiple update operators target the same field in a single operation, they are applied in a fixed, deterministic order:

@@ -184,6 +184,51 @@ void test('invalid filters throw even on empty collections (all query paths)', a
   }
 });
 
+void test('structural validation is exhaustive, not short-circuited by evaluation', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; a: number; b: number }>('t');
+  // `a: 1` is false against an empty document, so evaluation-based validation
+  // never reached `b`, and the invalid `$nope` slipped through.
+  const badOp = { a: 1, b: { $nope: 2 } } as unknown as Record<string, unknown>;
+
+  try {
+    await col.insert({ _id: 'a', a: 2, b: 2 });
+
+    await assert.rejects(() => col.find(badOp).toArray(), ValidationError);
+    await assert.rejects(() => col.findOne(badOp), ValidationError);
+    await assert.rejects(() => col.find(badOp).count(), ValidationError);
+    await assert.rejects(
+      () => col.update(badOp, { $set: { b: 1 } }),
+      ValidationError,
+    );
+    await assert.rejects(() => col.remove(badOp), ValidationError);
+    await assert.rejects(
+      () => col.find({ $and: [{ a: 1 }, { b: { $nope: 2 } }] }).toArray(),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('upsert with a structurally invalid filter throws instead of inserting', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; a: number; b: number }>(
+    'empty',
+  );
+  const badOp = { a: 1, b: { $nope: 2 } } as unknown as Record<string, unknown>;
+
+  try {
+    await assert.rejects(
+      () => col.update(badOp, { $set: { b: 1 } }, { upsert: true }),
+      ValidationError,
+    );
+    assert.equal(await col.count(), 0);
+  } finally {
+    await database.close();
+  }
+});
+
 void test('$and/$or reject non-object operands instead of matching all', async () => {
   const database = new Database({});
   const col = database.collection<{ _id?: string; x: number }>('t');
