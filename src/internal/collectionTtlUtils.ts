@@ -11,41 +11,61 @@ import {
 } from './collectionUtils.js';
 import { extractIdEquality, extractIdInclusion } from './filterUtils.js';
 
-export const existsWithTtl = async (
-  datastore: Datastore,
+/**
+ * A record counts as a hit only when it is live and — under a custom key
+ * definition — actually carries the requested `_id`. With `normalize`, one
+ * storage key can be reached by several distinct `_id` strings (`"01"` and
+ * `"1"` collide under `normalize: Number`), so a key hit alone does not prove
+ * `_id` identity. See ADR-027.
+ */
+const isLiveIdMatch = (
+  record: KeyedRecord<unknown>,
   id: string,
-  ttl: number | undefined,
-  duplicateKeys: CollectionDuplicateKeyPolicy = 'reject',
-): Promise<boolean> => {
-  if (ttl === undefined) {
-    return await datastore.has(id);
-  }
-  const expiryThreshold = computeExpiryThreshold(ttl);
-  if (duplicateKeys === 'allow') {
-    const records = await datastore.get(id);
-    return records.some(
-      (r) =>
-        !isDocumentExpiredAt(
-          toStoredDocument(r.payload) as Record<string, unknown>,
-          expiryThreshold,
-        ),
-    );
-  }
-  const record = await datastore.getFirst(id);
-  if (record === null) return false;
+  expiryThreshold: number | undefined,
+  requireIdMatch: boolean,
+): boolean => {
   const document = toStoredDocument(record.payload);
+  if (requireIdMatch && document._id !== id) return false;
   return !isDocumentExpiredAt(
     document as Record<string, unknown>,
     expiryThreshold,
   );
 };
 
+export const existsWithTtl = async (
+  datastore: Datastore,
+  id: string,
+  ttl: number | undefined,
+  duplicateKeys: CollectionDuplicateKeyPolicy = 'reject',
+  hasCustomKey = false,
+): Promise<boolean> => {
+  if (ttl === undefined && !hasCustomKey) {
+    return await datastore.has(id);
+  }
+  const expiryThreshold = computeExpiryThreshold(ttl);
+  if (duplicateKeys === 'allow' || hasCustomKey) {
+    // `get` returns every record sharing the storage key, which is the full
+    // candidate set for both duplicate `_id`s and normalize collisions.
+    const records = await datastore.get(id);
+    return records.some((r) =>
+      isLiveIdMatch(r, id, expiryThreshold, hasCustomKey),
+    );
+  }
+  const record = await datastore.getFirst(id);
+  if (record === null) return false;
+  return isLiveIdMatch(record, id, expiryThreshold, hasCustomKey);
+};
+
 export const idsWithTtl = async (
   datastore: Datastore,
   ttl: number | undefined,
   getAllRecords: () => Promise<KeyedRecord<unknown>[]>,
+  hasCustomKey = false,
 ): Promise<string[]> => {
-  if (ttl === undefined) {
+  // `datastore.keys()` yields normalized storage keys, which are only `_id`
+  // strings under the default key definition; otherwise read `_id` back off
+  // each payload to honour the `Promise<string[]>` contract (ADR-027).
+  if (ttl === undefined && !hasCustomKey) {
     return (await datastore.keys()) as string[];
   }
   const records = await getAllRecords();
@@ -71,9 +91,14 @@ export const removeNoTtlFastPath = async (
   ttl: number | undefined,
   duplicateKeys: CollectionDuplicateKeyPolicy,
   emitRemove: (id: string) => void,
+  hasCustomKey = false,
 ): Promise<number | null> => {
   if (ttl !== undefined) return null;
   if (duplicateKeys === 'allow') return null;
+  // Deleting by storage key would also delete `_id`s that merely normalize to
+  // the same key, and would emit the filter's `_id` rather than the stored one.
+  // The generic path re-checks each candidate's `_id` before deleting it.
+  if (hasCustomKey) return null;
   const idKey = extractIdEquality(filter);
   if (idKey !== null) {
     const removed = await datastore.delete(idKey);

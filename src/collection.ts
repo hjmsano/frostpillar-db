@@ -85,6 +85,7 @@ export class Collection<
       maxMatchedDocuments: context.maxMatchedDocuments,
       ttl,
       duplicateKeys,
+      hasCustomKey: context.hasCustomKey,
     };
     this.chainContext = createChainContext<TDocument>(
       () => this.assertOpen(),
@@ -187,8 +188,13 @@ export class Collection<
     this.assertOpen();
     validateFilterArgument(filter, 'Collection.findOne', true);
     const idKey = filter !== undefined ? extractIdEquality(filter) : null;
+    // A custom key definition can route several `_id` strings to one storage
+    // key, so `getFirst` may answer with a different document than the filter
+    // asked for. The generic path still uses the key index to fetch candidates,
+    // then confirms `_id` per document (ADR-027).
     if (
       idKey !== null &&
+      !this.context.hasCustomKey &&
       !(this.duplicateKeys === 'allow' && this.ttl !== undefined)
     ) {
       return findOneByIdOptimized<TDocument>(
@@ -273,6 +279,7 @@ export class Collection<
       this.ttl,
       this.duplicateKeys,
       (id) => this.emitChange('remove', id, null),
+      this.context.hasCustomKey,
     );
     if (fastPath !== null) return fastPath;
 
@@ -315,13 +322,17 @@ export class Collection<
       id,
       this.ttl,
       this.duplicateKeys,
+      this.context.hasCustomKey,
     );
   }
 
   public async ids(): Promise<string[]> {
     this.assertOpen();
-    return idsWithTtl(this.context.datastore, this.ttl, () =>
-      this.context.datastore.getAll(),
+    return idsWithTtl(
+      this.context.datastore,
+      this.ttl,
+      () => this.context.datastore.getAll(),
+      this.context.hasCustomKey,
     );
   }
 

@@ -576,6 +576,17 @@ const items = db.collection('items', { key: numericKey });
 
 **Conflict detection:** Since `DatastoreKeyDefinition` contains functions, structural comparison is used: each of the four function properties (`normalize`, `compare`, `serialize`, `deserialize`) is compared by reference equality (`===`). Two key definition objects that reference the same four functions are considered equal, even if the outer objects are different references. Two collections created with different function references (even if functionally equivalent) are considered to have different options and will throw `ConfigurationError`.
 
+**Document identity is unaffected by the key definition.** `_id` stays the string stored on the document, and every operation that takes an `_id` — `find`, `findOne`, `exists`, `remove`, `update` — matches it by exact string equality. A `normalize` function may be non-injective: with `normalize: (v) => Number(v)`, the `_id`s `"01"` and `"1"` collapse onto the same storage key. The key definition then governs only storage-level behavior, never query results:
+
+| Surface                            | Behavior under a non-injective `normalize`                                                                                                                |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `find` / `findOne` / `exists`      | Match the stored `_id` string. With only `_id: "01"` stored, `_id: "1"` matches nothing.                                                                    |
+| `remove`                           | Deletes only the documents whose stored `_id` matches; `watch()` reports the stored `_id`.                                                                  |
+| `ids()`                            | Returns the stored `_id` strings (`["01"]`), never the normalized keys.                                                                                     |
+| `insert` under `duplicateKeys`     | Applies at the **key** level: `"01"` and `"1"` share a key, so the second insert is rejected (`'reject'`) or replaces the first (`'replace'`), as for any key collision. |
+
+Colliding `_id`s are therefore best avoided: keep `normalize` injective over the `_id` strings the collection actually stores. See [ADR-027](../adr/027-custom-key-id-identity.md) for the rationale and the fast-path implications.
+
 ## 3. Error Types
 
 | Error                 | Extends            | Description                                                                                                                                                                  |

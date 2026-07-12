@@ -370,6 +370,8 @@ const numericKey: DatastoreKeyDefinition<number> = {
 const items = db.collection('items', { key: numericKey });
 ```
 
+キー定義が制御するのはストレージ上の配置と順序だけです。`_id` はドキュメントに格納された文字列のままであり、クエリは文字列としての完全一致で判定します。`normalize` は、格納する `_id` 文字列に対して単射になるように定義してください。`normalize: Number` の場合、`"01"` と `"1"` は同一のストレージキーに写るため、両者は共存できません。
+
 コレクション単位のオプションはデータベース全体の設定よりも優先されます。同じコレクションを異なる値で再アクセスすると `ConfigurationError` がスローされます。詳細は [Spec 01](docs/specs/01-database-and-collection.md) §2.8–§2.11 を参照してください。
 
 #### コレクションの内部情報

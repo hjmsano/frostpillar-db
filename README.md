@@ -370,6 +370,8 @@ const numericKey: DatastoreKeyDefinition<number> = {
 const items = db.collection('items', { key: numericKey });
 ```
 
+The key definition controls storage layout and ordering only: `_id` remains the string stored on the document, and queries match it by exact string equality. Keep `normalize` injective over the `_id` strings you store — `normalize: Number` maps `"01"` and `"1"` onto one storage key, so they cannot coexist.
+
 Per-collection options take precedence over database-level configuration. Re-accessing a collection with a different value for any of these fields throws `ConfigurationError`. See [Spec 01](docs/specs/01-database-and-collection.md) §2.8–§2.11 for full details.
 
 #### Collection Introspection

@@ -153,6 +153,7 @@ export class Database {
       {
         assertOpen: () => this.assertOpen(),
         datastore,
+        hasCustomKey: resolvedOptions.key !== undefined,
         skipInsertValidation: this.baseConfig.skipPayloadValidation === true,
         payloadLimits: this.baseConfig.payloadLimits,
         caches: this.caches,

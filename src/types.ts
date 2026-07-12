@@ -20,6 +20,12 @@ export type CollectionDuplicateKeyPolicy = 'allow' | 'replace' | 'reject';
 export interface CollectionContext {
   readonly assertOpen: () => void;
   readonly datastore: Datastore;
+  /**
+   * True when the collection was created with a custom `key` definition. Its
+   * `normalize` may map distinct `_id` strings onto one storage key, so the
+   * key-index fast paths cannot stand in for `_id` identity (ADR-027).
+   */
+  readonly hasCustomKey: boolean;
   readonly skipInsertValidation: boolean;
   readonly payloadLimits?: PayloadLimitsConfig;
   readonly caches: DatabaseCaches;
