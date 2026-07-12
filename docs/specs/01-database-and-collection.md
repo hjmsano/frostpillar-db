@@ -441,6 +441,7 @@ Registers a listener that is called synchronously after each successful mutation
 - Calling the returned unsubscribe function removes only that listener.
 - `watch()` does **not** accept a filter parameter. All changes are emitted. Consumers can filter in their listener callback.
 - **Snapshot semantics:** The listener list is copied before iteration, so calling `unsubscribe()` or registering a new `watch()` from within a listener callback takes effect on the _next_ emit, not the current one.
+- `watch()` throws `ClosedDatabaseError` on a dropped collection or a closed database, like every other collection method. A listener registered on such a collection could never fire, because the collection instance is detached from the database's registry and no mutation can reach it.
 
 ### 2.7 TTL (Time-To-Live)
 

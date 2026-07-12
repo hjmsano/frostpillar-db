@@ -94,6 +94,10 @@ export class Collection<
   }
 
   public watch(listener: ChangeListener<TDocument>): () => void {
+    // A dropped collection (or a closed database) can never emit again: the
+    // instance is detached from the database registry, so a listener registered
+    // here would silently never fire.
+    this.assertOpen();
     return this.changeEmitter.watch(listener);
   }
 

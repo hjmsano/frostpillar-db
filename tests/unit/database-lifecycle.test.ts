@@ -232,6 +232,20 @@ void test('stale collection after dropCollection: throws ClosedDatabaseError on 
   await assert.rejects(() => users.count(), ClosedDatabaseError);
 });
 
+void test('stale collection after dropCollection: throws ClosedDatabaseError on watch', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDoc>('users');
+  await database.dropCollection('users');
+  assert.throws(() => users.watch(() => undefined), ClosedDatabaseError);
+});
+
+void test('closed database: collection.watch throws ClosedDatabaseError', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDoc>('users');
+  await database.close();
+  assert.throws(() => users.watch(() => undefined), ClosedDatabaseError);
+});
+
 void test('stale collection after dropCollection: re-acquired collection works', async () => {
   const database = new Database({});
   const users = database.collection<UserDoc>('users');
