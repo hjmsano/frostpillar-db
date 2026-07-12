@@ -1,7 +1,7 @@
 import type { PayloadLimitsConfig } from '@frostpillar/frostpillar-storage-engine';
 
 import { ValidationError } from '../errors.js';
-import { isPlainObject, isReservedKey } from './objectUtils.js';
+import { hasOwn, isPlainObject, isReservedKey } from './objectUtils.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
 
 const DEFAULT_MAX_KEY_BYTES = 1024;
@@ -31,6 +31,13 @@ interface ValidationState {
   totalKeyCount: number;
   totalBytes: number;
   limits: ResolvedLimits;
+  /**
+   * Top-level keys the write path will add to the payload after validation
+   * (`_id`, and `_createdAt` on a TTL collection). They are absent from the
+   * caller's object but present in the stored document, so they are charged to
+   * the root object's key count.
+   */
+  extraTopLevelKeys: number;
 }
 
 export const computeUtf8ByteLength = (str: string): number => {
@@ -192,7 +199,9 @@ const validateObject = (
     throw new ValidationError('Circular payload references are not supported.');
   }
   const entries = Object.entries(obj);
-  if (entries.length > state.limits.maxKeysPerObject) {
+  // Only the root object (depth 0) gains the write path's generated fields.
+  const generatedKeys = depth === 0 ? state.extraTopLevelKeys : 0;
+  if (entries.length + generatedKeys > state.limits.maxKeysPerObject) {
     throw new ValidationError(
       `Payload object key count must be <= ${state.limits.maxKeysPerObject}.`,
     );
@@ -209,6 +218,37 @@ const validateObject = (
   }
 
   state.activePath.delete(obj);
+};
+
+/** A generated `_id` is a 36-character UUID; the 2 bytes are its JSON quotes. */
+const GENERATED_ID_VALUE_BYTES = 38;
+/** `_createdAt` is `Date.now()` — a 13-digit millisecond epoch until 2286. */
+const GENERATED_TIMESTAMP_VALUE_BYTES = 13;
+
+/**
+ * Charges the fields the write path adds after validation (`_id`, and
+ * `_createdAt` on a TTL collection) to the limits, so a document is measured as
+ * it will be stored. Without this, a document could pass insert at exactly
+ * `maxKeysPerObject` and then fail every later update under the same limit,
+ * since `update` validates the stored document — generated fields included.
+ * A key the caller already supplied is counted by the walk itself, not here.
+ */
+const accountGeneratedKeys = (
+  payload: Record<string, unknown>,
+  generatedKeys: readonly string[],
+  state: ValidationState,
+): void => {
+  for (const key of generatedKeys) {
+    if (hasOwn(payload, key)) continue;
+    state.extraTopLevelKeys += 1;
+    validateKey(key, state);
+    addBytes(
+      state,
+      key === '_createdAt'
+        ? GENERATED_TIMESTAMP_VALUE_BYTES
+        : GENERATED_ID_VALUE_BYTES,
+    );
+  }
 };
 
 const resolveLimits = (config?: PayloadLimitsConfig): ResolvedLimits => ({
@@ -300,6 +340,7 @@ export const validatePayloadSecurity = (
 export const validateInsertPayload = (
   payload: unknown,
   payloadLimits?: PayloadLimitsConfig,
+  generatedKeys: readonly string[] = [],
 ): void => {
   if (!isPlainObject(payload)) {
     throw new ValidationError('Document must be a non-null plain object.');
@@ -310,6 +351,8 @@ export const validateInsertPayload = (
     totalKeyCount: 0,
     totalBytes: 0,
     limits,
+    extraTopLevelKeys: 0,
   };
+  accountGeneratedKeys(payload, generatedKeys, state);
   validateObject(payload, 0, state);
 };

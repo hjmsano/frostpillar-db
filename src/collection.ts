@@ -60,6 +60,8 @@ export class Collection<
   /** Whether `_createdAt` update protection is active (ADR-016): true if `immutableCreatedAt` is set, or unconditionally whenever `ttl` is set. */
   private readonly protectCreatedAt: boolean;
   private readonly updateMaxDepth: number;
+  /** Top-level fields the insert path generates: `_id`, plus `_createdAt` under a TTL. */
+  private readonly generatedInsertKeys: readonly string[];
   private dropped = false;
 
   public constructor(
@@ -76,6 +78,8 @@ export class Collection<
     this.immutableCreatedAt = immutableCreatedAt;
     this.protectCreatedAt = immutableCreatedAt || ttl !== undefined;
     this.updateMaxDepth = context.payloadLimits?.maxDepth ?? DEFAULT_MAX_DEPTH;
+    this.generatedInsertKeys =
+      ttl !== undefined ? ['_id', '_createdAt'] : ['_id'];
     if (context.onListenerError !== undefined) {
       this.changeEmitter.setErrorHandler(context.onListenerError);
     }
@@ -122,17 +126,30 @@ export class Collection<
     this.context.assertOpen();
   }
 
-  private validatePayload(document: unknown): void {
+  /**
+   * `generatedKeys` names the top-level fields `prepareInsertRecord` will add
+   * after validation, so the payload is measured against the limits as it will
+   * be stored. The update path passes none: its input is the stored document,
+   * which already carries them.
+   */
+  private validatePayload(
+    document: unknown,
+    generatedKeys: readonly string[] = [],
+  ): void {
     if (this.context.skipInsertValidation) {
       validatePayloadSecurity(document, this.context.payloadLimits?.maxDepth);
     } else {
-      validateInsertPayload(document, this.context.payloadLimits);
+      validateInsertPayload(
+        document,
+        this.context.payloadLimits,
+        generatedKeys,
+      );
     }
   }
 
   public async insert(document: InsertDocument<TDocument>): Promise<string> {
     this.assertOpen();
-    this.validatePayload(document);
+    this.validatePayload(document, this.generatedInsertKeys);
     const { id, payload, record } = prepareInsertRecord<TDocument>(
       document,
       Date.now(),
@@ -152,7 +169,7 @@ export class Collection<
   ): Promise<string[]> {
     this.assertOpen();
     for (const doc of documents) {
-      this.validatePayload(doc);
+      this.validatePayload(doc, this.generatedInsertKeys);
     }
     const now = Date.now();
     const count = documents.length;

@@ -977,6 +977,8 @@ Payload limits apply to all collections in the database and are enforced on `ins
 
 > **Note:** For `update`, payload limits are checked against the **resulting document** after all operators have been applied. If the result exceeds any limit, the update is rejected with `ValidationError` and the original document remains unchanged.
 
+> **Note:** For `insert` / `insertMany`, limits are checked against the document **as it will be stored** — including the fields frostpillar-db generates: `_id` when you omit it, and `_createdAt` on a TTL collection. A document with 256 keys therefore does not fit `maxKeysPerObject: 256` unless it supplies its own `_id`. This keeps an inserted document updatable: `update` validates the stored document, generated fields included.
+
 > **Rejected types:** `bigint`, class instances, functions, `undefined`, `Symbol`, and circular references are not JSON-compatible and are rejected with `ValidationError` on insert.
 
 #### `skipPayloadValidation`
