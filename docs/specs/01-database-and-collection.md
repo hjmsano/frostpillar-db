@@ -192,7 +192,9 @@ Iterates all per-collection `Datastore` instances **sequentially** and calls `co
 
 #### `db.close(): Promise<void>`
 
-Iterates all per-collection `Datastore` instances **sequentially** and calls `close()` on each. Releases resources and locks. After calling `close()`, all subsequent operations throw `ClosedDatabaseError`. If any individual `close()` throws, the error propagates immediately and remaining datastores are **not** closed.
+Iterates all per-collection `Datastore` instances **sequentially** and calls `close()` on each. Releases resources and locks. After calling `close()`, all subsequent operations throw `ClosedDatabaseError`.
+
+`close()` is **best-effort**: a failing `close()` does not abort the pass. Every remaining datastore is still closed, all listener subscriptions are still released, and the internal registries are still cleared; only then is a failure re-thrown. This matters because the database is marked closed before the pass begins, so a datastore skipped by an early abort would be unreachable _and_ unclosed — its file lock held with no way to release it. A single failure is re-thrown as-is; multiple failures are re-thrown as an `AggregateError` whose `errors` array holds them in collection order.
 
 #### `db.on(event: 'error', listener): () => void`
 

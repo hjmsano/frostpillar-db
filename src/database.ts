@@ -268,6 +268,13 @@ export class Database {
     }
   }
 
+  /**
+   * Best-effort: the database is marked closed before the pass begins, so a
+   * datastore skipped by an early abort would be unreachable *and* unclosed —
+   * holding its file lock with no way to release it. Every datastore is closed
+   * and every registry cleared; failures are collected and re-thrown afterwards
+   * (one as-is, several as an `AggregateError` in collection order).
+   */
   public async close(): Promise<void> {
     this.assertOpen();
     this.closed = true;
@@ -278,8 +285,13 @@ export class Database {
       }
     }
 
+    const failures: unknown[] = [];
     for (const datastore of this.datastores.values()) {
-      await datastore.close();
+      try {
+        await datastore.close();
+      } catch (error) {
+        failures.push(error);
+      }
     }
 
     this.errorListeners.length = 0;
@@ -289,6 +301,16 @@ export class Database {
     this.collectionOptions.clear();
     this.caches.pathCache.clear();
     this.caches.regexStringCache.clear();
+
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `Failed to close ${failures.length.toString()} datastores.`,
+      );
+    }
   }
 
   public on(event: 'error', listener: DatabaseErrorListener): () => void {

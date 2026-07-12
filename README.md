@@ -236,7 +236,9 @@ await db.commit(); // Explicit flush to durable storage
 await db.close(); // Release resources and locks
 ```
 
-> **Sequential processing:** `commit()` and `close()` iterate collections sequentially. If any individual collection's operation throws, the error propagates immediately and remaining collections are skipped. Callers who need best-effort semantics should wrap the call in a try/catch per collection.
+> **Sequential processing:** `commit()` and `close()` iterate collections sequentially. If an individual `commit()` throws, the error propagates immediately and remaining collections are skipped; callers who need best-effort commit semantics should wrap the call in a try/catch per collection.
+>
+> `close()` is best-effort by itself: a failing collection does not abort the pass. Every remaining datastore is still closed and all internal state is still released before the failure is re-thrown (a single failure as-is, several as an `AggregateError`). Otherwise a skipped datastore would be unreachable — the database is already closed — while still holding its file lock.
 
 #### Error Monitoring
 

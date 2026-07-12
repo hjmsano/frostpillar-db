@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Datastore } from '@frostpillar/frostpillar-storage-engine';
+import type { DatastoreDriver } from '@frostpillar/frostpillar-storage-engine';
 
 import { ClosedDatabaseError, Database } from '../../src/index.js';
 
@@ -255,4 +256,83 @@ void test('stale collection after dropCollection: re-acquired collection works',
   const id = await freshUsers.insert({ name: 'Bob' });
   assert.equal(typeof id, 'string');
   await database.close();
+});
+
+// ---------------------------------------------------------------------------
+// close() is best-effort across datastores
+// ---------------------------------------------------------------------------
+
+const createClosingDriver = (
+  closed: string[],
+  name: string,
+  failOnClose: boolean,
+): DatastoreDriver => ({
+  init: () => ({
+    controller: {
+      handleRecordAppended: (): Promise<void> => Promise.resolve(),
+      handleCleared: (): Promise<void> => Promise.resolve(),
+      commitNow: (): Promise<void> => Promise.resolve(),
+      close: (): Promise<void> => {
+        closed.push(name);
+        return failOnClose
+          ? Promise.reject(new Error(`close failed: ${name}`))
+          : Promise.resolve();
+      },
+    },
+    initialTreeJSON: null,
+    initialCurrentSizeBytes: 0,
+  }),
+});
+
+void test('close() closes every datastore even when one fails, then rethrows', async () => {
+  const closed: string[] = [];
+  const database = new Database({
+    driver: (name: string) => createClosingDriver(closed, name, name === 'b'),
+  });
+  database.collection<UserDoc>('a');
+  database.collection<UserDoc>('b');
+  database.collection<UserDoc>('c');
+
+  await assert.rejects(
+    () => database.close(),
+    (error: unknown) =>
+      error instanceof Error && error.message === 'close failed: b',
+  );
+
+  // 'c' must still have been closed: the database is already marked closed, so
+  // a skipped datastore would be both unreachable and holding its resources.
+  assert.deepEqual(closed, ['a', 'b', 'c']);
+});
+
+void test('close() aggregates multiple datastore failures', async () => {
+  const closed: string[] = [];
+  const database = new Database({
+    driver: (name: string) => createClosingDriver(closed, name, name !== 'b'),
+  });
+  database.collection<UserDoc>('a');
+  database.collection<UserDoc>('b');
+  database.collection<UserDoc>('c');
+
+  await assert.rejects(
+    () => database.close(),
+    (error: unknown) =>
+      error instanceof AggregateError &&
+      error.errors.length === 2 &&
+      (error.errors[0] as Error).message === 'close failed: a' &&
+      (error.errors[1] as Error).message === 'close failed: c',
+  );
+  assert.deepEqual(closed, ['a', 'b', 'c']);
+});
+
+void test('close() clears internal state even when a datastore fails', async () => {
+  const closed: string[] = [];
+  const database = new Database({
+    driver: (name: string) => createClosingDriver(closed, name, true),
+  });
+  database.collection<UserDoc>('a');
+
+  await assert.rejects(() => database.close());
+  // A second close() must report the database as already closed, not retry.
+  await assert.rejects(() => database.close(), ClosedDatabaseError);
+  assert.deepEqual(closed, ['a']);
 });
