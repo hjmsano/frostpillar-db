@@ -446,6 +446,14 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
     }
 
     if (key === '$count') {
+      // `GroupAccumulator` types the operand as `true`, but accumulators built
+      // at runtime (e.g. parsed from JSON) bypass that: `{ $count: false }`
+      // used to be read as a plain document count.
+      if (accumulator.$count !== true) {
+        throw new ValidationError(
+          `groupBy accumulator "${outputField}" operand for "$count" must be true.`,
+        );
+      }
       continue;
     }
 

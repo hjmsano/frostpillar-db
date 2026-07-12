@@ -963,7 +963,7 @@ void test('computeGroupBy $first/$last is positional-then-read: missing field on
   assert.equal(lastResult[0].lastValue, null);
 });
 
-void test('computeGroupBy $first/$last on a single-document group returns that document\'s value for both', () => {
+void test("computeGroupBy $first/$last on a single-document group returns that document's value for both", () => {
   const docs = [flDoc('1', { category: 'a', value: 'only' })];
   const result = computeGroupBy(
     docs,
@@ -993,7 +993,11 @@ void test('computeGroupBy $first/$last support non-numeric value types: string, 
       { firstValue: { $first: 'value' } },
       pathCache,
     );
-    assert.deepEqual(result[0].firstValue, value, `Expected ${label} to round-trip`);
+    assert.deepEqual(
+      result[0].firstValue,
+      value,
+      `Expected ${label} to round-trip`,
+    );
   }
 });
 
@@ -1266,7 +1270,9 @@ void test('computeGroupBy rejects reserved/bad field path for $countDistinct acc
       computeGroupBy(
         [],
         'category',
-        { result: { $countDistinct: '__proto__.x' } } as unknown as GroupAccumulators,
+        {
+          result: { $countDistinct: '__proto__.x' },
+        } as unknown as GroupAccumulators,
         pathCache,
       ),
     ValidationError,
@@ -1650,7 +1656,9 @@ void test('computeGroupBy rejects reserved/bad field path for $addToSet accumula
       computeGroupBy(
         [],
         'category',
-        { result: { $addToSet: '__proto__.x' } } as unknown as GroupAccumulators,
+        {
+          result: { $addToSet: '__proto__.x' },
+        } as unknown as GroupAccumulators,
         pathCache,
       ),
     ValidationError,
@@ -1795,4 +1803,33 @@ void test('computeGroupBy still groups documents with deep-equal object keys of 
   assert.equal(result[0].count, 2);
   assert.deepEqual(result[1]._key, { name: 'sales' });
   assert.equal(result[1].count, 1);
+});
+
+// --- $count operand validation ---
+
+void test('computeGroupBy rejects a $count operand that is not true', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  for (const operand of [false, 0, 1, 'true', null, {}]) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          docs,
+          'category',
+          { total: { $count: operand } } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+    );
+  }
+});
+
+void test('computeGroupBy accepts $count: true', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { total: { $count: true } },
+    pathCache,
+  );
+  assert.equal(result[0].total, 1);
 });
