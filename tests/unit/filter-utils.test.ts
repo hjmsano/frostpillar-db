@@ -5,10 +5,15 @@ import { ValidationError } from '../../src/errors.js';
 import {
   extractEqualityFields,
   extractIdEquality,
+  extractIdInclusion,
   extractIdRange,
 } from '../../src/internal/filterUtils.js';
+import { MAX_OPERAND_ARRAY_SIZE } from '../../src/internal/limits.js';
 
 const pathCache = new Map<string, string[]>();
+
+const makeIds = (count: number): string[] =>
+  Array.from({ length: count }, (_, i) => `id-${String(i)}`);
 
 void test('extractEqualityFields returns direct value for implicit $eq', () => {
   const result = extractEqualityFields({ name: 'Alice' }, pathCache);
@@ -234,4 +239,45 @@ void test('extractIdRange returns null for single-sided range with only $gt (no 
 
 void test('extractIdRange returns null for single-sided range with only $lt (no type check triggered)', () => {
   assert.equal(extractIdRange({ _id: { $lt: 50 } }), null);
+});
+
+void test('extractIdInclusion returns the ids for a simple _id $in filter', () => {
+  assert.deepEqual(extractIdInclusion({ _id: { $in: ['a', 'b'] } }), [
+    'a',
+    'b',
+  ]);
+});
+
+void test('extractIdInclusion accepts an operand at the maximum size', () => {
+  const ids = makeIds(MAX_OPERAND_ARRAY_SIZE);
+  assert.equal(extractIdInclusion({ _id: { $in: ids } })?.length, ids.length);
+});
+
+void test('extractIdInclusion throws ValidationError when the operand exceeds the maximum size', () => {
+  const ids = makeIds(MAX_OPERAND_ARRAY_SIZE + 1);
+  assert.throws(
+    () => extractIdInclusion({ _id: { $in: ids } }),
+    (error: unknown) =>
+      error instanceof ValidationError &&
+      error.message.includes('$in operand exceeds maximum of'),
+  );
+});
+
+void test('extractIdInclusion throws ValidationError when the operand is not an array', () => {
+  assert.throws(
+    () => extractIdInclusion({ _id: { $in: 'a' } }),
+    ValidationError,
+  );
+});
+
+void test('extractIdInclusion returns null for an empty operand', () => {
+  assert.equal(extractIdInclusion({ _id: { $in: [] } }), null);
+});
+
+void test('extractIdInclusion returns null for a non-string element', () => {
+  assert.equal(extractIdInclusion({ _id: { $in: ['a', 1] } }), null);
+});
+
+void test('extractIdInclusion returns null when the filter has other keys', () => {
+  assert.equal(extractIdInclusion({ _id: { $in: ['a'] }, v: 1 }), null);
 });

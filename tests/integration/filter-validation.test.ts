@@ -265,3 +265,53 @@ void test('$and/$or reject non-object operands instead of matching all', async (
     await database.close();
   }
 });
+
+void test('_id $in fast path enforces the operand size limit on every query path', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; v: number }>('t');
+  // MAX_OPERAND_ARRAY_SIZE + 1. The `_id` $in fast paths (getMany / deleteMany)
+  // used to run before structural validation, so remove() deleted the listed
+  // documents and returned normally, while find()/update() read them back from
+  // storage before eventually throwing.
+  const ids = Array.from({ length: 10_001 }, (_, i) => `id-${String(i)}`);
+  const oversized = { _id: { $in: ids } };
+
+  try {
+    await col.insert({ _id: 'id-0', v: 1 });
+    await col.insert({ _id: 'id-1', v: 2 });
+
+    await assert.rejects(() => col.find(oversized).toArray(), ValidationError);
+    await assert.rejects(() => col.findOne(oversized), ValidationError);
+    await assert.rejects(() => col.find(oversized).count(), ValidationError);
+    await assert.rejects(
+      () => col.update(oversized, { $set: { v: 9 } }),
+      ValidationError,
+    );
+    await assert.rejects(() => col.remove(oversized), ValidationError);
+
+    // Nothing was deleted or modified.
+    const docs = await col.find().sort({ _id: 1 }).toArray();
+    assert.equal(docs.length, 2);
+    assert.equal(docs[0]?.v, 1);
+    assert.equal(docs[1]?.v, 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('_id $in fast path still works at the maximum operand size', async () => {
+  const database = new Database({});
+  const col = database.collection<{ _id?: string; v: number }>('t');
+  const ids = Array.from({ length: 10_000 }, (_, i) => `id-${String(i)}`);
+
+  try {
+    await col.insert({ _id: 'id-0', v: 1 });
+    await col.insert({ _id: 'id-1', v: 2 });
+
+    assert.equal((await col.find({ _id: { $in: ids } }).toArray()).length, 2);
+    assert.equal(await col.remove({ _id: { $in: ids } }), 2);
+    assert.equal(await col.count(), 0);
+  } finally {
+    await database.close();
+  }
+});

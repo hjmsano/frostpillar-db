@@ -1,6 +1,7 @@
 import type { Filter } from '../types.js';
 import { ValidationError } from '../errors.js';
 import { setValueByPath } from './documentPath.js';
+import { assertInclusionOperand } from './filterOperatorEvaluators.js';
 import { isObjectRecord, isPlainObject, isReservedKey } from './objectUtils.js';
 
 const MAX_ID_LENGTH = 1024;
@@ -97,6 +98,14 @@ export const extractIdEquality = (filter: Filter): string | null => {
 /**
  * Returns the _id values when the filter is a simple `{ _id: { $in: [...] } }` condition.
  * All elements must be non-empty strings. Returns `null` otherwise.
+ *
+ * The operand is asserted with the same `assertInclusionOperand` the structural
+ * validator uses, so the `MAX_OPERAND_ARRAY_SIZE` cap and the `_id` string rules
+ * are enforced here rather than by a later `validateFilter` call. This is the
+ * only gate the `_id` `$in` fast paths pass through, and they run *before* the
+ * structural walk: an unchecked operand reached `getMany`/`deleteMany` first, so
+ * an oversized `remove()` deleted its documents and returned without ever
+ * throwing (spec 02 §5, §8.3).
  */
 export const extractIdInclusion = (filter: Filter): string[] | null => {
   const keys = Object.keys(filter);
@@ -108,8 +117,8 @@ export const extractIdInclusion = (filter: Filter): string[] | null => {
   const innerKeys = Object.keys(value);
   if (innerKeys.length !== 1 || innerKeys[0] !== '$in') return null;
 
-  const arr = value.$in;
-  if (!Array.isArray(arr) || arr.length === 0) return null;
+  const arr = assertInclusionOperand(value.$in, '$in');
+  if (arr.length === 0) return null;
 
   for (const item of arr) {
     if (typeof item !== 'string' || item.length === 0) return null;

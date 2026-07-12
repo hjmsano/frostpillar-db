@@ -143,6 +143,8 @@ When no TTL is configured on the collection, `remove` applies fast-path optimiza
 | `{ _id: { $in: [...] } }` (inclusion) | `Datastore.getMany(keys)` + `Datastore.deleteMany(keys)` | Resolves which keys exist, then batch-deletes in a single mutex acquisition |
 | Any other filter                      | Scan + `Datastore.deleteById(entryId)` per record        | Scan-based path, per-id deletion for exact change-event attribution         |
 
+**Operand validation:** The `$in` fast path applies the `MAX_OPERAND_ARRAY_SIZE` limit (§8.3) and the `_id` string rules before calling `getMany` / `deleteMany`. An oversized or malformed operand therefore throws `ValidationError` and deletes nothing, exactly as it would on the scan-based path.
+
 **Exception:** When the collection's `duplicateKeys` policy is `'allow'`, the no-TTL fast paths (equality and `$in`) are disabled and `remove` always falls through to the scan-based path. This is because `Datastore.delete(key)` and `Datastore.deleteMany(keys)` can remove multiple records per key under the `'allow'` policy, but the fast paths would emit only one `'remove'` change event per key — under-reporting to watch listeners. The scan-based path iterates individual records and emits one event per deletion, maintaining the watch event contract.
 
 The fast-path batch deletes (`deleteMany`) use a single storage-engine call rather than issuing individual `delete(key)` calls in a loop. The scan-based path issues one `deleteById` call per matched record to keep change-event attribution accurate; this trades batch throughput for event correctness on that path.
@@ -233,6 +235,8 @@ Comparison operators work on `number`, `string`, and `boolean` values. Type coer
 | `$nin`   | Value is not in array | `{ role: { $nin: ['admin'] } }`              |
 
 **Operand size limit:** The operand array for `$in`, `$nin`, and `$all` must contain at most `MAX_OPERAND_ARRAY_SIZE` (10,000) elements. Exceeding this limit throws `ValidationError`.
+
+The limit also applies to the `_id` `$in` fast paths used by `find`, `findOne`, `count`, `update`, and `remove` (§2, §5, §6). The operand is checked while the fast path is being recognised, i.e. **before** any storage call (`getMany` / `deleteMany`) is issued, so an oversized operand can neither read nor delete records.
 
 **Operand immutability:** Treat `$in`, `$nin`, and `$all` operand arrays as immutable. The inclusion-set cache rebuilds when the operand length changes, so pushing or popping elements between queries is safe. However, a same-length in-place change on a reused operand array (e.g. replacing an element at an existing index) is not detected and yields undefined results. Pass a fresh array when the contents change.
 
