@@ -989,7 +989,9 @@ const db = new Database({
 });
 ```
 
-Only use this option when you fully control the data being inserted — skipping validation lets malformed, circular, or oversized documents reach storage.
+Only use this option when you fully control the data being inserted — skipping validation lets oversized documents reach storage.
+
+A lightweight security validator still runs on every write, even in skip mode. It rejects reserved keys, circular references, documents nested deeper than `maxDepth`, and non-plain object values (class instances, `Date`, `Map`, `Set`, `Object.create(proto)`) with `ValidationError`. What skip mode turns off is the size accounting — byte counts, key counts, and string/key length limits.
 
 #### `maxMatchedDocuments`
 

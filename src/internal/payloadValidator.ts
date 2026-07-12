@@ -243,7 +243,13 @@ const validateSecurityValue = (
     activePath.delete(value);
     return;
   }
-  if (!isPlainObject(value)) return;
+  // A non-plain object is rejected, not skipped: the traversal cannot see the
+  // reserved keys or cycles inside a value it will not descend into, and the
+  // write path deep-clones the payload afterwards — a self-referential class
+  // instance passed this check and then overflowed the stack inside the clone.
+  if (!isPlainObject(value)) {
+    throw new ValidationError('Payload values must be plain objects.');
+  }
   if (activePath.has(value)) {
     throw new ValidationError('Circular payload references are not supported.');
   }
