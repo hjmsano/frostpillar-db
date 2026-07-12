@@ -281,3 +281,42 @@ void test('extractIdInclusion returns null for a non-string element', () => {
 void test('extractIdInclusion returns null when the filter has other keys', () => {
   assert.equal(extractIdInclusion({ _id: { $in: ['a'] }, v: 1 }), null);
 });
+
+void test('extractEqualityFields keeps an object-valued implicit equality', () => {
+  const filter = { profile: { tier: 'pro' } };
+  const result = extractEqualityFields(filter, pathCache);
+  assert.deepEqual(result, { profile: { tier: 'pro' } });
+  // Deep-cloned: the filter's object must not be aliased by the new document.
+  assert.notEqual(result.profile, filter.profile);
+});
+
+void test('extractEqualityFields keeps an array-valued implicit equality', () => {
+  const filter = { tags: ['a', 'b'] };
+  const result = extractEqualityFields(filter, pathCache);
+  assert.deepEqual(result, { tags: ['a', 'b'] });
+  assert.notEqual(result.tags, filter.tags);
+});
+
+void test('extractEqualityFields keeps an object-valued explicit $eq', () => {
+  const result = extractEqualityFields(
+    { profile: { $eq: { tier: 'pro' } } },
+    pathCache,
+  );
+  assert.deepEqual(result, { profile: { tier: 'pro' } });
+});
+
+void test('extractEqualityFields expands a dot path to an object value', () => {
+  const result = extractEqualityFields(
+    { 'meta.profile': { tier: 'pro' } },
+    pathCache,
+  );
+  assert.deepEqual(result, { meta: { profile: { tier: 'pro' } } });
+});
+
+void test('extractEqualityFields still skips operator expressions with object operands', () => {
+  const result = extractEqualityFields(
+    { profile: { $ne: { tier: 'pro' } } },
+    pathCache,
+  );
+  assert.deepEqual(result, {});
+});

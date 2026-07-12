@@ -277,3 +277,56 @@ void test('upsert only extracts equality conditions from filter', async () => {
     await database.close();
   }
 });
+
+void test('upsert with an object-valued equality creates a document that matches its filter', async () => {
+  const database = new Database({});
+  const users = database.collection('users');
+
+  try {
+    const filter = { profile: { tier: 'pro' } };
+    const result = await users.update(
+      filter,
+      { $set: { role: 'member' } },
+      { upsert: true },
+    );
+    assert.notEqual(result.upsertedId, null);
+
+    // The upserted document must satisfy the filter that created it, otherwise
+    // the same upsert inserts a second document on every call.
+    const found = await users.find(filter).toArray();
+    assert.equal(found.length, 1);
+    assert.equal(found[0]._id, result.upsertedId);
+
+    const second = await users.update(
+      filter,
+      { $set: { role: 'lead' } },
+      { upsert: true },
+    );
+    assert.equal(second.modifiedCount, 1);
+    assert.equal(second.upsertedId, null);
+    assert.equal(await users.find(filter).count(), 1);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('upsert with an array-valued equality creates a document that matches its filter', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    const filter = { tags: ['a', 'b'] };
+    const result = await users.update(
+      filter,
+      { $set: { role: 'member' } },
+      { upsert: true },
+    );
+    assert.notEqual(result.upsertedId, null);
+
+    const found = await users.find(filter).toArray();
+    assert.equal(found.length, 1);
+    assert.deepEqual(found[0].tags, ['a', 'b']);
+  } finally {
+    await database.close();
+  }
+});

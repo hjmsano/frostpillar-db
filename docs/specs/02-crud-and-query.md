@@ -104,7 +104,7 @@ interface UpdateResult {
 
 **Upsert behavior** (when `upsert: true` and no documents match the filter):
 
-1. Create a new document from equality conditions in the filter (implicit `$eq` and explicit `$eq` only — skip `$gt`, `$or`, and all other non-equality operators). Dot-notation keys (e.g. `'address.city'`) are expanded into nested objects (e.g. `{ address: { city: … } }`) rather than stored as literal top-level keys.
+1. Create a new document from equality conditions in the filter (implicit `$eq` and explicit `$eq` only — skip `$gt`, `$or`, and all other non-equality operators). Dot-notation keys (e.g. `'address.city'`) are expanded into nested objects (e.g. `{ address: { city: … } }`) rather than stored as literal top-level keys. An equality condition whose value is an object or an array (e.g. `{ profile: { tier: 'pro' } }`, `{ tags: ['a'] }`) is an equality condition like any other — the filter matches it by deep equality (§8.1) — so it is carried into the upserted document, deep-cloned so the caller's filter object is not aliased by stored data. A field condition that mixes operator keys with regular keys is rejected by filter validation and never reaches this step; a pure operator expression (every key `$`-prefixed) is skipped unless it is exactly `{ $eq: … }`.
 2. Apply all update operators from the update spec to the new document.
 3. Generate `_id` via `crypto.randomUUID()` if not derived from filter.
 4. Insert the document into the collection.
@@ -624,16 +624,16 @@ Documents and update operands supplied by the caller are **deep-copied** on ever
 
 **Where copying happens:**
 
-| Path                                    | Copied value                                              |
-| --------------------------------------- | --------------------------------------------------------- |
-| `insert()` / `insertMany()` / upsert     | The whole document, including all nested objects and arrays |
-| `update()` with `$set`                   | Each assigned value                                        |
-| `update()` with `$push` / `$addToSet`    | Each value appended to the target array                     |
+| Path                                  | Copied value                                                |
+| ------------------------------------- | ----------------------------------------------------------- |
+| `insert()` / `insertMany()` / upsert  | The whole document, including all nested objects and arrays |
+| `update()` with `$set`                | Each assigned value                                         |
+| `update()` with `$push` / `$addToSet` | Each value appended to the target array                     |
 
 `$unset`, `$inc`, `$rename`, and `$pull` never place a caller-supplied object into the document — their operands are read-only (a field path, a finite number, or a deep-equality comparison value) — so no copy is made.
 
-**Why this is required:** frostpillar-db always constructs the underlying `Datastore` with `skipPayloadValidation: true` (see [Spec 01 §1.1](./01-database-and-collection.md)), which also disables the storage engine's defensive copy of the payload. The object handed to the datastore therefore *becomes* the stored record. Without isolation at the collection level, a caller mutating an inserted object after the fact would silently rewrite stored data, and injecting a cycle into it would make later reads throw `RangeError` from stack overflow instead of a clean error. See [ADR-025](../adr/025-write-path-input-isolation.md).
+**Why this is required:** frostpillar-db always constructs the underlying `Datastore` with `skipPayloadValidation: true` (see [Spec 01 §1.1](./01-database-and-collection.md)), which also disables the storage engine's defensive copy of the payload. The object handed to the datastore therefore _becomes_ the stored record. Without isolation at the collection level, a caller mutating an inserted object after the fact would silently rewrite stored data, and injecting a cycle into it would make later reads throw `RangeError` from stack overflow instead of a clean error. See [ADR-025](../adr/025-write-path-input-isolation.md).
 
 **Order:** the copy is taken **after** validation, so the validated graph and the copied graph are the same one and cannot diverge (a TOCTOU-style bypass). Because validation caps nesting at `maxDepth` on every path — including `skipPayloadValidation` mode — the recursive copy is bounded and cannot overflow the stack.
 
-**Not covered:** documents *returned* from reads (`find()`, `findOne()`, `watch()` events) are not copied; treat them as read-only snapshots.
+**Not covered:** documents _returned_ from reads (`find()`, `findOne()`, `watch()` events) are not copied; treat them as read-only snapshots.

@@ -2,7 +2,12 @@ import type { Filter } from '../types.js';
 import { ValidationError } from '../errors.js';
 import { setValueByPath } from './documentPath.js';
 import { assertInclusionOperand } from './filterOperatorEvaluators.js';
-import { isObjectRecord, isPlainObject, isReservedKey } from './objectUtils.js';
+import {
+  cloneDocument,
+  isObjectRecord,
+  isPlainObject,
+  isReservedKey,
+} from './objectUtils.js';
 
 const MAX_ID_LENGTH = 1024;
 
@@ -141,6 +146,13 @@ export const extractIdInclusion = (filter: Filter): string[] | null => {
  * - Top-level keys with `{ $eq: value }`: included
  * - Keys starting with `$` (logical operators like $and, $or): skipped
  * - Keys with non-$eq operator objects (e.g. $gt, $in): skipped
+ *
+ * An object-valued condition (`{ profile: { tier: 'pro' } }`) is an implicit
+ * equality too — the evaluator matches it by deep equality — so it is extracted
+ * like any other. Skipping it produced an upserted document that did not satisfy
+ * the filter that created it, so the next identical upsert inserted again.
+ * Values are deep-cloned: the extracted document is handed to `insert()`, and
+ * without the clone the caller's filter object would be aliased by stored data.
  */
 export const extractEqualityFields = (
   filter: Filter,
@@ -157,27 +169,47 @@ export const extractEqualityFields = (
       continue;
     }
 
-    if (!isObjectRecord(value)) {
-      if (key.includes('.')) {
-        setValueByPath(result, key, value, pathCache);
-      } else {
-        result[key] = value;
-      }
+    const equalityValue = extractEqualityValue(value);
+    if (equalityValue === NOT_EQUALITY) {
       continue;
     }
 
-    const keys = Object.keys(value);
-    if (keys.length === 1 && keys[0] === '$eq') {
-      if (key.includes('.')) {
-        setValueByPath(result, key, value.$eq, pathCache);
-      } else {
-        result[key] = value.$eq;
-      }
-      continue;
+    const cloned = cloneDocument(equalityValue);
+    if (key.includes('.')) {
+      setValueByPath(result, key, cloned, pathCache);
+    } else {
+      result[key] = cloned;
     }
   }
 
   return result;
+};
+
+/** Sentinel: the condition is not an equality, so it contributes no field. */
+const NOT_EQUALITY = Symbol('notEquality');
+
+/**
+ * Resolves a field condition to the value it asserts equality with, or
+ * `NOT_EQUALITY` when it asserts something else. A condition object counts as an
+ * operator expression only when every own key is `$`-prefixed — the same rule
+ * `isOperatorExpression` applies in the evaluator, so the two agree on which
+ * conditions are plain object equality. Mixed operator/regular keys are rejected
+ * by filter validation before an upsert can reach this code.
+ */
+const extractEqualityValue = (value: unknown): unknown => {
+  if (!isObjectRecord(value)) {
+    return value;
+  }
+
+  const keys = Object.keys(value);
+  const operatorCount = keys.filter((key) => key.startsWith('$')).length;
+  if (operatorCount === 0) {
+    return value;
+  }
+  if (keys.length === 1 && keys[0] === '$eq') {
+    return value.$eq;
+  }
+  return NOT_EQUALITY;
 };
 
 const isRangeBound = (value: unknown): value is string | number =>
