@@ -6,10 +6,16 @@ import { isObjectRecord, isPlainObject, isReservedKey } from './objectUtils.js';
 
 const MAX_ID_LENGTH = 1024;
 
+/** DEL. A C0 control character despite sitting above the `< 0x20` range. */
+const DEL_CHAR_CODE = 0x7f;
+
 const containsControlCharacters = (value: string): boolean => {
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
     if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return true;
+    }
+    if (code === DEL_CHAR_CODE) {
       return true;
     }
   }

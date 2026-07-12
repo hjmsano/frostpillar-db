@@ -17,7 +17,10 @@ import {
   extractIdInclusion,
   extractIdRange,
 } from '../../src/internal/filterUtils.js';
-import { sanitizeForLog } from '../../src/internal/collectionUtils.js';
+import {
+  assertDocumentId,
+  sanitizeForLog,
+} from '../../src/internal/collectionUtils.js';
 import { MAX_GROUP_DOCUMENTS } from '../../src/internal/limits.js';
 import { getCachedRegex } from '../../src/internal/filterCache.js';
 
@@ -57,6 +60,17 @@ void test('extractIdEquality rejects _id with null byte', () => {
     () => extractIdEquality({ _id: 'test\0evil' }),
     ValidationError,
   );
+});
+
+void test('extractIdEquality rejects _id with DEL (\\x7f)', () => {
+  assert.throws(
+    () => extractIdEquality({ _id: 'test\x7fevil' }),
+    ValidationError,
+  );
+});
+
+void test('assertDocumentId rejects a stored _id with DEL (\\x7f)', () => {
+  assert.throws(() => assertDocumentId('test\x7fevil'), ValidationError);
 });
 
 void test('extractIdEquality accepts valid _id', () => {
