@@ -187,10 +187,13 @@ Returns `true` if a document with the given `_id` exists **and has not expired**
 
 Returns an array of all **non-expired** document IDs in the collection.
 
+The result has **one entry per document**, not per storage key: under `duplicateKeys: 'allow'`, a collection holding three documents with `_id: 'a'` returns `'a'` three times, so `ids().length === count()` and the result stays consistent with `find()`.
+
 **Behavior:**
 
-- If the collection has no TTL configured, uses `Datastore.keys()` for a direct key scan without loading document payloads (fast path). The returned order is determined by the storage engine's key ordering.
-- If the collection has a TTL configured, loads all records via `Datastore.getAll()`, filters out expired documents using `isDocumentExpired`, and returns the `_id` field of each non-expired document. This ensures consistency with `find()`, `findOne()`, and `count()`.
+- If the collection has no TTL configured, no custom key definition, and `duplicateKeys` is not `'allow'`, uses `Datastore.keys()` for a direct key scan without loading document payloads (fast path). The returned order is determined by the storage engine's key ordering.
+- Otherwise (TTL configured, a custom key definition, or `duplicateKeys: 'allow'`), loads all records via `Datastore.getAll()`, filters out expired documents using `isDocumentExpired`, and returns the `_id` field of each non-expired document. This ensures consistency with `find()`, `findOne()`, and `count()`.
+- The `Datastore.keys()` fast path is disabled under `duplicateKeys: 'allow'` because it yields each storage key once, however many documents share it — the same reason it is disabled under a custom key definition (which reports normalized keys rather than stored `_id` strings; see Spec 01 §5).
 
 ## 8. Filter Operators
 

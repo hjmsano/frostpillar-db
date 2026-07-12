@@ -500,7 +500,7 @@ const allIds = await users.ids();
 ```
 
 - `exists(id)` uses `Datastore.has(key)` as a fast path and returns `false` for expired documents on TTL collections.
-- `ids()` uses `Datastore.keys()` as a fast path; on TTL collections it filters out expired documents so its output stays consistent with `find()` and `count()`.
+- `ids()` uses `Datastore.keys()` as a fast path; on TTL collections it filters out expired documents so its output stays consistent with `find()` and `count()`. The fast path is skipped on collections with a TTL, a custom `key` definition, or `duplicateKeys: 'allow'` — `keys()` reports each storage key once, while `ids()` reports one entry per document, so `ids().length === count()` holds even when several documents share an `_id`.
 
 ### Query Filters
 

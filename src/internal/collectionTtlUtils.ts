@@ -61,11 +61,17 @@ export const idsWithTtl = async (
   ttl: number | undefined,
   getAllRecords: () => Promise<KeyedRecord<unknown>[]>,
   hasCustomKey = false,
+  duplicateKeys: CollectionDuplicateKeyPolicy = 'reject',
 ): Promise<string[]> => {
   // `datastore.keys()` yields normalized storage keys, which are only `_id`
   // strings under the default key definition; otherwise read `_id` back off
   // each payload to honour the `Promise<string[]>` contract (ADR-027).
-  if (ttl === undefined && !hasCustomKey) {
+  //
+  // It also yields each key once, however many records share it, so the fast
+  // path is disabled under `duplicateKeys: 'allow'` as well: `ids()` reports
+  // one entry per document (`ids().length === count()`), and the TTL path
+  // below — which reads `_id` per record — already did.
+  if (ttl === undefined && !hasCustomKey && duplicateKeys !== 'allow') {
     return (await datastore.keys()) as string[];
   }
   const records = await getAllRecords();

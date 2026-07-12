@@ -354,6 +354,7 @@ export class Collection<
       this.ttl,
       () => this.context.datastore.getAll(),
       this.context.hasCustomKey,
+      this.duplicateKeys,
     );
   }
 
