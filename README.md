@@ -469,6 +469,20 @@ const active = await users.count({ status: 'active' });
 
 > **Note:** On collections with `duplicateKeys: 'allow'`, `count()` returns the **total record count** including duplicates — not the number of unique `_id` values.
 
+#### Document Ownership on Writes
+
+Documents passed to `insert()` / `insertMany()` and values written by `$set` / `$push` / `$addToSet` are **deep-copied** into storage. Once the write resolves, mutating your original object never changes the stored record:
+
+```ts
+const input = { name: 'Alice', tags: ['a'] };
+const id = await users.insert(input);
+
+input.tags.push('b'); // does not touch the stored document
+const stored = await users.findOne({ _id: id }); // tags: ['a']
+```
+
+The reverse does not hold: documents **returned** from `find()`, `findOne()`, and `watch()` events are references to stored records, not copies. Treat them as read-only snapshots — copy before mutating.
+
 ### Identity Queries
 
 When you only need to check existence or enumerate document IDs, use the lightweight `exists()` and `ids()` helpers instead of `find()` / `findOne()`:

@@ -30,7 +30,10 @@ const applySet = (
     if (resolved !== PATH_NOT_FOUND && deepEqual(resolved, value)) {
       continue;
     }
-    setValueByPath(target, path, value, pathCache);
+    // Copy per document, not per update() call: one operand may be written into
+    // several matched documents, and the stored records must not alias each
+    // other or the caller's object (ADR-025).
+    setValueByPath(target, path, cloneDocument(value), pathCache);
     changed = true;
   }
   return changed;

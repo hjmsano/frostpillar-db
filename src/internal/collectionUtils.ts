@@ -11,7 +11,7 @@ import type {
   FrostpillarStoredDocument,
   InsertDocument,
 } from '../types.js';
-import { hasOwn, isObjectRecord } from './objectUtils.js';
+import { cloneDocument, hasOwn, isObjectRecord } from './objectUtils.js';
 import { validateIdString } from './filterUtils.js';
 
 export const assertDocumentId = (value: unknown): string => {
@@ -33,6 +33,14 @@ export const toStoredDocument = <TDocument extends FrostpillarDocument>(
   return payload as FrostpillarStoredDocument<TDocument>;
 };
 
+/**
+ * Deep-copies the caller's document into the payload that will be stored
+ * (ADR-025). A shallow spread would leave every nested object and array owned
+ * by the caller: because the datastore runs with `skipPayloadValidation: true`
+ * it does not copy the payload either, so the caller could keep mutating the
+ * stored record after the write returned. Called only after validation, so the
+ * graph is acyclic and depth-capped and the recursion is bounded.
+ */
 export const toInsertPayload = <TDocument extends FrostpillarDocument>(
   document: InsertDocument<TDocument>,
   id: string,
@@ -41,7 +49,9 @@ export const toInsertPayload = <TDocument extends FrostpillarDocument>(
     throw new ValidationError('Document must be an object.');
   }
 
-  return { ...document, _id: id } as FrostpillarStoredDocument<TDocument>;
+  const payload = cloneDocument(document as Record<string, unknown>);
+  payload._id = id;
+  return payload as FrostpillarStoredDocument<TDocument>;
 };
 
 /**

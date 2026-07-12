@@ -18,7 +18,7 @@ Inserts a single document into the collection.
 1. If `doc._id` is provided, use it as the document ID. Otherwise, generate one via `crypto.randomUUID()`.
 2. Validate that `_id` is a non-empty string of at most 1024 characters with no control characters (codepoints `< 0x20` other than tab/newline/carriage-return, or `0x7f`). Otherwise throw `ValidationError`.
 3. Construct the storage key: `{_id}`. (Each collection has its own dedicated `Datastore` per [ADR-012](../adr/012-per-collection-datastore-isolation.md), so a collection name prefix is not needed.)
-4. Clone the document and ensure `_id` is included in the payload.
+4. **Deep-copy** the document and ensure `_id` is included in the payload (see §12).
 
 **Policy-specific behavior:**
 
@@ -92,7 +92,7 @@ interface UpdateResult {
 **Behavior:**
 
 1. Resolve matching documents via `getRecordsByFilter` — this uses the same `_id` fast paths (`getFirst`, `getMany`, `getRange`) documented in §2, falling back to `getAll()` for non-`_id` filters.
-2. For each matching document, apply the update operations to produce a new payload.
+2. For each matching document, apply the update operations to produce a new payload. Values written by `$set`, `$push`, and `$addToSet` are **deep-copied** before they enter the payload (see §12).
 3. **Payload validation:** Validate the resulting document against the same payload limits enforced on `insert` (see Spec 01 §1.2). If the document exceeds any limit (e.g., `maxTotalBytes`, `maxDepth`, `maxStringBytes`), throw `ValidationError` immediately. When `skipPayloadValidation` is `true`, only security checks (reserved keys, circular references) are applied.
 4. **No-op detection:** If the resulting payload is identical to the original document (deep equality on every touched field), the document is considered unmodified — `replaceById` is **not** called, no `'update'` change event is emitted, and `modifiedCount` is **not** incremented. Examples: `$set` to the same value, `$inc` by `0` on an existing field, `$addToSet` of an already-present value.
 5. Persist each **actually modified** document atomically via `Datastore.replaceById(entryId, updatedPayload)`. The storage engine replaces the payload in-place, preserving the key and entry ID.
@@ -589,3 +589,23 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 - If the matched count exceeds `maxMatchedDocuments`, a `ValidationError` is thrown immediately with a message directing the caller to use `limit()`.
 - For `find()` queries: when a `limit(n)` is specified without a `sort`, the effective cap is `max(n, maxMatchedDocuments)`. Because an explicit limit already bounds how many documents are buffered, a limit larger than the cap returns normally instead of throwing. The scanner still stops collecting after `n` documents. The strict `maxMatchedDocuments` cap applies to unbounded scans and to queries with a `sort` (a sort must collect all matching documents before ordering, so the limit hint is not applied at scan time).
 - `count()` is **not** affected by this cap because it does not buffer documents (it uses `Datastore.count()` or iterates without materialising the result set).
+
+## 12. Write-Path Input Isolation
+
+Documents and update operands supplied by the caller are **deep-copied** on every write path. Once a write returns, the caller's object graph and the stored record share no references, so subsequent mutation of the caller's objects cannot alter stored data.
+
+**Where copying happens:**
+
+| Path                                    | Copied value                                              |
+| --------------------------------------- | --------------------------------------------------------- |
+| `insert()` / `insertMany()` / upsert     | The whole document, including all nested objects and arrays |
+| `update()` with `$set`                   | Each assigned value                                        |
+| `update()` with `$push` / `$addToSet`    | Each value appended to the target array                     |
+
+`$unset`, `$inc`, `$rename`, and `$pull` never place a caller-supplied object into the document — their operands are read-only (a field path, a finite number, or a deep-equality comparison value) — so no copy is made.
+
+**Why this is required:** frostpillar-db always constructs the underlying `Datastore` with `skipPayloadValidation: true` (see [Spec 01 §1.1](./01-database-and-collection.md)), which also disables the storage engine's defensive copy of the payload. The object handed to the datastore therefore *becomes* the stored record. Without isolation at the collection level, a caller mutating an inserted object after the fact would silently rewrite stored data, and injecting a cycle into it would make later reads throw `RangeError` from stack overflow instead of a clean error. See [ADR-025](../adr/025-write-path-input-isolation.md).
+
+**Order:** the copy is taken **after** validation, so the validated graph and the copied graph are the same one and cannot diverge (a TOCTOU-style bypass). Because validation caps nesting at `maxDepth` on every path — including `skipPayloadValidation` mode — the recursive copy is bounded and cannot overflow the stack.
+
+**Not covered:** documents *returned* from reads (`find()`, `findOne()`, `watch()` events) are not copied; treat them as read-only snapshots.

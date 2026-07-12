@@ -469,6 +469,20 @@ const active = await users.count({ status: 'active' });
 
 > **注意:** `duplicateKeys: 'allow'` のコレクションでは、`count()` は重複キーを含む**総レコード数**を返します。ユニークな `_id` の数ではありません。
 
+#### 書き込み時のドキュメント所有権
+
+`insert()` / `insertMany()` に渡したドキュメント、および `$set` / `$push` / `$addToSet` で書き込む値は、ストレージへ**ディープコピー**されます。書き込み完了後に元のオブジェクトを変更しても、保存済みレコードは変化しません:
+
+```ts
+const input = { name: 'Alice', tags: ['a'] };
+const id = await users.insert(input);
+
+input.tags.push('b'); // 保存済みドキュメントには影響しない
+const stored = await users.findOne({ _id: id }); // tags: ['a']
+```
+
+逆方向は保証されません。`find()` / `findOne()` および `watch()` イベントが**返す**ドキュメントはコピーではなく保存済みレコードへの参照です。読み取り専用のスナップショットとして扱い、変更する場合はコピーしてください。
+
 ### ID クエリ
 
 ドキュメントの存在確認や ID 一覧取得だけが目的の場合、`find()` / `findOne()` よりも軽量な `exists()` / `ids()` を使用できます:

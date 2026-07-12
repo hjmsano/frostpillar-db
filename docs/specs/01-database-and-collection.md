@@ -107,7 +107,7 @@ const db = new Database({
 
 **Depth applies to both objects and arrays:** `maxDepth` counts each container (plain object or array) as one nesting level. For example, `{ a: [1] }` puts the array at depth 2 (same as `{ a: { b: 1 } }` puts the nested object). This consistent counting prevents deeply nested array structures from bypassing the depth cap.
 
-**`cloneDocument` safety note:** The internal `cloneDocument` helper is recursive but is only ever called on payloads that have already passed validation. Because validation enforces `maxDepth` on all code paths (including `skipPayloadValidation` mode), stored documents cannot exceed `maxDepth`, keeping clone and deep-equal operations safe without a separate depth counter in the hot path.
+**`cloneDocument` safety note:** The internal `cloneDocument` helper is recursive but is only ever called on payloads that have already passed validation. Because validation enforces `maxDepth` on all code paths (including `skipPayloadValidation` mode), stored documents cannot exceed `maxDepth`, keeping clone and deep-equal operations safe without a separate depth counter in the hot path. This ordering also holds for the write-path deep copy that isolates stored records from caller-owned objects (see [Spec 02 §12](./02-crud-and-query.md#12-write-path-input-isolation) and [ADR-025](../adr/025-write-path-input-isolation.md)).
 
 #### Supported Value Types
 
