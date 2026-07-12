@@ -8,6 +8,7 @@ import {
 } from '../../src/internal/aggregationUtils.js';
 import {
   MAX_FIELD_PATH_DEPTH,
+  MAX_GROUP_ACCUMULATORS,
   MAX_GROUP_DOCUMENTS,
 } from '../../src/internal/limits.js';
 import type {
@@ -1872,4 +1873,81 @@ void test('computeGroupBy rejects a blank accumulator output name', () => {
       computeGroupBy(docs, 'category', { '  ': { $count: true } }, pathCache),
     ValidationError,
   );
+});
+
+// --- accumulator budget and per-group memoization ---
+
+void test('computeGroupBy rejects more than MAX_GROUP_ACCUMULATORS accumulators', () => {
+  const accumulators: GroupAccumulators = {};
+  for (let i = 0; i <= MAX_GROUP_ACCUMULATORS; i += 1) {
+    accumulators[`a${String(i)}`] = { $sum: 'score' };
+  }
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [doc('1', { category: 'a', score: 1 })],
+        'category',
+        accumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy accepts exactly MAX_GROUP_ACCUMULATORS accumulators', () => {
+  const accumulators: GroupAccumulators = {};
+  for (let i = 0; i < MAX_GROUP_ACCUMULATORS; i += 1) {
+    accumulators[`a${String(i)}`] = { $sum: 'score' };
+  }
+  const result = computeGroupBy(
+    [doc('1', { category: 'a', score: 2 })],
+    'category',
+    accumulators,
+    pathCache,
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].a0, 2);
+  assert.equal(result[0][`a${String(MAX_GROUP_ACCUMULATORS - 1)}`], 2);
+});
+
+void test('computeGroupBy shares one field scan across accumulators reading the same path', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 10 }),
+    doc('2', { category: 'a', score: 20 }),
+    doc('3', { category: 'a', score: 30 }),
+    doc('4', { category: 'b', score: 5 }),
+  ];
+
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      total: { $sum: 'score' },
+      average: { $avg: 'score' },
+      p50: { $percentile: { field: 'score', p: 0.5 } },
+      p100: { $percentile: { field: 'score', p: 1 } },
+      middle: { $median: 'score' },
+      smallest: { $min: 'score' },
+    },
+    pathCache,
+  );
+
+  assert.deepEqual(result[0], {
+    _key: 'a',
+    total: 60,
+    average: 20,
+    p50: 20,
+    p100: 30,
+    middle: 20,
+    smallest: 10,
+  });
+  assert.deepEqual(result[1], {
+    _key: 'b',
+    total: 5,
+    average: 5,
+    p50: 5,
+    p100: 5,
+    middle: 5,
+    smallest: 5,
+  });
 });

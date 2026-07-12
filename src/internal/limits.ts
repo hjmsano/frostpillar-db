@@ -50,6 +50,16 @@ export const MAX_GROUP_COUNT = 100_000;
 /** Maximum number of documents in a single groupBy group. */
 export const MAX_GROUP_DOCUMENTS = 100_000;
 
+/**
+ * Maximum number of accumulators in a single groupBy operation.
+ *
+ * Every accumulator rescans each group's documents, so the work of one call is
+ * O(groups x group size x accumulators). Without a cap, an accumulator map with
+ * thousands of entries turns a scan already bounded by `maxMatchedDocuments`
+ * into an unbounded one.
+ */
+export const MAX_GROUP_ACCUMULATORS = 32;
+
 /** Maximum number of distinct values returned by distinct(). */
 export const MAX_DISTINCT_COUNT = 100_000;
 

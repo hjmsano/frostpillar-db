@@ -644,8 +644,12 @@ const max = await users.find({ dept: 'eng' }).max('salary');
 #### パーセンタイルと中央値
 
 ```ts
-const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
+const p95 = await requests
+  .find({ route: '/api' })
+  .percentile('latencyMs', 0.95);
+const medianLatency = await requests
+  .find({ route: '/api' })
+  .median('latencyMs');
 ```
 
 `p` は `[0, 1]` の範囲の割合です（`0.95` が 95 パーセンタイル）。0–100 のパーセントスケールではありません。パーセンタイルは最も近いランク間の線形補間（`PERCENTILE_CONT` — SQL、numpy、pandas と同じ定義）で計算されます: `percentile(f, 0)` は `min(f)` と等しく、`percentile(f, 1)` は `max(f)` と等しく、要素数が偶数の場合の中央値は中央 2 値の平均です。
@@ -656,9 +660,13 @@ const medianLatency = await requests.find({ route: '/api' }).median('latencyMs')
 
 ```ts
 const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
-const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const jitterSamp = await requests
+  .find({ route: '/api' })
+  .stdDevSamp('latencyMs');
 const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
-const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+const varSamp = await requests
+  .find({ route: '/api' })
+  .varianceSamp('latencyMs');
 ```
 
 `stdDevPop`/`variancePop` は `n` で除算します（対象データが母集団そのものである場合に使用）。`stdDevSamp`/`varianceSamp` は `n - 1` で除算します（ベッセルの補正 — 標本から母集団の分散を推定する不偏推定量）。いずれもウェルフォードのアルゴリズムで1回のスキャンで計算され、素朴な `Σx² − (Σx)²/n` の公式と異なり、大きな値で分散が小さいデータでも数値的に安定しています。
@@ -679,7 +687,9 @@ const departments = await users.find().distinct('dept');
 #### Count Distinct
 
 ```ts
-const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+const uniqueCities = await users
+  .find({ status: 'active' })
+  .countDistinct('address.city');
 // 2
 ```
 
@@ -740,9 +750,12 @@ const result = await requests.find({}).groupBy('route', {
 `$first: 'fieldPath'` / `$last: 'fieldPath'`（[ADR-021](docs/adr/021-first-last-accumulators.md)）は、集計の入力順序（ADR-020）——チェーン上で `.sort()` が指定されていればその順序、なければストレージ順——において、グループの先頭（または末尾）のドキュメントにおける `fieldPath` の値を返します。これは**「位置を選んでから読む」**方式です: 先頭/末尾のドキュメントを先に選択し、そのドキュメントからフィールドを読み取ります——「フィールドを持つ最初/最後のドキュメント」ではありません。選択されたドキュメントがそのフィールドを持たない場合、結果は `null` になります。他のアキュムレータと異なり、`$first`/`$last` は**任意の型**（文字列、数値、真偽値、`null`、オブジェクト、配列）の値を返します。オブジェクト/配列の値は返却前に防御的にクローンされます。典型的な用途は「グループごとの最新値」です:
 
 ```ts
-const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
-  latestStatus: { $first: 'status' },
-});
+const result = await events
+  .find({})
+  .sort({ updatedAt: -1 })
+  .groupBy('userId', {
+    latestStatus: { $first: 'status' },
+  });
 // [{ _key: 'u1', latestStatus: 'shipped' }, ...]
 ```
 
@@ -764,8 +777,8 @@ const result = await users.find().groupBy('dept', {
 
 ```ts
 const result = await posts.find().groupBy('author', {
-  allTags: { $push: 'tag' },       // すべてのタグを順序どおり(重複含む)
-  cities: { $addToSet: 'city' },   // 一意な都市の集合
+  allTags: { $push: 'tag' }, // すべてのタグを順序どおり(重複含む)
+  cities: { $addToSet: 'city' }, // 一意な都市の集合
 });
 // [{ _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] }]
 ```
@@ -997,24 +1010,25 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 
 ペイロード制限に加えて、frostpillar-db はフィルタ・更新演算子・集約出力に固定の運用上の制限を設けています。これらは構成不可で、病的な入力や暴走するリソース消費を防ぐためのものです。
 
-| 制限                        | 値      | 範囲                                                                        |
-| --------------------------- | ------- | --------------------------------------------------------------------------- |
-| フィールドパス最大深度      | 32      | 1 つのフィールドパスに含まれるドット区切りのセグメント数（例 `a.b.c` は 3） |
-| フィールドパス最大文字数    | 512     | ドット記法のフィールドパス文字列長                                          |
-| フィルタ最大ネスト深度      | 32      | `$and` / `$or` と、ネストされた `$not` 式のネスト階層                       |
-| 論理演算子オペランド最大数  | 1,000   | 1 つの `$and` / `$or` オペランド配列の要素数                                |
-| オペランド配列最大サイズ    | 10,000  | `$in` / `$nin` / `$all` のオペランド配列要素数                              |
-| `$regex` パターン最大長     | 1,024   | `$regex` 文字列パターンの文字数                                             |
-| `$regex` 量指定子最大数     | 20      | `$regex` パターン内の量指定子（`*`、`+`、`?`、`{n,m}`）の数                 |
-| `$regex` 省略可能量指定子最大数 | 8   | `$regex` パターン内の省略可能な量指定子（`?`、`*`、`{0,m}`）の数            |
-| `$regex` 選択グループ最大数 | 4       | `$regex` パターン内の選択グループ（`(a\|b)`）の数                           |
-| `$regex` テスト対象最大長   | 8,192   | `$regex` で評価されるフィールド値の文字数                                   |
-| ドキュメント配列最大長      | 100,000 | `$push` / `$addToSet` 適用後の 1 ドキュメント内配列の要素数                 |
-| `groupBy` グループ最大数    | 100,000 | 1 回の `groupBy()` が生成する一意グループキー数                             |
-| `groupBy` グループ内最大数  | 100,000 | 1 つの `groupBy()` グループに集約されるドキュメント数                       |
-| `distinct` 値最大数         | 100,000 | 1 回の `distinct()` が返す一意値の数                                        |
-| `countDistinct` 値最大数    | 100,000 | 1 回の `countDistinct()`、または 1 つの `$countDistinct` グループがカウントする一意値の数 |
-| `$addToSet` 値最大数        | 100,000 | 1 つの `$addToSet` グループが収集する一意値の数(`$countDistinct` と同じ上限)             |
+| 制限                            | 値      | 範囲                                                                                      |
+| ------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| フィールドパス最大深度          | 32      | 1 つのフィールドパスに含まれるドット区切りのセグメント数（例 `a.b.c` は 3）               |
+| フィールドパス最大文字数        | 512     | ドット記法のフィールドパス文字列長                                                        |
+| フィルタ最大ネスト深度          | 32      | `$and` / `$or` と、ネストされた `$not` 式のネスト階層                                     |
+| 論理演算子オペランド最大数      | 1,000   | 1 つの `$and` / `$or` オペランド配列の要素数                                              |
+| オペランド配列最大サイズ        | 10,000  | `$in` / `$nin` / `$all` のオペランド配列要素数                                            |
+| `$regex` パターン最大長         | 1,024   | `$regex` 文字列パターンの文字数                                                           |
+| `$regex` 量指定子最大数         | 20      | `$regex` パターン内の量指定子（`*`、`+`、`?`、`{n,m}`）の数                               |
+| `$regex` 省略可能量指定子最大数 | 8       | `$regex` パターン内の省略可能な量指定子（`?`、`*`、`{0,m}`）の数                          |
+| `$regex` 選択グループ最大数     | 4       | `$regex` パターン内の選択グループ（`(a\|b)`）の数                                         |
+| `$regex` テスト対象最大長       | 8,192   | `$regex` で評価されるフィールド値の文字数                                                 |
+| ドキュメント配列最大長          | 100,000 | `$push` / `$addToSet` 適用後の 1 ドキュメント内配列の要素数                               |
+| `groupBy` アキュムレータ最大数  | 32      | 1 回の `groupBy()` に指定できるアキュムレータ数                                           |
+| `groupBy` グループ最大数        | 100,000 | 1 回の `groupBy()` が生成する一意グループキー数                                           |
+| `groupBy` グループ内最大数      | 100,000 | 1 つの `groupBy()` グループに集約されるドキュメント数                                     |
+| `distinct` 値最大数             | 100,000 | 1 回の `distinct()` が返す一意値の数                                                      |
+| `countDistinct` 値最大数        | 100,000 | 1 回の `countDistinct()`、または 1 つの `$countDistinct` グループがカウントする一意値の数 |
+| `$addToSet` 値最大数            | 100,000 | 1 つの `$addToSet` グループが収集する一意値の数(`$countDistinct` と同じ上限)              |
 
 `$regex` パターンはさらに、破滅的バックトラッキングにつながる形状が事前スクリーニングされ、コンパイル前に `ValidationError` で拒否されます。上記制限を超えた場合は実行時に `ValidationError` がスローされます。このスクリーニングは 3 つの仕組みで構成されます:
 
@@ -1139,27 +1153,27 @@ try {
 
 ### ResultChain
 
-| メソッド                        | 戻り値                        | 説明                                                                   |
-| ------------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
-| `.sort(spec)`                   | `ResultChain`                 | ソート順の設定（`SortSpec` オブジェクトまたは `SortSpecEntries` 配列） |
-| `.limit(n)`                     | `ResultChain`                 | 結果数の制限                                                           |
-| `.skip(n)`                      | `ResultChain`                 | 結果のスキップ                                                         |
-| `.project(spec)`                | `ResultChain`                 | フィールド選択                                                         |
-| `.toArray()`                    | `Promise<Document[]>`         | クエリ実行、ドキュメント返却                                           |
-| `.cursor()`                     | `AsyncGenerator<Document>`    | 結果セットの非同期イテレータ                                           |
-| `.count()`                      | `Promise<number>`             | マッチするドキュメント数                                               |
-| `.sum(field)`                   | `Promise<number>`             | 数値フィールドの合計                                                   |
-| `.avg(field)`                   | `Promise<number \| null>`     | 数値フィールドの平均                                                   |
-| `.min(field)`                   | `Promise<number \| null>`     | 数値の最小値                                                           |
-| `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                           |
-| `.percentile(field, p)`         | `Promise<number \| null>`     | `p` パーセンタイル（`p` は `[0, 1]` の割合）                            |
-| `.median(field)`                | `Promise<number \| null>`     | 中央値（`percentile(field, 0.5)` と等価）                              |
-| `.stdDevPop(field)`             | `Promise<number \| null>`     | 母標準偏差（`n=0`→`null`、`n=1`→`0`）                                  |
-| `.stdDevSamp(field)`            | `Promise<number \| null>`     | 標本標準偏差（`n<2`→`null`）                                           |
-| `.variancePop(field)`           | `Promise<number \| null>`     | 母分散（`n=0`→`null`、`n=1`→`0`）                                      |
-| `.varianceSamp(field)`          | `Promise<number \| null>`     | 標本分散（`n<2`→`null`）                                               |
-| `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                 |
-| `.countDistinct(field)`         | `Promise<number>`             | フィールドのユニーク値の数（`=== distinct(field).length`。空の場合は `0`） |
+| メソッド                        | 戻り値                        | 説明                                                                                               |
+| ------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `.sort(spec)`                   | `ResultChain`                 | ソート順の設定（`SortSpec` オブジェクトまたは `SortSpecEntries` 配列）                             |
+| `.limit(n)`                     | `ResultChain`                 | 結果数の制限                                                                                       |
+| `.skip(n)`                      | `ResultChain`                 | 結果のスキップ                                                                                     |
+| `.project(spec)`                | `ResultChain`                 | フィールド選択                                                                                     |
+| `.toArray()`                    | `Promise<Document[]>`         | クエリ実行、ドキュメント返却                                                                       |
+| `.cursor()`                     | `AsyncGenerator<Document>`    | 結果セットの非同期イテレータ                                                                       |
+| `.count()`                      | `Promise<number>`             | マッチするドキュメント数                                                                           |
+| `.sum(field)`                   | `Promise<number>`             | 数値フィールドの合計                                                                               |
+| `.avg(field)`                   | `Promise<number \| null>`     | 数値フィールドの平均                                                                               |
+| `.min(field)`                   | `Promise<number \| null>`     | 数値の最小値                                                                                       |
+| `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                                                       |
+| `.percentile(field, p)`         | `Promise<number \| null>`     | `p` パーセンタイル（`p` は `[0, 1]` の割合）                                                       |
+| `.median(field)`                | `Promise<number \| null>`     | 中央値（`percentile(field, 0.5)` と等価）                                                          |
+| `.stdDevPop(field)`             | `Promise<number \| null>`     | 母標準偏差（`n=0`→`null`、`n=1`→`0`）                                                              |
+| `.stdDevSamp(field)`            | `Promise<number \| null>`     | 標本標準偏差（`n<2`→`null`）                                                                       |
+| `.variancePop(field)`           | `Promise<number \| null>`     | 母分散（`n=0`→`null`、`n=1`→`0`）                                                                  |
+| `.varianceSamp(field)`          | `Promise<number \| null>`     | 標本分散（`n<2`→`null`）                                                                           |
+| `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                                             |
+| `.countDistinct(field)`         | `Promise<number>`             | フィールドのユニーク値の数（`=== distinct(field).length`。空の場合は `0`）                         |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールド（`string \| string[]`）でグループ化しアキュムレータを計算。配列形式は複合 `_key` を生成 |
 
 ---

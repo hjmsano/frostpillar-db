@@ -644,8 +644,12 @@ Non-numeric values are skipped. `avg`/`min`/`max` return `null` when no numeric 
 #### Percentile and Median
 
 ```ts
-const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
+const p95 = await requests
+  .find({ route: '/api' })
+  .percentile('latencyMs', 0.95);
+const medianLatency = await requests
+  .find({ route: '/api' })
+  .median('latencyMs');
 ```
 
 `p` is a fraction in `[0, 1]` (`0.95` = 95th percentile), not the 0–100 percent scale. Percentiles are computed with linear interpolation between closest ranks (`PERCENTILE_CONT` — the same definition used by SQL, numpy, and pandas): `percentile(f, 0)` equals `min(f)`, `percentile(f, 1)` equals `max(f)`, and the median of an even-count set is the average of the two middle values.
@@ -656,12 +660,16 @@ const medianLatency = await requests.find({ route: '/api' }).median('latencyMs')
 
 ```ts
 const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
-const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const jitterSamp = await requests
+  .find({ route: '/api' })
+  .stdDevSamp('latencyMs');
 const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
-const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+const varSamp = await requests
+  .find({ route: '/api' })
+  .varianceSamp('latencyMs');
 ```
 
-`stdDevPop`/`variancePop` divide by `n` (use when the matched set *is* the whole population); `stdDevSamp`/`varianceSamp` divide by `n - 1` (Bessel's correction — the unbiased estimator of a larger population's variance from a sample). Both are computed in one pass with Welford's algorithm, which stays numerically stable even for large-magnitude, low-variance data (unlike the naive `Σx² − (Σx)²/n` formula).
+`stdDevPop`/`variancePop` divide by `n` (use when the matched set _is_ the whole population); `stdDevSamp`/`varianceSamp` divide by `n - 1` (Bessel's correction — the unbiased estimator of a larger population's variance from a sample). Both are computed in one pass with Welford's algorithm, which stays numerically stable even for large-magnitude, low-variance data (unlike the naive `Σx² − (Σx)²/n` formula).
 
 All four skip non-numeric values and return `null` when no numeric values exist. **`n = 1` nuance:** with exactly one numeric value, `stdDevPop`/`variancePop` return `0` (no dispersion from a single point), while `stdDevSamp`/`varianceSamp` return `null` (the `n - 1 = 0` divisor is undefined).
 
@@ -679,7 +687,9 @@ Object/array values are defensively cloned ([ADR-026](docs/adr/026-aggregation-r
 #### Count Distinct
 
 ```ts
-const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+const uniqueCities = await users
+  .find({ status: 'active' })
+  .countDistinct('address.city');
 // 2
 ```
 
@@ -740,9 +750,12 @@ const result = await requests.find({}).groupBy('route', {
 `$first: 'fieldPath'` / `$last: 'fieldPath'` ([ADR-021](docs/adr/021-first-last-accumulators.md)) return the value of `fieldPath` on the first (resp. last) document of the group, in aggregation input order (ADR-020) — the chain's `.sort()` order when present, otherwise storage order. This is **positional-then-read**: the first/last document is selected first, and only then is the field read from it — not "the first/last document that has the field". If the selected document lacks the field, the result is `null`. Unlike the other accumulators, `$first`/`$last` return a value of **any type** (string, number, boolean, `null`, object, array); object/array values are defensively cloned before being returned. The canonical use case is "latest value per group":
 
 ```ts
-const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
-  latestStatus: { $first: 'status' },
-});
+const result = await events
+  .find({})
+  .sort({ updatedAt: -1 })
+  .groupBy('userId', {
+    latestStatus: { $first: 'status' },
+  });
 // [{ _key: 'u1', latestStatus: 'shipped' }, ...]
 ```
 
@@ -764,8 +777,8 @@ Both return `[]` for a group with no present values.
 
 ```ts
 const result = await posts.find().groupBy('author', {
-  allTags: { $push: 'tag' },       // every tag, in order, with duplicates
-  cities: { $addToSet: 'city' },   // the set of distinct cities
+  allTags: { $push: 'tag' }, // every tag, in order, with duplicates
+  cities: { $addToSet: 'city' }, // the set of distinct cities
 });
 // [{ _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] }]
 ```
@@ -997,24 +1010,25 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 
 In addition to per-document payload limits, frostpillar-db enforces fixed operational limits on filters, update operators, and aggregation outputs. These are not configurable — they protect against pathological inputs and runaway resource use.
 
-| Limit                           | Value   | Scope                                                             |
-| ------------------------------- | ------- | ----------------------------------------------------------------- |
-| Max field path depth            | 32      | Dot-notation segments per field path (e.g. `a.b.c` = 3)           |
-| Max field path length           | 512     | Character length of a dot-notation field path                     |
-| Max filter nesting depth        | 32      | Nesting levels for `$and` / `$or` and nested `$not` expressions   |
-| Max logical operand count       | 1,000   | Elements in a single `$and` / `$or` operand array                 |
-| Max operand array size          | 10,000  | Elements in a `$in` / `$nin` / `$all` operand array               |
-| Max `$regex` pattern length     | 1,024   | Characters in a `$regex` string pattern                           |
-| Max `$regex` quantifiers        | 20      | Quantifier tokens (`*`, `+`, `?`, `{n,m}`) in a `$regex` pattern  |
-| Max `$regex` optional quantifiers | 8     | Skippable quantifier tokens (`?`, `*`, `{0,m}`) in a `$regex` pattern |
-| Max `$regex` alternation groups | 4       | Parenthesized alternation groups (`(a\|b)`) in a `$regex` pattern |
-| Max `$regex` test length        | 8,192   | Characters in a field value tested against a `$regex`             |
-| Max document array length       | 100,000 | Per-document array size after `$push` / `$addToSet`               |
-| Max `groupBy` group count       | 100,000 | Distinct group keys produced by a single `groupBy()`              |
-| Max `groupBy` docs per group    | 100,000 | Documents collected into a single `groupBy()` group               |
-| Max `distinct` value count      | 100,000 | Distinct values returned by a single `distinct()`                 |
-| Max `countDistinct` value count | 100,000 | Unique values counted by a single `countDistinct()`, or by a single `$countDistinct` group |
-| Max `$addToSet` value count     | 100,000 | Distinct values collected by a single `$addToSet` group (same cap as `$countDistinct`)     |
+| Limit                             | Value   | Scope                                                                                      |
+| --------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| Max field path depth              | 32      | Dot-notation segments per field path (e.g. `a.b.c` = 3)                                    |
+| Max field path length             | 512     | Character length of a dot-notation field path                                              |
+| Max filter nesting depth          | 32      | Nesting levels for `$and` / `$or` and nested `$not` expressions                            |
+| Max logical operand count         | 1,000   | Elements in a single `$and` / `$or` operand array                                          |
+| Max operand array size            | 10,000  | Elements in a `$in` / `$nin` / `$all` operand array                                        |
+| Max `$regex` pattern length       | 1,024   | Characters in a `$regex` string pattern                                                    |
+| Max `$regex` quantifiers          | 20      | Quantifier tokens (`*`, `+`, `?`, `{n,m}`) in a `$regex` pattern                           |
+| Max `$regex` optional quantifiers | 8       | Skippable quantifier tokens (`?`, `*`, `{0,m}`) in a `$regex` pattern                      |
+| Max `$regex` alternation groups   | 4       | Parenthesized alternation groups (`(a\|b)`) in a `$regex` pattern                          |
+| Max `$regex` test length          | 8,192   | Characters in a field value tested against a `$regex`                                      |
+| Max document array length         | 100,000 | Per-document array size after `$push` / `$addToSet`                                        |
+| Max `groupBy` accumulators        | 32      | Accumulators in a single `groupBy()` call                                                  |
+| Max `groupBy` group count         | 100,000 | Distinct group keys produced by a single `groupBy()`                                       |
+| Max `groupBy` docs per group      | 100,000 | Documents collected into a single `groupBy()` group                                        |
+| Max `distinct` value count        | 100,000 | Distinct values returned by a single `distinct()`                                          |
+| Max `countDistinct` value count   | 100,000 | Unique values counted by a single `countDistinct()`, or by a single `$countDistinct` group |
+| Max `$addToSet` value count       | 100,000 | Distinct values collected by a single `$addToSet` group (same cap as `$countDistinct`)     |
 
 `$regex` patterns are additionally screened for catastrophic-backtracking shapes and rejected with `ValidationError` before compilation. Exceeding any of the limits above throws `ValidationError` at operation time. Three mechanisms cover this:
 
@@ -1139,28 +1153,28 @@ try {
 
 ### ResultChain
 
-| Method                          | Returns                       | Description                                                   |
-| ------------------------------- | ----------------------------- | ------------------------------------------------------------- |
-| `.sort(spec)`                   | `ResultChain`                 | Set sort order (`SortSpec` object or `SortSpecEntries` array) |
-| `.limit(n)`                     | `ResultChain`                 | Limit results                                                 |
-| `.skip(n)`                      | `ResultChain`                 | Skip results                                                  |
-| `.project(spec)`                | `ResultChain`                 | Field selection                                               |
-| `.toArray()`                    | `Promise<Document[]>`         | Execute and return documents                                  |
-| `.cursor()`                     | `AsyncGenerator<Document>`    | Async iterator over the result set                            |
-| `.count()`                      | `Promise<number>`             | Count matching documents                                      |
-| `.sum(field)`                   | `Promise<number>`             | Sum of numeric field                                          |
-| `.avg(field)`                   | `Promise<number \| null>`     | Average of numeric field                                      |
-| `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                         |
-| `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                         |
-| `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                 |
-| `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                            |
-| `.stdDevPop(field)`             | `Promise<number \| null>`     | Population standard deviation (`n=0`→`null`, `n=1`→`0`)        |
-| `.stdDevSamp(field)`            | `Promise<number \| null>`     | Sample standard deviation (`n<2`→`null`)                       |
-| `.variancePop(field)`           | `Promise<number \| null>`     | Population variance (`n=0`→`null`, `n=1`→`0`)                  |
-| `.varianceSamp(field)`          | `Promise<number \| null>`     | Sample variance (`n<2`→`null`)                                 |
-| `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
+| Method                          | Returns                       | Description                                                                     |
+| ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
+| `.sort(spec)`                   | `ResultChain`                 | Set sort order (`SortSpec` object or `SortSpecEntries` array)                   |
+| `.limit(n)`                     | `ResultChain`                 | Limit results                                                                   |
+| `.skip(n)`                      | `ResultChain`                 | Skip results                                                                    |
+| `.project(spec)`                | `ResultChain`                 | Field selection                                                                 |
+| `.toArray()`                    | `Promise<Document[]>`         | Execute and return documents                                                    |
+| `.cursor()`                     | `AsyncGenerator<Document>`    | Async iterator over the result set                                              |
+| `.count()`                      | `Promise<number>`             | Count matching documents                                                        |
+| `.sum(field)`                   | `Promise<number>`             | Sum of numeric field                                                            |
+| `.avg(field)`                   | `Promise<number \| null>`     | Average of numeric field                                                        |
+| `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                                           |
+| `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                                           |
+| `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                                  |
+| `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                                             |
+| `.stdDevPop(field)`             | `Promise<number \| null>`     | Population standard deviation (`n=0`→`null`, `n=1`→`0`)                         |
+| `.stdDevSamp(field)`            | `Promise<number \| null>`     | Sample standard deviation (`n<2`→`null`)                                        |
+| `.variancePop(field)`           | `Promise<number \| null>`     | Population variance (`n=0`→`null`, `n=1`→`0`)                                   |
+| `.varianceSamp(field)`          | `Promise<number \| null>`     | Sample variance (`n<2`→`null`)                                                  |
+| `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                                       |
 | `.countDistinct(field)`         | `Promise<number>`             | Count of unique values for a field (`=== distinct(field).length`; `0` on empty) |
-| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |
+| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key`  |
 
 ---
 

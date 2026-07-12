@@ -211,7 +211,9 @@ result = v[lo] + frac * (v[lo + 1] - v[lo])   // v[lo] when frac == 0
 Properties: `percentile(f, 0) === min(f)`; `percentile(f, 1) === max(f)`; a single value is returned unchanged for every `p`; the median of an even-count set is the average of the two middle values.
 
 ```ts
-const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
+const p95 = await requests
+  .find({ route: '/api' })
+  .percentile('latencyMs', 0.95);
 ```
 
 #### `.median(field: string): Promise<number | null>`
@@ -226,7 +228,7 @@ const medianAge = await users.find({ status: 'active' }).median('age');
 
 Return the population/sample standard deviation and variance of the specified numeric field. Like the other numeric terminals, operate on the **filtered** set and are order-independent (skip/limit/projection not applied, §1.4), skip non-numeric and non-finite values via `extractNumericValues`.
 
-- **Population** (`stdDevPop`, `variancePop`) divides the sum of squared deviations from the mean by `n`. Use when the matched set *is* the whole population.
+- **Population** (`stdDevPop`, `variancePop`) divides the sum of squared deviations from the mean by `n`. Use when the matched set _is_ the whole population.
 - **Sample** (`stdDevSamp`, `varianceSamp`) divides by `n - 1` (Bessel's correction), the unbiased estimator of a larger population's variance from a sample.
 
 **Computation — Welford's single-pass algorithm:** rather than the naive `Σx² - (Σx)²/n` formula (numerically unstable for large-magnitude, low-variance data), variance is computed with Welford's online recurrence, which accumulates `count`, running `mean`, and `m2` (sum of squared deviations from the running mean) in one pass:
@@ -251,25 +253,29 @@ causing `sqrt(variance)` to return `NaN`; positive variances are unchanged.
 **Edge semantics (MongoDB-aligned):**
 
 | `n` (numeric values) | `variancePop` / `stdDevPop` | `varianceSamp` / `stdDevSamp` |
-| --------------------- | ---------------------------- | ------------------------------ |
-| `0`                    | `null`                        | `null`                          |
-| `1`                    | `0`                           | `null`                          |
-| `>= 2`                 | computed                      | computed                        |
+| -------------------- | --------------------------- | ----------------------------- |
+| `0`                  | `null`                      | `null`                        |
+| `1`                  | `0`                         | `null`                        |
+| `>= 2`               | computed                    | computed                      |
 
 `n = 0` → `null` for all four, consistent with `avg`/`min`/`max`/`median`. `n = 1` → population variance/stddev is `0` (a single point has zero dispersion from itself); sample variance/stddev is `null` because `n - 1 = 0` makes the sample estimator undefined.
 
 ```ts
 const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
-const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const jitterSamp = await requests
+  .find({ route: '/api' })
+  .stdDevSamp('latencyMs');
 const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
-const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+const varSamp = await requests
+  .find({ route: '/api' })
+  .varianceSamp('latencyMs');
 ```
 
 #### `.distinct(field: string): Promise<unknown[]>`
 
 Returns an array of unique values for the specified field across all matching documents. Supports dot notation for nested fields. Documents where the field is missing or `undefined` are skipped; `null` is a valid distinct value. Values are returned in order of first occurrence **within the aggregation input order** (§1.4): storage order, or `.sort()` order if a sort is specified on the chain. Deep equality is used for objects/arrays; strict equality for primitives.
 
-**Isolation ([ADR-026](../adr/026-aggregation-result-isolation.md)):** object/array values are defensively cloned via `cloneAccumulatorValue` before entering the result array, since the scanned documents are references to stored documents; primitives and `null` pass through unchanged. Mutating a returned value never touches stored data. Dedup still compares the *original* values, so equality semantics are unaffected.
+**Isolation ([ADR-026](../adr/026-aggregation-result-isolation.md)):** object/array values are defensively cloned via `cloneAccumulatorValue` before entering the result array, since the scanned documents are references to stored documents; primitives and `null` pass through unchanged. Mutating a returned value never touches stored data. Dedup still compares the _original_ values, so equality semantics are unaffected.
 
 **Limit:** The result set is capped at `MAX_DISTINCT_COUNT` (100,000) unique values. Exceeding the cap throws `ValidationError`.
 
@@ -286,14 +292,16 @@ Returns the count of unique values for the specified field across all matching d
 countDistinct(f) === (await distinct(f)).length
 ```
 
-Semantics are identical to `.distinct()`: missing/`undefined` values are skipped; `null` counts as one distinct value; objects/arrays are deduped by deep equality; primitives by strict equality. Unlike `.distinct()`, `.countDistinct()` returns **`0`** (not `[]`/`null`) when there are no matching documents or no present values — it is a *count*, following `.count()`/`.sum()`'s "`0` on empty" convention rather than `.avg()`/`.min()`/`.max()`/`.median()`'s `null`-on-empty convention, because a cardinality of zero is a well-defined count.
+Semantics are identical to `.distinct()`: missing/`undefined` values are skipped; `null` counts as one distinct value; objects/arrays are deduped by deep equality; primitives by strict equality. Unlike `.distinct()`, `.countDistinct()` returns **`0`** (not `[]`/`null`) when there are no matching documents or no present values — it is a _count_, following `.count()`/`.sum()`'s "`0` on empty" convention rather than `.avg()`/`.min()`/`.max()`/`.median()`'s `null`-on-empty convention, because a cardinality of zero is a well-defined count.
 
-`.countDistinct()` is **order-insensitive**: a cardinality does not depend on input order, so it is unaffected by the ADR-020 chain-sort rule for aggregation input. It is defined *as if* computed over the aggregation input order (§1.4), but the implementation skips the sort as a pure optimization — results are byte-identical whether or not a `.sort()` precedes it on the chain.
+`.countDistinct()` is **order-insensitive**: a cardinality does not depend on input order, so it is unaffected by the ADR-020 chain-sort rule for aggregation input. It is defined _as if_ computed over the aggregation input order (§1.4), but the implementation skips the sort as a pure optimization — results are byte-identical whether or not a `.sort()` precedes it on the chain.
 
 **Limit:** The same `MAX_DISTINCT_COUNT` (100,000) cap as `.distinct()` applies, since the implementation must remember every distinct value seen (even though it discards the values themselves) to detect duplicates. Exceeding the cap throws `ValidationError` at the identical boundary as `.distinct()` and identifies the failing operation as the `countDistinct()` result.
 
 ```ts
-const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+const uniqueCities = await users
+  .find({ status: 'active' })
+  .countDistinct('address.city');
 // e.g. 2
 ```
 
@@ -351,7 +359,7 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
 - Documents where the group field is missing are grouped under `_key: null` (string form) or `null` for that dimension (array form).
 - Group key serialization is type-aware, per dimension: values of different types (e.g., the string `"123"` and the number `123`, or the string `"null"` and `null`) are always treated as distinct groups, and this holds independently for each field in the array form — there is no cross-dimension collision between, say, the first field's `"123"` and the second field's `123`.
 - **Object/array key ordering:** When a group key value (or a dimension's value, in the array form) is an object or array, it is serialized via `JSON.stringify`. This means objects with the same properties in different insertion order (e.g. `{a:1, b:2}` vs `{b:2, a:1}`) are treated as **different** group keys. To ensure consistent grouping, callers should normalize key property order before insertion.
-- **Key isolation ([ADR-026](../adr/026-aggregation-result-isolation.md)):** an object/array group key value is defensively cloned via `cloneAccumulatorValue` before it is placed in `_key` — in the string form, and per dimension in the composite `_key` object of the array form. Group key values are resolved from stored documents, so without the clone a caller could mutate stored data through `_key`. Primitives and `null` pass through unchanged. The clone is taken once per group (on first occurrence), never per document, and *after* the key is serialized, so grouping semantics are unaffected.
+- **Key isolation ([ADR-026](../adr/026-aggregation-result-isolation.md)):** an object/array group key value is defensively cloned via `cloneAccumulatorValue` before it is placed in `_key` — in the string form, and per dimension in the composite `_key` object of the array form. Group key values are resolved from stored documents, so without the clone a caller could mutate stored data through `_key`. Primitives and `null` pass through unchanged. The clone is taken once per group (on first occurrence), never per document, and _after_ the key is serialized, so grouping semantics are unaffected.
 - Each accumulator operates on the group's documents (unchanged for both forms):
   - `$count: true` — count of documents in the group. The operand must be exactly the boolean `true`; every other operand (`false`, `0`, `1`, `'true'`, `null`, an object, …) throws `ValidationError`. The `GroupAccumulator` type already narrows `$count` to `true`, so this only affects accumulators built at runtime (e.g. parsed from JSON), where `{ $count: false }` would otherwise have been silently treated as `{ $count: true }`.
   - `$sum: 'fieldPath'` — sum of numeric values (skip non-numeric, `0` if none).
@@ -370,11 +378,13 @@ Each `GroupAccumulator` entry must contain exactly one accumulator key.
     - **Limits:** `$push` needs no dedicated limit — a group holds at most `MAX_GROUP_DOCUMENTS` (100,000) documents and `$push` emits at most one value per document, so its output is already bounded. `$addToSet` reuses the **same per-group `MAX_DISTINCT_COUNT` (100,000) cap** as `$countDistinct` (built on the identical shared distinct-value scan core): if a single group's unique-value count would exceed the cap, `ValidationError` is thrown, identifying the failing operation as the `$addToSet` accumulator. As with `$countDistinct`, the equal 100,000 limits mean `MAX_GROUP_DOCUMENTS` is reached before `$addToSet` can exceed `MAX_DISTINCT_COUNT` in practice, so the group document-cap error takes precedence.
     - **Name reuse note:** `$push`/`$addToSet` are also `UpdateOperations` operator names (the update DSL). The two contexts are structurally distinct — an update spec's `$push`/`$addToSet` operand is an update instruction (`Record<string, unknown>`), while a `groupBy` accumulator's operand is a field-path string — and never coexist on the same interface, so there is no ambiguity in practice (ADR-023 §3).
 - **`$percentile` operand validation:** the operand must be a plain object with **exactly** the keys `field` (a valid field path, same eager validation as the other accumulators' field-path operands) and `p` (the same `[0, 1]` finite-number rule as the `.percentile()` terminal). Extra or missing keys throw `ValidationError`. The existing "exactly one accumulator key per entry" rule is unchanged — `$percentile` still occupies exactly one key of its `GroupAccumulator` entry.
+- **Per-group memoization (performance, no semantic change):** within one group, the numeric values of a field path are extracted once and shared by every accumulator that reads that path, and the ascending-sorted copy those values require is likewise computed once and shared by `$median` and every `$percentile` on the same path. So `{ p50: { $percentile: { field: 'score', p: 0.5 } }, p95: { $percentile: { field: 'score', p: 0.95 } }, avg: { $avg: 'score' } }` walks `score` once per group and sorts it once per group, instead of once per accumulator. Results are identical to computing each accumulator independently.
 - Groups are returned in order of first occurrence of each key value, evaluated over the **aggregation input order** (§1.4): storage order, or `.sort()` order when a sort is specified on the chain (unchanged behavior when no sort is specified; unchanged for both single-field and multi-dimension forms).
 - Each group's internal document order (as consumed by order-sensitive accumulators) likewise follows the aggregation input order.
 - Like other aggregation terminals, operates on the filtered set; `skip`/`limit`/`projection` are not applied (§1.4).
 - Throws `ValidationError` if `field` is an empty string (string form), `accumulators` is empty object, or any accumulator entry does not contain exactly one key.
 - Throws `ValidationError` if `field` is an empty array, an array element is not a non-empty string or fails field-path validation, or the array contains duplicate field paths.
+- Throws `ValidationError` if the number of accumulators exceeds `MAX_GROUP_ACCUMULATORS` (32). Every accumulator rescans each group's documents, so the total work is `O(groups x group size x accumulators)`; without a cap, a single `groupBy` call with thousands of accumulators multiplies a bounded document scan into an unbounded one.
 - Throws `ValidationError` if the number of distinct groups would exceed `MAX_GROUP_COUNT` (100,000).
 - Throws `ValidationError` if any single group would exceed `MAX_GROUP_DOCUMENTS` (100,000) documents. (Reachable only when `maxMatchedDocuments` is configured above 100,000, since the scan cap would otherwise be hit first.)
 - Throws `ValidationError` if a `$countDistinct` accumulator's unique-value count within any single group would exceed `MAX_DISTINCT_COUNT` (100,000). At the current equal limits, `MAX_GROUP_DOCUMENTS` is reached first and its error takes precedence.
@@ -412,9 +422,12 @@ const result = await requests.find({}).groupBy('route', {
 **Example (`$first` / `$last`, latest status per user):**
 
 ```ts
-const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
-  latestStatus: { $first: 'status' },
-});
+const result = await events
+  .find({})
+  .sort({ updatedAt: -1 })
+  .groupBy('userId', {
+    latestStatus: { $first: 'status' },
+  });
 // → [
 //   { _key: 'u1', latestStatus: 'shipped' },
 // ]
@@ -453,7 +466,7 @@ Aggregation methods (`sum`, `avg`, `min`, `max`, `percentile`, `median`, `stdDev
 **Aggregation input order:** storage order, or `.sort()` order if a sort is specified on the chain. This composes with aggregation the way MongoDB's `$sort → $group` pipeline does — a `.sort()` preceding an aggregation terminal is honored by that terminal (see ADR-020).
 
 - **Order-sensitive terminals** — `distinct` and `groupBy` — are observably affected: `distinct`'s first-occurrence order, `groupBy`'s group order (first occurrence of each key), and each group's internal document order all follow the aggregation input order above. Sort semantics (missing-field placement, `NaN` handling, type ranks, string comparison, stability) are exactly §1.2.
-- **Order-insensitive terminals** — `sum`, `avg`, `min`, `max`, `count`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `countDistinct` — are mathematically order-independent. Their results are defined *as if* computed over the aggregation input order above, but the implementation **skips the sort** for these terminals as a pure optimization: results are byte-identical whether or not a `.sort()` precedes them. `countDistinct` is a count of a set, and a set's cardinality does not depend on the order in which its members were observed ([ADR-022](../adr/022-count-distinct.md) §4).
+- **Order-insensitive terminals** — `sum`, `avg`, `min`, `max`, `count`, `percentile`, `median`, `stdDevPop`, `stdDevSamp`, `variancePop`, `varianceSamp`, `countDistinct` — are mathematically order-independent. Their results are defined _as if_ computed over the aggregation input order above, but the implementation **skips the sort** for these terminals as a pure optimization: results are byte-identical whether or not a `.sort()` precedes them. `countDistinct` is a count of a set, and a set's cardinality does not depend on the order in which its members were observed ([ADR-022](../adr/022-count-distinct.md) §4).
 
 `.count()` is an exception among terminal methods: it applies `skip` and `limit` so that it returns the same number of documents that `.toArray()` would return. This makes `.count()` useful for pagination scenarios. Sort and projection do not affect `.count()`.
 
@@ -504,10 +517,10 @@ Each terminal call triggers a fresh execution of the pipeline.
 ## 4. Empty Results
 
 | Scenario                  | `.toArray()` | `.cursor()` | `.count()` | `.sum(f)` | `.avg(f)` | `.min(f)` | `.max(f)` | `.percentile(f,p)` | `.median(f)` | `.stdDevPop(f)` / `.variancePop(f)` | `.stdDevSamp(f)` / `.varianceSamp(f)` | `.distinct(f)` | `.countDistinct(f)` | `.groupBy(f, acc)` |
-| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------- | ------------ | ------------------------------------- | ---------------------------------------- | -------------- | -------------------- | ------------------ |
-| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `null`                                 | `null`                                    | `[]`           | `0`                  | `[]`               |
-| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `null`                                 | `null`                                    | `[]`           | `0`                  | (grouped)          |
-| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`              | `null`       | `null`                                 | `null`                                    | (values)       | (count)              | (grouped)          |
+| ------------------------- | ------------ | ----------- | ---------- | --------- | --------- | --------- | --------- | ------------------ | ------------ | ----------------------------------- | ------------------------------------- | -------------- | ------------------- | ------------------ |
+| No matching documents     | `[]`         | (no yields) | `0`        | `0`       | `null`    | `null`    | `null`    | `null`             | `null`       | `null`                              | `null`                                | `[]`           | `0`                 | `[]`               |
+| Matches but field missing | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`             | `null`       | `null`                              | `null`                                | `[]`           | `0`                 | (grouped)          |
+| Matches with non-numeric  | `[...]`      | (yields)    | count      | `0`       | `null`    | `null`    | `null`    | `null`             | `null`       | `null`                              | `null`                                | (values)       | (count)             | (grouped)          |
 
 **`countDistinct` contrast with `distinct`:** `.countDistinct(f)` returns `0` for every empty-result scenario above, never `[]` or `null` — it is a count, like `.count()`/`.sum()`, not a value collection like `.distinct()` (which returns `[]`) or a value like `.avg()`/`.min()`/`.max()`/`.median()` (which return `null`). See §1.3.
 
@@ -519,25 +532,25 @@ Each terminal call triggers a fresh execution of the pipeline.
 
 ## 5. Error Handling
 
-| Error                 | Condition                                                                                                                                                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ValidationError`     | Invalid sort spec: value not `1` or `-1`, array entry not a 2-element tuple, duplicate field name, or spec is not an object or array                                                                               |
-| `ValidationError`     | Invalid limit (not a positive integer)                                                                                                                                                                             |
-| `ValidationError`     | Invalid skip (not a non-negative integer)                                                                                                                                                                          |
-| `ValidationError`     | Invalid projection spec value (not `0` or `1`)                                                                                                                                                                     |
-| `ValidationError`     | Mixed inclusion/exclusion in projection                                                                                                                                                                            |
-| `ValidationError`     | Aggregation field path is not a non-empty string, contains reserved segments (`__proto__`, `constructor`, `prototype`), exceeds max depth, or exceeds max length — validated eagerly regardless of result set size |
-| `ValidationError`     | `stdDevPop` / `stdDevSamp` / `variancePop` / `varianceSamp` field path fails the same eager validation as above, before any document is fetched                                                                    |
-| `ValidationError`     | `distinct` field path fails the same eager validation as above                                                                                                                                                     |
-| `ValidationError`     | `distinct` result would exceed `MAX_DISTINCT_COUNT` (100,000) unique values                                                                                                                                        |
-| `ValidationError`     | `countDistinct` field path fails the same eager validation as above                                                                                                                                                |
-| `ValidationError`     | `countDistinct` unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000) — the identical cap and boundary as `distinct`                                                                                     |
-| `ValidationError`     | `groupBy` field fails the same eager validation as above (string form), or, for the array form, `field` is an empty array, an array element is not a non-empty string or fails the same eager field-path validation, or the array contains duplicate field paths                                                                          |
-| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct`, `$push`, `$addToSet` operands) fail the same eager validation                          |
-| `ValidationError`     | `groupBy` `$countDistinct` accumulator's per-group unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000)                                                                                                 |
-| `ValidationError`     | `groupBy` `$addToSet` accumulator's per-group unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000) — the identical per-group cap and boundary as `$countDistinct`                                      |
-| `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                             |
-| `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                       |
-| `ValidationError`     | `percentile` / `$percentile` `p` is not a finite scalar number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                        |
-| `ValidationError`     | `groupBy` `$percentile` operand is not a plain object, or does not contain exactly the keys `field` and `p`                                                                                                       |
-| `ClosedDatabaseError` | Terminal method called on a closed database (for `.cursor()`, thrown when iteration starts)                                                                                                                        |
+| Error                 | Condition                                                                                                                                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ValidationError`     | Invalid sort spec: value not `1` or `-1`, array entry not a 2-element tuple, duplicate field name, or spec is not an object or array                                                                                                                             |
+| `ValidationError`     | Invalid limit (not a positive integer)                                                                                                                                                                                                                           |
+| `ValidationError`     | Invalid skip (not a non-negative integer)                                                                                                                                                                                                                        |
+| `ValidationError`     | Invalid projection spec value (not `0` or `1`)                                                                                                                                                                                                                   |
+| `ValidationError`     | Mixed inclusion/exclusion in projection                                                                                                                                                                                                                          |
+| `ValidationError`     | Aggregation field path is not a non-empty string, contains reserved segments (`__proto__`, `constructor`, `prototype`), exceeds max depth, or exceeds max length — validated eagerly regardless of result set size                                               |
+| `ValidationError`     | `stdDevPop` / `stdDevSamp` / `variancePop` / `varianceSamp` field path fails the same eager validation as above, before any document is fetched                                                                                                                  |
+| `ValidationError`     | `distinct` field path fails the same eager validation as above                                                                                                                                                                                                   |
+| `ValidationError`     | `distinct` result would exceed `MAX_DISTINCT_COUNT` (100,000) unique values                                                                                                                                                                                      |
+| `ValidationError`     | `countDistinct` field path fails the same eager validation as above                                                                                                                                                                                              |
+| `ValidationError`     | `countDistinct` unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000) — the identical cap and boundary as `distinct`                                                                                                                                    |
+| `ValidationError`     | `groupBy` field fails the same eager validation as above (string form), or, for the array form, `field` is an empty array, an array element is not a non-empty string or fails the same eager field-path validation, or the array contains duplicate field paths |
+| `ValidationError`     | `groupBy` accumulator field paths (`$sum`, `$avg`, `$min`, `$max`, `$stdDevPop`, `$stdDevSamp`, `$variancePop`, `$varianceSamp`, `$first`, `$last`, `$countDistinct`, `$push`, `$addToSet` operands) fail the same eager validation                              |
+| `ValidationError`     | `groupBy` `$countDistinct` accumulator's per-group unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000)                                                                                                                                                |
+| `ValidationError`     | `groupBy` `$addToSet` accumulator's per-group unique-value count would exceed `MAX_DISTINCT_COUNT` (100,000) — the identical per-group cap and boundary as `$countDistinct`                                                                                      |
+| `ValidationError`     | `groupBy` accumulators is empty object                                                                                                                                                                                                                           |
+| `ValidationError`     | `groupBy` accumulator entry does not contain exactly one key                                                                                                                                                                                                     |
+| `ValidationError`     | `percentile` / `$percentile` `p` is not a finite scalar number, or is outside `[0, 1]` — validated eagerly, before any document is fetched                                                                                                                       |
+| `ValidationError`     | `groupBy` `$percentile` operand is not a plain object, or does not contain exactly the keys `field` and `p`                                                                                                                                                      |
+| `ClosedDatabaseError` | Terminal method called on a closed database (for `.cursor()`, thrown when iteration starts)                                                                                                                                                                      |

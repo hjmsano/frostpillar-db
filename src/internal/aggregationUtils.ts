@@ -12,6 +12,7 @@ import {
 } from './objectUtils.js';
 import {
   MAX_DISTINCT_COUNT,
+  MAX_GROUP_ACCUMULATORS,
   MAX_GROUP_COUNT,
   MAX_GROUP_DOCUMENTS,
 } from './limits.js';
@@ -277,11 +278,26 @@ export const computePercentile = (
   values: number[],
   p: number,
 ): number | null => {
-  if (values.length === 0) {
+  return computePercentileOfSorted(sortNumbersAscending(values), p);
+};
+
+/** Ascending numeric sort into a fresh array; the input is never mutated. */
+const sortNumbersAscending = (values: number[]): number[] =>
+  [...values].sort((a, b) => a - b);
+
+/**
+ * The percentile core, over values that are already sorted ascending. Split out
+ * of `computePercentile` so a group whose `$median` and `$percentile`
+ * accumulators read the same field path sorts that field's values once rather
+ * than once per accumulator.
+ */
+const computePercentileOfSorted = (
+  sorted: number[],
+  p: number,
+): number | null => {
+  if (sorted.length === 0) {
     return null;
   }
-
-  const sorted = [...values].sort((a, b) => a - b);
   if (sorted.length === 1) {
     return sorted[0];
   }
@@ -464,6 +480,11 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
   if (entries.length === 0) {
     throw new ValidationError('groupBy accumulators must not be empty.');
   }
+  if (entries.length > MAX_GROUP_ACCUMULATORS) {
+    throw new ValidationError(
+      `groupBy exceeds maximum of ${String(MAX_GROUP_ACCUMULATORS)} accumulators.`,
+    );
+  }
 
   for (const [outputField, accumulator] of entries) {
     validateOutputField(outputField);
@@ -516,6 +537,7 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
 const computeNumericAccumulator = (
   key: keyof GroupAccumulator,
   numericValues: number[],
+  getSortedValues: () => number[],
 ): unknown => {
   switch (key) {
     case '$sum':
@@ -543,7 +565,7 @@ const computeNumericAccumulator = (
         value > currentMax ? value : currentMax,
       );
     case '$median':
-      return computePercentile(numericValues, 0.5);
+      return computePercentileOfSorted(getSortedValues(), 0.5);
     case '$stdDevPop':
       return computeStdDev(numericValues, false);
     case '$stdDevSamp':
@@ -658,10 +680,58 @@ const computeAddToSet = <TDocument extends FrostpillarDocument>(
   return result;
 };
 
+/**
+ * Per-group memo of the numeric values of a field path, and of their
+ * ascending-sorted copy. Every accumulator rescans the group's documents, so
+ * without this an accumulator map like `{ p50: { $percentile: { field:
+ * 'score', p: 0.5 } }, p95: { $percentile: { field: 'score', p: 0.95 } }, avg:
+ * { $avg: 'score' } }` walked `score` three times and sorted it twice, per
+ * group. The memo is scoped to one group and discarded with it, so results are
+ * identical to computing each accumulator independently.
+ */
+interface GroupFieldMemo {
+  readonly numeric: Map<string, number[]>;
+  readonly sorted: Map<string, number[]>;
+}
+
+const createGroupFieldMemo = (): GroupFieldMemo => ({
+  numeric: new Map<string, number[]>(),
+  sorted: new Map<string, number[]>(),
+});
+
+const memoNumericValues = <TDocument extends FrostpillarDocument>(
+  memo: GroupFieldMemo,
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): number[] => {
+  const cached = memo.numeric.get(fieldPath);
+  if (cached !== undefined) return cached;
+  const values = extractNumericValues(groupDocs, fieldPath, pathCache);
+  memo.numeric.set(fieldPath, values);
+  return values;
+};
+
+const memoSortedNumericValues = <TDocument extends FrostpillarDocument>(
+  memo: GroupFieldMemo,
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): number[] => {
+  const cached = memo.sorted.get(fieldPath);
+  if (cached !== undefined) return cached;
+  const sorted = sortNumbersAscending(
+    memoNumericValues(memo, groupDocs, fieldPath, pathCache),
+  );
+  memo.sorted.set(fieldPath, sorted);
+  return sorted;
+};
+
 const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
   groupDocs: FrostpillarStoredDocument<TDocument>[],
   accumulator: GroupAccumulator,
   pathCache: Map<string, string[]>,
+  memo: GroupFieldMemo,
 ): unknown => {
   const key = Object.keys(accumulator)[0] as keyof GroupAccumulator;
 
@@ -671,12 +741,10 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
 
   if (key === '$percentile') {
     const operand = accumulator.$percentile!;
-    const numericValues = extractNumericValues(
-      groupDocs,
-      operand.field,
-      pathCache,
+    return computePercentileOfSorted(
+      memoSortedNumericValues(memo, groupDocs, operand.field, pathCache),
+      operand.p,
     );
-    return computePercentile(numericValues, operand.p);
   }
 
   if (key === '$first' || key === '$last') {
@@ -708,8 +776,11 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
   }
 
   const fieldPath = accumulator[key]!;
-  const numericValues = extractNumericValues(groupDocs, fieldPath, pathCache);
-  return computeNumericAccumulator(key, numericValues);
+  return computeNumericAccumulator(
+    key,
+    memoNumericValues(memo, groupDocs, fieldPath, pathCache),
+    () => memoSortedNumericValues(memo, groupDocs, fieldPath, pathCache),
+  );
 };
 
 const serializeGroupKey = (key: unknown): string => {
@@ -731,6 +802,7 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
   const results: GroupResultEntry[] = [];
   for (const [, { key: groupKey, docs: groupDocs }] of groups) {
     const entry: GroupResultEntry = { _key: groupKey };
+    const memo = createGroupFieldMemo();
     for (const outputField in accumulators) {
       if (!hasOwn(accumulators, outputField)) continue;
       const accumulator = accumulators[outputField];
@@ -738,6 +810,7 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
         groupDocs,
         accumulator,
         pathCache,
+        memo,
       );
     }
     results.push(entry);
