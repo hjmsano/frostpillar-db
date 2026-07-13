@@ -410,7 +410,9 @@ const ids = await users.insertMany([
 
 > **Note:** A custom `_id` must be a non-empty string of at most 1,024 characters with no control characters; otherwise `insert` throws `ValidationError`. The same constraint applies to `_id` values used in filters.
 
-> **Note:** `insertMany` is not transactional. If an error occurs mid-batch (e.g., a duplicate `_id` on a `'reject'` collection), documents already inserted are not rolled back. The caller receives the thrown error, not a partial result.
+> **Note:** `insertMany` is not transactional. If an error occurs mid-batch (e.g. a storage quota is exhausted), documents already inserted are not rolled back. The caller receives the thrown error, not a partial result.
+>
+> A duplicate `_id` is the exception: on a `'reject'` collection the whole batch is checked for duplicates — within the batch and against stored documents — **before anything is written**, so `DuplicateIdError` leaves the collection untouched. When a batch does fail partway for another reason, an `'insert'` event is still emitted for each record that reached storage, so `watch()` never misses a stored document (on `'reject'` collections; see [Spec 02 §1](docs/specs/02-crud-and-query.md)).
 
 #### Find
 

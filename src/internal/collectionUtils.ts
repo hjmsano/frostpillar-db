@@ -3,7 +3,10 @@ import {
   DuplicateKeyError,
   QuotaExceededError,
 } from '@frostpillar/frostpillar-storage-engine';
-import type { RecordPayload } from '@frostpillar/frostpillar-storage-engine';
+import type {
+  Datastore,
+  RecordPayload,
+} from '@frostpillar/frostpillar-storage-engine';
 
 import { DuplicateIdError, ValidationError } from '../errors.js';
 import type {
@@ -96,6 +99,65 @@ export const prepareInsertRecord = <TDocument extends FrostpillarDocument>(
     payload,
     record: { key: id, payload: payload as RecordPayload },
   };
+};
+
+/**
+ * Rejects a batch that would hit a duplicate key, **before** any record is
+ * written. `putMany` writes in order and throws on the offending record, so a
+ * duplicate in the middle of a batch persisted everything before it while the
+ * caller's `insertMany` threw — and the insert events, emitted only after
+ * `putMany` resolves, were never sent for those stored documents.
+ *
+ * Only meaningful under `duplicateKeys: 'reject'`; the other policies accept a
+ * duplicate key by definition. Duplicates are detected on the `_id` strings, so
+ * a custom key definition whose `normalize` collapses two distinct `_id`s of the
+ * same batch onto one storage key still surfaces from the storage engine
+ * (ADR-027).
+ */
+export const assertNoDuplicateBatchIds = async (
+  datastore: Datastore,
+  records: readonly { key: string; payload: RecordPayload }[],
+  collectionName: string,
+): Promise<void> => {
+  const keys = new Set<string>();
+  for (const record of records) {
+    if (keys.has(record.key)) {
+      throw new DuplicateIdError(
+        `Duplicate _id "${sanitizeForLog(record.key)}" within the insertMany batch for collection "${sanitizeForLog(collectionName)}".`,
+      );
+    }
+    keys.add(record.key);
+  }
+  if (keys.size === 0) return;
+
+  const existing = await datastore.getMany([...keys]);
+  if (existing.length > 0) {
+    throw new DuplicateIdError(
+      `Duplicate _id in collection "${sanitizeForLog(collectionName)}".`,
+    );
+  }
+};
+
+/**
+ * Reports which records of a failed `'reject'` batch actually reached storage,
+ * in batch order, so their insert events can still be emitted. Sound only for
+ * `'reject'`: `assertNoDuplicateBatchIds` established that none of these keys
+ * existed, so any that exists now was written by this call. Under
+ * `'replace'`/`'allow'` a key present afterwards may be a pre-existing record,
+ * which is why the caller does not reconcile there.
+ */
+export const findPersistedBatchKeys = async (
+  datastore: Datastore,
+  records: readonly { key: string; payload: RecordPayload }[],
+): Promise<Set<string>> => {
+  const keys = [...new Set(records.map((record) => record.key))];
+  if (keys.length === 0) return new Set<string>();
+  const stored = await datastore.getMany(keys);
+  const persisted = new Set<string>();
+  for (const record of stored) {
+    persisted.add(toStoredDocument(record.payload)._id);
+  }
+  return persisted;
 };
 
 export const sanitizeForLog = (value: string): string => {

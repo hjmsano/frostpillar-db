@@ -36,7 +36,13 @@ Inserts multiple documents. Each document follows the same policy-specific behav
 
 Returns an array of `_id` values in the same order as the input.
 
-**Error semantics:** If any insertion fails (e.g., `DuplicateIdError` on a `'reject'` collection, or `ValidationError`), the error propagates to the caller immediately. Remaining documents are not processed. Documents that were already inserted before the failure are **not** rolled back (no transaction support; see ADR-007). The caller receives the thrown error, not a partial result. The IDs of previously inserted documents are not accessible from the error object.
+**Duplicate `_id` pre-check (`'reject'` collections):** before any record is written, the batch is checked for duplicate `_id`s — both within the batch and against the stored documents (one `Datastore.getMany()` over the batch's keys). A duplicate throws `DuplicateIdError` with **nothing written**. `putMany()` writes records in order and throws on the offending one, so without this pre-check a duplicate in the middle of a batch persisted the records before it — and, because the events are emitted only after `putMany()` resolves, emitted no `'insert'` event for any of them: storage and the `watch()` stream disagreed. The pre-check does not apply to `'replace'` / `'allow'` collections, where a duplicate key is not an error.
+
+The pre-check compares `_id` strings. Under a custom `key` definition whose `normalize` maps two distinct `_id`s onto one storage key ([ADR-027](../adr/027-custom-key-identity.md)), a collision _between two records of the same batch_ is not caught by it and still surfaces from the storage engine at write time.
+
+**Error semantics:** If any insertion fails (e.g., `ValidationError`, `QuotaExceededError`, or a `DuplicateIdError` the pre-check could not anticipate), the error propagates to the caller immediately. Remaining documents are not processed. Documents that were already inserted before the failure are **not** rolled back (no transaction support; see ADR-007). The caller receives the thrown error, not a partial result. The IDs of previously inserted documents are not accessible from the error object.
+
+**Watch events on failure:** on a `'reject'` collection, an `'insert'` event is emitted for each record that was actually persisted before the failure, so the `watch()` stream never silently omits a stored document. Those records are identified by re-reading the batch's keys: the pre-check established that none of them existed, so any that exist now were written by this call. On a `'replace'` / `'allow'` collection this reconciliation is not possible — a key that exists afterwards may be a pre-existing record — so a partially-applied failed batch emits no events there, and callers should treat a failed `insertMany()` as "state unknown" and re-read.
 
 ## 2. Find
 

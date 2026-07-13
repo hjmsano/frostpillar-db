@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { Datastore } from '@frostpillar/frostpillar-storage-engine';
+
 import {
   Database,
   DuplicateIdError,
@@ -94,11 +96,14 @@ void test('insert allows duplicate _id when policy is allow', async () => {
   }
 });
 
-void test('insertMany is sequential and does not rollback previous inserts on failure', async () => {
+void test('insertMany writes nothing when the batch contains a duplicate _id', async () => {
   const database = new Database({});
   const users = database.collection<UserDocument>('users');
 
   try {
+    const events: string[] = [];
+    users.watch((event) => events.push(event.documentId));
+
     await assert.rejects(
       () =>
         users.insertMany([
@@ -109,10 +114,73 @@ void test('insertMany is sequential and does not rollback previous inserts on fa
       DuplicateIdError,
     );
 
-    const docs = await users.find().toArray();
-    assert.equal(docs.length, 1);
-    assert.equal(docs[0]?._id, 'u1');
-    assert.equal(docs[0]?.name, 'Alice');
+    // The duplicate is detected before any write, so no prefix is persisted —
+    // and therefore no stored document goes unannounced on watch().
+    assert.equal(await users.count(), 0);
+    assert.deepEqual(events, []);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('insertMany writes nothing when a document duplicates a stored _id', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users');
+
+  try {
+    await users.insert({ _id: 'u1', name: 'Alice' });
+
+    const events: string[] = [];
+    users.watch((event) => events.push(event.documentId));
+
+    await assert.rejects(
+      () =>
+        users.insertMany([
+          { _id: 'u2', name: 'Bob' },
+          { _id: 'u1', name: 'Duplicate' },
+          { _id: 'u3', name: 'Carol' },
+        ]),
+      DuplicateIdError,
+    );
+
+    assert.equal(await users.count(), 1);
+    assert.equal((await users.findOne({ _id: 'u1' }))?.name, 'Alice');
+    assert.equal(await users.find({ _id: 'u2' }).count(), 0);
+    assert.deepEqual(events, []);
+  } finally {
+    await database.close();
+  }
+});
+
+void test("insertMany still accepts duplicate _ids under duplicateKeys: 'allow'", async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users-allow', {
+    duplicateKeys: 'allow',
+  });
+
+  try {
+    const ids = await users.insertMany([
+      { _id: 'u1', name: 'Alice' },
+      { _id: 'u1', name: 'Bob' },
+    ]);
+    assert.deepEqual(ids, ['u1', 'u1']);
+    assert.equal(await users.count(), 2);
+  } finally {
+    await database.close();
+  }
+});
+
+void test("insertMany replaces a stored _id under duplicateKeys: 'replace'", async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users-replace', {
+    duplicateKeys: 'replace',
+  });
+
+  try {
+    await users.insert({ _id: 'u1', name: 'Alice' });
+    await users.insertMany([{ _id: 'u1', name: 'Bob' }]);
+    assert.equal(await users.count(), 1);
+    assert.equal((await users.findOne({ _id: 'u1' }))?.name, 'Bob');
   } finally {
     await database.close();
   }
@@ -286,6 +354,42 @@ void test('remove with _id $in including non-existent keys deletes only existing
 
     const remaining = await users.find().toArray();
     assert.equal(remaining[0]._id, 'u2');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('insertMany emits insert events for the records persisted before a mid-batch failure', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('users-partial');
+
+  try {
+    const events: string[] = [];
+    users.watch((event) => events.push(event.documentId));
+
+    // Make the datastore fail after the first record of the batch is written,
+    // standing in for a quota/backend failure the duplicate pre-check cannot
+    // anticipate. The persisted record must still reach watch().
+    const datastore = (
+      database as unknown as { datastores: Map<string, Datastore> }
+    ).datastores.get('users-partial')!;
+    const put = datastore.put.bind(datastore);
+    datastore.putMany = async (records): Promise<void> => {
+      await put(records[0]);
+      throw new Error('simulated storage failure');
+    };
+
+    await assert.rejects(
+      () =>
+        users.insertMany([
+          { _id: 'u1', name: 'Alice' },
+          { _id: 'u2', name: 'Bob' },
+        ]),
+      { message: 'simulated storage failure' },
+    );
+
+    assert.equal(await users.count(), 1);
+    assert.deepEqual(events, ['u1']);
   } finally {
     await database.close();
   }

@@ -13,6 +13,8 @@ import {
 } from './internal/payloadValidator.js';
 import { applyUpdateOperations } from './internal/updateApplier.js';
 import {
+  assertNoDuplicateBatchIds,
+  findPersistedBatchKeys,
   prepareInsertRecord,
   rethrowStorageError,
 } from './internal/collectionUtils.js';
@@ -186,15 +188,51 @@ export class Collection<
       ids[i] = id;
       payloads[i] = payload;
     }
+    // A duplicate key is the one batch failure this layer can foresee, and
+    // `putMany` would persist every record before the offending one. Detecting
+    // it here keeps the batch all-or-nothing for that case.
+    if (this.duplicateKeys === 'reject') {
+      await assertNoDuplicateBatchIds(
+        this.context.datastore,
+        records,
+        this.name,
+      );
+    }
     try {
       await this.context.datastore.putMany(records);
     } catch (e) {
+      await this.emitPersistedInserts(records, ids, payloads);
       rethrowStorageError(e, this.name);
     }
     for (let i = 0; i < count; i++) {
       this.emitChange('insert', ids[i], payloads[i]);
     }
     return ids;
+  }
+
+  /**
+   * Announces the records a failed batch did persist (quota, backend I/O — the
+   * failures the duplicate pre-check cannot foresee), so a stored document is
+   * never missing from the `watch()` stream. Reconciling reads back the batch's
+   * keys, which is only sound under `'reject'`: the pre-check proved none of them
+   * existed, so whatever exists now was written by this call.
+   */
+  private async emitPersistedInserts(
+    records: readonly { key: string; payload: RecordPayload }[],
+    ids: readonly string[],
+    payloads: readonly FrostpillarStoredDocument<TDocument>[],
+  ): Promise<void> {
+    if (this.duplicateKeys !== 'reject') return;
+    const persisted = await findPersistedBatchKeys(
+      this.context.datastore,
+      records,
+    );
+    if (persisted.size === 0) return;
+    for (let i = 0; i < ids.length; i++) {
+      if (persisted.has(ids[i])) {
+        this.emitChange('insert', ids[i], payloads[i]);
+      }
+    }
   }
 
   public find(filter?: Filter): ResultChain<TDocument> {
