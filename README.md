@@ -220,6 +220,8 @@ import { Database } from '@frostpillar/frostpillar-db';
 const db = new Database({});
 ```
 
+`Database` shallow-snapshots the config's top-level own enumerable fields during construction. Each accessor-backed field is read once; later top-level mutations of the caller's config object do not affect the database. Nested config objects and callback functions remain shared references.
+
 **Browser:**
 
 ```js
@@ -489,7 +491,9 @@ const stored = await users.findOne({ _id: id }); // tags: ['a']
 
 Reads are copied as well: the documents **returned** by `find()`, `findOne()`, and `watch()` events are deep copies, not references to the stored records, so mutating a result never touches stored data. (A `watch()` event's document is one copy shared by that event's listeners, so listeners of the same event still see each other's mutations.)
 
-Filters are copied too, and every input is read **exactly once**. A getter or a `Proxy` therefore cannot show the validator one value and the query engine another:
+Insert payloads, filters, and update operations/options are snapshotted at their public entry points. Covered properties are read once, so a getter or `Proxy` cannot show validation one value and later evaluation another. `update()` captures `options.upsert` and one normalized operation set before its first `await`; every matched document and any upsert use that same set, including a detached `$pull` comparison value.
+
+Filter arrays are copied recursively. Object comparison values — including class instances and other objects — are detached by their own enumerable shape, `Date` by timestamp, and `RegExp` by one captured `source`/`flags` pair plus its recursively copied enumerable own properties. The filter root must materialize as a plain record. Object identity and prototypes are not query semantics.
 
 ```ts
 // The getter is read once, by the snapshot; the stored value is the validated one.
@@ -516,8 +520,8 @@ if (await users.exists('user-001')) {
 const allIds = await users.ids();
 ```
 
-- `exists(id)` uses `Datastore.has(key)` as a fast path and returns `false` for expired documents on TTL collections.
-- `ids()` uses `Datastore.keys()` as a fast path; on TTL collections it filters out expired documents so its output stays consistent with `find()` and `count()`. The fast path is skipped on collections with a TTL, a custom `key` definition, or `duplicateKeys: 'allow'` — `keys()` reports each storage key once, while `ids()` reports one entry per document, so `ids().length === count()` holds even when several documents share an `_id`.
+- `exists(id)` uses `Datastore.has(key)` as a fast path only on default-key, non-TTL collections. With a custom `key`, it loads normalized-key candidates and returns `true` only for an exact stored `_id` match; TTL collections also exclude expired matches.
+- `ids()` uses `Datastore.keys()` only on default-key, non-TTL collections whose duplicate policy is not `'allow'`. With TTL, a custom `key`, or `duplicateKeys: 'allow'`, it loads documents, filters expired records when needed, and returns each stored `_id`, so `ids().length === count()` holds even when several documents share a storage key.
 
 ### Query Filters
 
@@ -546,7 +550,7 @@ Filters use `$`-prefixed operators:
 { role: { $nin: ['guest'] } }
 ```
 
-> **Deep equality note:** `$in`, `$nin`, `$eq`, `$ne`, `$all`, `$pull`, and `$addToSet` use an internal deep equality implementation that supports primitives, `Date`, plain arrays, and plain objects. `Map`, `Set`, `RegExp`, and typed arrays (e.g. `Uint8Array`) are not supported as filter or operand values.
+> **Deep equality note:** `$in`, `$nin`, `$eq`, `$ne`, `$all`, `$pull`, and `$addToSet` compare primitives directly, `Date` by timestamp, arrays recursively, and other objects by own enumerable shape. Prototypes and internal slots such as `Map`/`Set` entries or a `RegExp` pattern are not compared, but enumerable own properties added to those objects are. Use `$regex` for pattern matching.
 
 #### Logical
 
@@ -600,10 +604,10 @@ Multiple top-level keys are implicitly `$and`:
 
 ### Performance Notes
 
-- **`_id` equality fast path** — `findOne({ _id })` and internal `_id` lookups call `Datastore.getFirst(key)` directly, skipping the full scan pipeline.
-- **`_id` range scan** — When a filter uses `$gt`/`$gte` together with `$lt`/`$lte` on `_id` (both bounds present, matching types), the query engine delegates to a B+Tree leaf-level range scan via `Datastore.getRange(start, end)`. Additional non-`_id` conditions are evaluated in-memory on the narrowed range. Mixed-type bounds (e.g. `string` lower + `number` upper) throw `ValidationError`.
-- **`$in` on `_id` fast path** — `find({ _id: { $in: [...] } })`, `update`, and `remove` with an `_id` `$in` filter use `Datastore.getMany(keys)` for a batch lookup, avoiding a full scan. The same optimization applies to the `remove` delete path via `Datastore.deleteMany(keys)`.
-- **`exists()` / `ids()` fast paths** — These bypass payload loading on non-TTL collections (see [Identity Queries](#identity-queries)).
+- **`_id` equality fast path** — Under the default key definition, `findOne({ _id })` can treat `Datastore.getFirst(key)` as the complete result. With a custom `key`, equality lookup still narrows candidates through the index, but the stored `_id` is checked exactly before a match is accepted.
+- **`_id` range scan** — Under the default key definition, a filter using `$gt`/`$gte` together with `$lt`/`$lte` on `_id` (both bounds present, matching types) delegates to `Datastore.getRange(start, end)`. A custom key may order normalized keys differently from `_id` strings, so custom-key ranges use a full scan. Mixed-type bounds throw `ValidationError`.
+- **`$in` on `_id` fast path** — `find` and `update` use `Datastore.getMany(keys)` for batch candidate lookup, followed by exact filter evaluation. `remove` uses `deleteMany(keys)` only on eligible default-key, non-TTL collections; custom-key removal confirms each stored `_id` and deletes by record ID.
+- **`exists()` / `ids()` fast paths** — These bypass payload loading only when storage keys are guaranteed to be document IDs; custom-key collections use payload-backed identity checks (see [Identity Queries](#identity-queries)).
 
 ### ResultChain
 
@@ -1020,7 +1024,7 @@ const db = new Database({
 
 Only use this option when you fully control the data being inserted — skipping validation lets oversized documents reach storage.
 
-A lightweight security validator still runs on every write, even in skip mode. It rejects reserved keys, circular references, documents nested deeper than `maxDepth`, non-plain object values (class instances, `Date`, `Map`, `Set`, `Object.create(proto)`), and the non-storable leaf types `bigint`, `function`, `symbol`, and `undefined` with `ValidationError`. Functions and symbols are rejected because they are reference types — a stored document would keep sharing your object, and mutating it afterwards would change what later reads return. What skip mode turns off is the size accounting — byte counts, key counts, and string/key length limits.
+A lightweight validation pass still runs on every write, even in skip mode. It rejects reserved keys, circular references, documents nested deeper than `maxDepth`, non-plain object values (class instances, `Date`, `Map`, `Set`, `Object.create(proto)`), and the non-storable leaf types `bigint`, `function`, `symbol`, and `undefined` with `ValidationError`. Functions cannot be detached as document values; symbols are primitives but are also unsupported document values. What skip mode turns off is the size accounting — byte counts, key counts, and string/key length limits.
 
 #### `maxMatchedDocuments`
 
@@ -1037,7 +1041,7 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 
 > **Tip:** If you only need the first _n_ results, add `.limit(n)` to your query — this short-circuits the scan (when no `sort` is applied) and avoids hitting the cap.
 
-> **Known limitation — the cap bounds the matched set, not the scan ([ADR-028](docs/adr/028-candidate-set-materialization.md)):** a scan first asks the storage engine for candidate records, and its read API returns arrays. The candidate array is therefore fully allocated before a filter is evaluated or a `.limit(n)` takes effect, so `.limit(10)` on a 10-million-document collection still materializes ten million records and keeps ten. A filter on `_id` (equality, `$in`, or a bounded range) is narrowed by the index before any array is built and does not have this cost; a filter with no `_id` predicate does. Lifting this needs a streaming read API in frostpillar-storage-engine, which the current version does not expose.
+> **Known limitation — the cap bounds the matched set, not the scan ([ADR-028](docs/adr/028-candidate-set-materialization.md)):** a scan first asks the storage engine for candidate records, and its read API returns arrays. The candidate array is therefore fully allocated before a filter is evaluated or a `.limit(n)` takes effect, so `.limit(10)` on a 10-million-document collection still materializes ten million records and keeps ten. An `_id` equality or `$in` filter is narrowed by the index before any array is built; a bounded `_id` range is narrowed only under the default key definition. A filter with no applicable `_id` candidate path does not avoid this cost. Lifting it needs a streaming read API in frostpillar-storage-engine, which the current version does not expose.
 
 ### Operational Limits
 
@@ -1051,7 +1055,7 @@ In addition to per-document payload limits, frostpillar-db enforces fixed operat
 | Max logical operand count         | 1,000   | Elements in a single `$and` / `$or` operand array                                          |
 | Max operand array size            | 10,000  | Elements in a `$in` / `$nin` / `$all` operand array                                        |
 | Max `$regex` pattern length       | 1,024   | Characters in a `$regex` string pattern                                                    |
-| Max `$regex` quantifiers          | 20      | Quantifier tokens (`*`, `+`, `?`, `{n,m}`) in a `$regex` pattern                           |
+| Max `$regex` quantifiers          | 20      | Base quantifiers (`*`, `+`, `?`, `{n,m}`); a lazy suffix does not add another token        |
 | Max `$regex` variable quantifiers | 8       | Variable-width quantifier tokens (`?`, `*`, `+`, `{n,}`, `{n,m}` with `m > n`) in a `$regex` pattern |
 | Max `$regex` alternation groups   | 4       | Parenthesized alternation groups (`(a\|b)`) in a `$regex` pattern                          |
 | Max `$regex` test length          | 8,192   | Characters in a field value tested against a `$regex`                                      |
@@ -1069,7 +1073,7 @@ In addition to per-document payload limits, frostpillar-db enforces fixed operat
 - A structural quantified-alternation-group check: a _repeating_ quantifier — `+`, `*`, unbounded `{n,}`, or a `{n}`/`{n,m}` whose maximum is 2 or more — applied to a group that contains an unescaped `|` **at any nesting depth** is rejected (e.g. `(a|a)+`, `(a|ab)*`, `(aa|a){2,}`, `(?:aa|a){2,50}`, and wrapped forms such as `((a|aa))+` and `(?:(?:a|ab))+` where a redundant group would otherwise hide the alternation from the outer repeat). The screen is conservative and does no ambiguity analysis, so a repeated group carrying a pipe anywhere within it (e.g. `(x(a|b)y)+`) is also rejected. A non-repeating quantifier (`?`, `{0,1}`, `{1}`) or a bare alternation group with no quantifier is accepted.
 - Hand-written detectors for other catastrophic shapes: overlapping wildcards, adjacent quantifiers, and backreferences with quantifiers.
 
-The variable-width-quantifier cap is a backstop against a chain of atoms whose width the engine gets to choose (e.g. `^.?.?….?aaa…a$`): no quantifier there repeats an atom, so no repeat, nesting, or alternation check sees anything wrong, yet each atom is a separate choice point and a failing match explores up to 2^k of them. Capping them at 8 bounds that at ~256 paths. A minimum of zero is *not* the property that matters — a chain of `{1,2}` atoms must match every atom, yet each still takes one character or two, so the same 2^k blowup is available; `+` and `{n,}` are worse still. Any quantifier whose minimum and maximum differ is therefore counted, and only a fixed-width `{n}` is free. It counts the whole pattern, not adjacent runs, because fixed-width atoms wedged between the variable ones (`.?\w.?\w…`) consume the same width every time and prune no branch.
+Both quantifier caps count base quantifiers: a lazy suffix (`*?`, `+?`, `??`, `{n,m}?`) changes greediness and is not counted a second time. The variable-width cap is a backstop against a chain of atoms whose width the engine gets to choose (e.g. `^.?.?….?aaa…a$`). It counts `?`, `*`, `+`, `{n,}`, and `{n,m}` where `m > n`; fixed `{n}`/`{n,n}` bounds are free. Quantifier-looking characters inside character classes do not count, including nested Unicode-set class contents under the `v` flag. Counting `+` is an intentional compatibility tightening: patterns with more than eight base variable-width quantifiers are rejected even if an earlier release accepted them.
 
 The alternation-group cap is a backstop against manually-unrolled ambiguous alternation (e.g. repeating `(a|aa)` several times with no quantifier character at all), which carries no quantifier token and so would otherwise evade the quantifier-based checks above. As with the other pattern heuristics, all of the above are defense-in-depth screens against known catastrophic-backtracking shapes, not a formal proof that every `$regex` pattern executes in linear time — they narrow the risk significantly but do not eliminate the category.
 

@@ -27,7 +27,7 @@ Every user-facing write path **deep-copies** caller-supplied data into a graph t
 
 - The whole document is deep-copied on `insert`, `insertMany`, and upsert.
 - `$set` deep-copies each assigned value; `$push` and `$addToSet` deep-copy each value that enters the target array.
-- `$unset`, `$inc`, `$rename`, and `$pull` place no caller-supplied object into the document: their operands are read-only (a field path, a finite number, a deep-equality comparison value).
+- `$unset`, `$inc`, and `$rename` place no caller-supplied object into the document. `$pull` also writes no operand, but its comparison value is detached so one update call evaluates one stable value across every matched document (ADR-030).
 
 > **Superseded in part by [ADR-030](./030-read-once-input-snapshots.md).** This ADR took the copy **after** validation and argued that the validated graph and the copied graph were therefore the same one. That holds only for objects whose properties are plain data: an accessor property (or a `Proxy` `get` trap) answers each read differently, so validating the caller's object and then re-reading it to copy let the second read supply a value the first never saw. The copy now runs **first**, in the same pass that validates it (`materializePayload`, `materializeUpdateValue`), and every later stage reads only the copy. The isolation guarantee below is unchanged — it is the ordering that was wrong.
 

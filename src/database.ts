@@ -48,10 +48,16 @@ export class Database {
   private readonly maxMatchedDocuments: number;
 
   public constructor(config?: DatabaseConfig) {
-    if (config?.payloadLimits !== undefined) {
-      validatePayloadLimits(config.payloadLimits);
+    // Materialize the top-level configuration once. Callers may provide
+    // accessors or mutate the object after construction; every downstream
+    // consumer must observe the same values that were validated here.
+    const baseConfig: DatabaseConfig =
+      config === undefined ? {} : { ...config };
+    const payloadLimits = baseConfig.payloadLimits;
+    if (payloadLimits !== undefined) {
+      validatePayloadLimits(payloadLimits);
     }
-    const rawMax = config?.maxErrorListeners;
+    const rawMax = baseConfig.maxErrorListeners;
     if (rawMax !== undefined) {
       if (rawMax !== 'unlimited') {
         if (!Number.isSafeInteger(rawMax) || rawMax <= 0) {
@@ -66,7 +72,7 @@ export class Database {
         ? Infinity
         : (rawMax ?? DEFAULT_MAX_ERROR_LISTENERS);
     this.errorListenerWarnEmitted = false;
-    const rawMaxMatched = config?.maxMatchedDocuments;
+    const rawMaxMatched = baseConfig.maxMatchedDocuments;
     if (rawMaxMatched !== undefined) {
       if (!Number.isSafeInteger(rawMaxMatched) || rawMaxMatched <= 0) {
         throw new ConfigurationError(
@@ -75,7 +81,7 @@ export class Database {
       }
     }
     this.maxMatchedDocuments = rawMaxMatched ?? DEFAULT_MAX_MATCHED_DOCUMENTS;
-    this.baseConfig = config ?? {};
+    this.baseConfig = baseConfig;
     this.caches = createDatabaseCaches();
     this.datastores = new Map<string, Datastore>();
     this.collections = new Map<string, Collection<FrostpillarDocument>>();
@@ -160,7 +166,8 @@ export class Database {
         // collections on the key-index fast paths, where `_id: "01"` resolved to
         // the record stored under `"1"` (ADR-027).
         hasCustomKey:
-          resolvedOptions.key !== undefined || this.baseConfig.key !== undefined,
+          resolvedOptions.key !== undefined ||
+          this.baseConfig.key !== undefined,
         skipInsertValidation: this.baseConfig.skipPayloadValidation === true,
         payloadLimits: this.baseConfig.payloadLimits,
         caches: this.caches,

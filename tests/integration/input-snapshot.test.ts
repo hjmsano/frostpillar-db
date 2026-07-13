@@ -1,6 +1,6 @@
-// Spec 02 §12 / ADR-030: every caller-supplied input — insert payloads, update
-// operands, filters — is read exactly once, into a snapshot the collection owns,
-// and it is that snapshot which is validated, evaluated and stored.
+// Spec 02 §12 / ADR-030: insert payloads, update operations/options, and filters
+// are read into snapshots at their public boundaries, and those snapshots are
+// what validation, evaluation, and storage use.
 //
 // The hostile inputs below are fixtures for the time-of-check/time-of-use gap
 // this closes: an accessor property (or a Proxy) answers each read differently,
@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ValidationError } from '../../src/errors.js';
+import { snapshotFilter } from '../../src/internal/filterSnapshot.js';
 import { Database } from '../../src/index.js';
 
 interface Doc {
@@ -170,6 +171,177 @@ void test('update: a $rename destination getter cannot bypass the _createdAt gua
   await database.close();
 });
 
+void test('update: one getter snapshot is applied to every matched document', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({ _id: 'd1', score: 0 });
+    await collection.insert({ _id: 'd2', score: 0 });
+
+    let reads = 0;
+    const operations = {
+      $set: {
+        get score(): number {
+          reads += 1;
+          return reads === 1 ? 7 : 9;
+        },
+      },
+    };
+
+    const result = await collection.update({}, operations);
+    const stored = await collection.find().sort({ _id: 1 }).toArray();
+
+    assert.deepEqual(
+      {
+        reads,
+        modifiedCount: result.modifiedCount,
+        scores: stored.map((document) => document.score),
+      },
+      { reads: 1, modifiedCount: 2, scores: [7, 7] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update: mutating operations during the pending scan cannot change the result', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({ _id: 'd1', score: 0 });
+    await collection.insert({ _id: 'd2', score: 0 });
+
+    const operations = { $set: { score: 1 } };
+    const pending = collection.update({}, operations);
+    operations.$set.score = 9;
+    const result = await pending;
+    const stored = await collection.find().sort({ _id: 1 }).toArray();
+
+    assert.deepEqual(
+      {
+        modifiedCount: result.modifiedCount,
+        scores: stored.map((document) => document.score),
+      },
+      { modifiedCount: 2, scores: [1, 1] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update: mutating options during the pending scan cannot enable upsert', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    const options = { upsert: false };
+
+    const pending = collection.update(
+      { _id: 'missing' },
+      { $set: { score: 1 } },
+      options,
+    );
+    options.upsert = true;
+    const result = await pending;
+
+    assert.deepEqual(
+      { result, count: await collection.count() },
+      {
+        result: { modifiedCount: 0, upsertedId: null },
+        count: 0,
+      },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update: successful upsert reuses operations and options captured before the first await', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    let callReturned = false;
+    let operationReads = 0;
+    let optionReads = 0;
+    const operations = {
+      $set: {
+        get score(): number {
+          operationReads += 1;
+          return callReturned ? 9 : 1;
+        },
+      },
+    };
+    const options = {
+      get upsert(): boolean {
+        optionReads += 1;
+        return !callReturned;
+      },
+    };
+
+    const pending = collection.update({ _id: 'upserted' }, operations, options);
+    assert.deepEqual(
+      { operationReads, optionReads },
+      { operationReads: 1, optionReads: 1 },
+    );
+    callReturned = true;
+    const result = await pending;
+    const stored = await collection.findOne({ _id: 'upserted' });
+
+    assert.deepEqual(
+      { result, operationReads, optionReads, score: stored?.score },
+      {
+        result: { modifiedCount: 0, upsertedId: 'upserted' },
+        operationReads: 1,
+        optionReads: 1,
+        score: 1,
+      },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update: a $pull comparison getter is snapshotted before evaluation', async () => {
+  class PullOperand {
+    public kind = '';
+
+    public constructor(readKind: () => string) {
+      Object.defineProperty(this, 'kind', {
+        configurable: true,
+        enumerable: true,
+        get: readKind,
+      });
+    }
+  }
+
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({
+      _id: 'd1',
+      tags: [{ kind: 'drop' }, { kind: 'keep' }],
+    });
+
+    let reads = 0;
+    const operand = new PullOperand((): string => {
+      reads += 1;
+      return reads === 1 ? 'drop' : 'keep';
+    });
+
+    const result = await collection.update(
+      { _id: 'd1' },
+      { $pull: { tags: operand } },
+    );
+    const stored = await collection.findOne({ _id: 'd1' });
+
+    assert.deepEqual(
+      { reads, modifiedCount: result.modifiedCount, tags: stored?.tags },
+      { reads: 1, modifiedCount: 1, tags: [{ kind: 'keep' }] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
 // --- Filters ---------------------------------------------------------------
 
 void test('remove: an $and getter cannot widen the filter after it was validated', async () => {
@@ -216,6 +388,163 @@ void test('find: a filter getter cannot answer the evaluator differently per doc
   await database.close();
 });
 
+void test('find: a root Proxy cannot change its plain-object classification after entry', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({ _id: 'd1', name: 'drop' });
+    await collection.insert({ _id: 'd2', name: 'keep' });
+
+    let prototypeReads = 0;
+    let nameReads = 0;
+    const nonPlainPrototype = { marker: true };
+    const filter = new Proxy(
+      { name: 'unused' },
+      {
+        getPrototypeOf(_target: { name: string }): object | null {
+          prototypeReads += 1;
+          return prototypeReads === 1 ? Object.prototype : nonPlainPrototype;
+        },
+        get(target: { name: string }, property: string | symbol): unknown {
+          if (property === 'name') {
+            nameReads += 1;
+            return nameReads === 1 ? 'drop' : 'keep';
+          }
+          return Reflect.get(target, property);
+        },
+      },
+    );
+
+    const found = await collection.find(filter).toArray();
+
+    assert.deepEqual(
+      {
+        prototypeReads,
+        nameReads,
+        ids: found.map((document) => document._id),
+      },
+      { prototypeReads: 1, nameReads: 1, ids: ['d1'] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('find: a nested class-instance equality operand is captured recursively', async () => {
+  class ComparisonOperand {
+    public readonly details: Record<string, unknown>;
+
+    public constructor(readKind: () => string) {
+      this.details = {};
+      Object.defineProperty(this.details, 'kind', {
+        configurable: true,
+        enumerable: true,
+        get: readKind,
+      });
+    }
+  }
+
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({
+      _id: 'd1',
+      name: { details: { kind: 'drop' } },
+    });
+    await collection.insert({
+      _id: 'd2',
+      name: { details: { kind: 'keep' } },
+    });
+
+    let reads = 0;
+    const operand = new ComparisonOperand((): string => {
+      reads += 1;
+      return reads === 1 ? 'drop' : 'keep';
+    });
+    const found = await collection.find({ name: { $eq: operand } }).toArray();
+
+    assert.deepEqual(
+      { reads, ids: found.map((document) => document._id) },
+      { reads: 1, ids: ['d1'] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('find: a RegExp equality operand retains a detached enumerable shape', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({ _id: 'd1', name: { kind: 'drop' } });
+    await collection.insert({ _id: 'd2', name: { kind: 'keep' } });
+
+    let reads = 0;
+    const operand = /not-used-for-equality/;
+    Object.defineProperty(operand, 'kind', {
+      configurable: true,
+      enumerable: true,
+      get(): string {
+        reads += 1;
+        return reads === 1 ? 'drop' : 'keep';
+      },
+    });
+
+    const found = await collection.find({ name: { $eq: operand } }).toArray();
+
+    assert.deepEqual(
+      { reads, ids: found.map((document) => document._id) },
+      { reads: 1, ids: ['d1'] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+void test('find: RegExp source and flags are each captured once at entry', async () => {
+  const database = new Database();
+  try {
+    const collection = database.collection<Doc>('docs');
+    await collection.insert({ _id: 'd1', name: 'alpha' });
+    await collection.insert({ _id: 'd2', name: 'beta' });
+
+    const pattern = /^al/;
+    let source = '^al';
+    let flags = '';
+    let sourceReads = 0;
+    let flagsReads = 0;
+    Object.defineProperty(pattern, 'source', {
+      configurable: true,
+      get(): string {
+        sourceReads += 1;
+        return source;
+      },
+    });
+    Object.defineProperty(pattern, 'flags', {
+      configurable: true,
+      get(): string {
+        flagsReads += 1;
+        return flags;
+      },
+    });
+    const chain = collection.find({ name: { $regex: pattern } });
+    source = '^be';
+    flags = 'i';
+    const found = await chain.toArray();
+
+    assert.deepEqual(
+      {
+        sourceReads,
+        flagsReads,
+        ids: found.map((document) => document._id),
+      },
+      { sourceReads: 1, flagsReads: 1, ids: ['d1'] },
+    );
+  } finally {
+    await database.close();
+  }
+});
+
 void test('remove: mutating an _id $in operand during the await cannot widen the deletion', async () => {
   const database = new Database();
   const collection = database.collection<Doc>('docs');
@@ -250,6 +579,22 @@ void test('filter snapshot rejects a cyclic filter with ValidationError', async 
 
   await assert.rejects(() => collection.remove(filter), ValidationError);
   await database.close();
+});
+
+void test('filter snapshot detaches a Date comparison operand by timestamp', () => {
+  const operand = new Date(1_000);
+  const snapshot = snapshotFilter({ name: { $eq: operand } });
+  operand.setTime(2_000);
+  const condition = snapshot.name as Record<string, unknown>;
+  const captured = condition.$eq;
+
+  assert.deepEqual(
+    {
+      sameReference: captured === operand,
+      timestamp: captured instanceof Date ? captured.getTime() : null,
+    },
+    { sameReference: false, timestamp: 1_000 },
+  );
 });
 
 void test('filter snapshot preserves RegExp operands', async () => {

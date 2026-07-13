@@ -12,7 +12,11 @@ import { ValidationError } from '../../src/errors.js';
 import { createDatabaseCaches } from '../../src/internal/databaseCaches.js';
 import { countVariableWidthQuantifiers } from '../../src/internal/filterCache.js';
 import { matchesFilter } from '../../src/internal/filterEvaluator.js';
-import { MAX_REGEX_VARIABLE_QUANTIFIERS } from '../../src/internal/limits.js';
+import {
+  MAX_REGEX_ALTERNATION_GROUPS,
+  MAX_REGEX_QUANTIFIERS,
+  MAX_REGEX_VARIABLE_QUANTIFIERS,
+} from '../../src/internal/limits.js';
 
 const caches = createDatabaseCaches();
 
@@ -52,9 +56,9 @@ void test('countVariableWidthQuantifiers: escaped tokens and character-class con
   assert.equal(countVariableWidthQuantifiers('a\\?b\\*c[?*+]d'), 0);
 });
 
-void test('countVariableWidthQuantifiers: a lazy marker is itself a token (conservative over-count)', () => {
-  assert.equal(countVariableWidthQuantifiers('a*?'), 2);
-  assert.equal(countVariableWidthQuantifiers('a+?'), 2);
+void test('countVariableWidthQuantifiers: lazy markers modify their base quantifier without adding a token', () => {
+  assert.equal(countVariableWidthQuantifiers('a??b*?c+?'), 3);
+  assert.equal(countVariableWidthQuantifiers('a{1,}?b{1,2}?c{2}?d{2,2}?'), 2);
 });
 
 void test('countVariableWidthQuantifiers: counts the chain of optional wildcards', () => {
@@ -86,9 +90,9 @@ void test('$regex rejects a chain of {1,2}-bounded atoms — a minimum of one st
   // minimum-of-zero counter charged the pattern nothing — yet each atom still
   // takes one *or two* characters, and a failing match distributes those choices
   // 2^k ways (~5.2 ms per warmed non-match, multiplied by the scanned documents).
-  const document = { _id: 'u1', name: 'b'.repeat(40) };
+  const document = { _id: 'u1', name: 'a'.repeat(40) };
   const pattern =
-    '^' + '.{1,2}'.repeat(MAX_REGEX_VARIABLE_QUANTIFIERS + 1) + 'z$';
+    '^' + 'a{1,2}(?=a)'.repeat(MAX_REGEX_VARIABLE_QUANTIFIERS + 1) + 'b$';
 
   assert.throws(
     () => matchesFilter(document, { name: { $regex: pattern } }, caches),
@@ -145,6 +149,107 @@ void test('$regex accepts exactly MAX_REGEX_VARIABLE_QUANTIFIERS variable-width 
 
   assert.doesNotThrow(() =>
     matchesFilter(document, { name: { $regex: pattern } }, caches),
+  );
+});
+
+void test('$regex accepts exactly MAX_REGEX_VARIABLE_QUANTIFIERS lazy +? atoms', () => {
+  const document = {
+    _id: 'u1',
+    name: Array.from(
+      { length: MAX_REGEX_VARIABLE_QUANTIFIERS },
+      () => 'a',
+    ).join('-'),
+  };
+  const pattern = 'a+?-'.repeat(MAX_REGEX_VARIABLE_QUANTIFIERS).slice(0, -1);
+
+  assert.doesNotThrow(() =>
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+  );
+});
+
+void test('$regex rejects one lazy +? atom past MAX_REGEX_VARIABLE_QUANTIFIERS', () => {
+  const count = MAX_REGEX_VARIABLE_QUANTIFIERS + 1;
+  const document = {
+    _id: 'u1',
+    name: Array.from({ length: count }, () => 'a').join('-'),
+  };
+  const pattern = 'a+?-'.repeat(count).slice(0, -1);
+
+  assert.throws(
+    () => matchesFilter(document, { name: { $regex: pattern } }, caches),
+    ValidationError,
+  );
+});
+
+void test('$regex accepts exactly MAX_REGEX_QUANTIFIERS fixed lazy {1}? atoms', () => {
+  const document = { _id: 'u1', name: 'a'.repeat(MAX_REGEX_QUANTIFIERS) };
+  const pattern = 'a{1}?'.repeat(MAX_REGEX_QUANTIFIERS);
+
+  assert.doesNotThrow(() =>
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+  );
+});
+
+void test('$regex rejects one fixed lazy {1}? atom past MAX_REGEX_QUANTIFIERS', () => {
+  const count = MAX_REGEX_QUANTIFIERS + 1;
+  const document = { _id: 'u1', name: 'a'.repeat(count) };
+  const pattern = 'a{1}?'.repeat(count);
+
+  assert.throws(
+    () => matchesFilter(document, { name: { $regex: pattern } }, caches),
+    ValidationError,
+  );
+});
+
+void test('$regex v flag ignores quantifier punctuation inside a nested Unicode-set class', () => {
+  const document = { _id: 'u1', name: '+' };
+  const pattern = new RegExp(`[[a]${'+*?'.repeat(7)}]`, 'v');
+
+  assert.equal(
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+    true,
+  );
+});
+
+void test('$regex v flag ignores string-disjunction pipes in the alternation counter', () => {
+  const count = MAX_REGEX_ALTERNATION_GROUPS + 1;
+  const document = { _id: 'u1', name: 'x'.repeat(count) };
+  const atom = '([[a]\\q{x|y}])';
+  const pattern = new RegExp(atom.repeat(count), 'v');
+
+  assert.equal(
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+    true,
+  );
+});
+
+void test('$regex v flag ignores quantifier punctuation in the nested-quantifier scanner', () => {
+  const document = { _id: 'u1', name: 'x+y' };
+  const pattern = new RegExp('([[a]\\q{x+y}])+', 'v');
+
+  assert.equal(
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+    true,
+  );
+});
+
+void test('$regex v flag ignores string-disjunction pipes in the quantified-alternation scanner', () => {
+  const document = { _id: 'u1', name: 'x' };
+  const pattern = new RegExp('([[a]\\q{x|y}])+', 'v');
+
+  assert.equal(
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+    true,
+  );
+});
+
+void test('$regex v flag ignores quantifier punctuation in raw pattern detectors', () => {
+  const document = { _id: 'u1', name: 'x+x+' };
+  const pattern = new RegExp('[[a]\\q{x+x+}]', 'v');
+
+  assert.equal(
+    matchesFilter(document, { name: { $regex: pattern } }, caches),
+    true,
   );
 });
 

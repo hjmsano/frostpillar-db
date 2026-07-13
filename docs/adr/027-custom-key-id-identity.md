@@ -22,7 +22,7 @@ The last one is data loss from a filter that matches nothing.
 
 `_id` is the document's string identity, always; the key definition governs storage layout and ordering only. Never the reverse: a key hit is a *candidate*, not a match.
 
-Collections learn whether a custom key is configured (`CollectionContext.hasCustomKey`, set by `Database.collection()` from the resolved options), and each `_id` fast path is made key-definition-aware:
+Collections learn whether a custom key is configured through one effective key value: a resolved collection override when present, otherwise the shallow-snapshotted `DatabaseConfig.key`. `Database.collection()` passes that same captured value to the datastore and derives `CollectionContext.hasCustomKey` from it, so the storage configuration and `_id` fast-path decision cannot diverge. Each fast path is then key-definition-aware:
 
 - **`findOne`** skips the `getFirst` shortcut and falls through to the general path, which still reaches the record through the key index but confirms `_id` per document.
 - **`exists`** reads the record(s) at the key (`datastore.get`, which returns every record sharing it) and confirms the stored `_id`, instead of `datastore.has`.

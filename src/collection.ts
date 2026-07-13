@@ -12,7 +12,11 @@ import {
   validateInsertPayload,
   validatePayloadSecurity,
 } from './internal/payloadValidator.js';
-import { applyUpdateOperations } from './internal/updateApplier.js';
+import { applyNormalizedUpdateOperations } from './internal/updateApplier.js';
+import {
+  normalizeUpdateOperations,
+  type NormalizedOperations,
+} from './internal/updateValidator.js';
 import {
   assertNoDuplicateBatchIds,
   findPersistedBatchKeys,
@@ -27,7 +31,7 @@ import {
   removeNoTtlFastPath,
 } from './internal/collectionTtlUtils.js';
 import {
-  buildUpsertDocument,
+  buildUpsertDocumentFromNormalized,
   collectFilteredDocuments,
   createChainContext,
   findOneByIdOptimized,
@@ -310,7 +314,13 @@ export class Collection<
       'Collection.update',
       this.maxDepth,
     );
-    if (Object.keys(operations).length === 0)
+    const normalized = normalizeUpdateOperations(
+      operations,
+      this.protectCreatedAt,
+      this.maxDepth,
+    );
+    const upsert = options?.upsert === true;
+    if (normalized.inputKeyCount === 0)
       return { modifiedCount: 0, upsertedId: null };
 
     const records = await getRecordsByFilter(this.queryContext, owned);
@@ -322,12 +332,10 @@ export class Collection<
 
     let updated = 0;
     for (const { record, document } of matches) {
-      const result = applyUpdateOperations(
+      const result = applyNormalizedUpdateOperations(
         document,
-        operations,
+        normalized,
         this.context.caches.pathCache,
-        this.protectCreatedAt,
-        this.maxDepth,
       );
       if (!result.changed) continue;
       this.validateOwnedDocument(result.document);
@@ -346,22 +354,20 @@ export class Collection<
       updated += 1;
     }
 
-    if (matches.length > 0 || !options?.upsert) {
+    if (matches.length > 0 || !upsert) {
       return { modifiedCount: updated, upsertedId: null };
     }
-    return await this.performUpsert(owned, operations);
+    return await this.performUpsert(owned, normalized);
   }
 
   private async performUpsert(
     filter: Filter,
-    operations: UpdateOperations,
+    operations: NormalizedOperations,
   ): Promise<UpdateResult> {
-    const insertDoc = buildUpsertDocument<TDocument>(
+    const insertDoc = buildUpsertDocumentFromNormalized<TDocument>(
       filter,
       operations,
       this.context.caches.pathCache,
-      this.protectCreatedAt,
-      this.maxDepth,
     );
     const insertedId = await this.insert(insertDoc);
     return { modifiedCount: 0, upsertedId: insertedId };

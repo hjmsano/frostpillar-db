@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Database } from '../../src/index.js';
-import type { DatastoreKeyDefinition } from '../../src/index.js';
+import type {
+  DatabaseConfig,
+  DatastoreKeyDefinition,
+} from '../../src/index.js';
 
 interface TestDoc {
   _id?: string;
@@ -160,6 +163,60 @@ void test('database-level key: ids returns stored _id strings', async () => {
 
   assert.deepEqual(await col.ids(), ['01']);
   await db.close();
+});
+
+void test('database-level key accessor is read once for datastore and identity handling', async () => {
+  let keyReads = 0;
+  const config: DatabaseConfig = {
+    get key(): DatastoreKeyDefinition<unknown, unknown> | undefined {
+      keyReads += 1;
+      return keyReads === 1 ? numericKey : undefined;
+    },
+  };
+  const db = new Database(config);
+
+  try {
+    const col = db.collection<TestDoc>('items');
+    await col.insert({ _id: '01', value: 1 });
+
+    const collisionFind = await col.findOne({ _id: '1' });
+    const exactFind = await col.findOne({ _id: '01' });
+    const collisionExists = await col.exists('1');
+    const exactExists = await col.exists('01');
+    const ids = await col.ids();
+    const collisionRemoved = await col.remove({ _id: '1' });
+    const countAfterCollision = await col.count();
+    const exactRemoved = await col.remove({ _id: '01' });
+
+    assert.deepEqual(
+      {
+        keyReads,
+        collisionFind: collisionFind?._id ?? null,
+        exactFind: exactFind?._id ?? null,
+        collisionExists,
+        exactExists,
+        ids,
+        collisionRemoved,
+        countAfterCollision,
+        exactRemoved,
+        finalCount: await col.count(),
+      },
+      {
+        keyReads: 1,
+        collisionFind: null,
+        exactFind: '01',
+        collisionExists: false,
+        exactExists: true,
+        ids: ['01'],
+        collisionRemoved: 0,
+        countAfterCollision: 1,
+        exactRemoved: 1,
+        finalCount: 0,
+      },
+    );
+  } finally {
+    await db.close();
+  }
 });
 
 void test('default string keys keep the index fast paths intact', async () => {

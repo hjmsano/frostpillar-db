@@ -13,48 +13,50 @@ That reasoning holds only for objects whose properties are plain data. It is fal
 - an accessor property (`{ get score() { … } }`) returns whatever it likes, on every read;
 - a `Proxy` does the same through a `get` trap, and can also fake `getOwnPropertyDescriptor`, so screening for accessors does not help.
 
-Every input the library takes was read more than once, and each read went back to the caller's object:
+Several public inputs were read more than once, and each read went back to the caller's object:
 
 | Input | First read | Later reads |
 | --- | --- | --- |
+| `DatabaseConfig` | Constructor validation | Lazy datastore creation and `hasCustomKey` selection |
 | Insert payload | `validateInsertPayload` / `validatePayloadSecurity` | `cloneDocument` in `toInsertPayload` |
-| `$set` / `$push` / `$addToSet` value | `validateUpdateValue` | `cloneDocument` in `applySet` / `applyPush` |
-| `$rename` / `$inc` / `$unset` entry | `normalizeUpdateOperations` | `applyRename` / `applyInc` / `applyUnset` |
-| Filter | `validateFilter` | `matchesFilter`, once per candidate document |
+| Update operations and options | Entry-point checks | Normalization after an `await`, once per matched document and again for upsert |
+| Filter | Root/structural validation | `matchesFilter`, once per candidate document |
 | `_id: { $in: [...] }` operand | `extractIdInclusion` | `getMany`, then `deleteMany` — across an `await` |
 
-So the second read decided what was stored, evaluated, or deleted, while the first read was the only one that was checked. Demonstrated: a payload getter stored a `bigint` no validator ever saw; a `$rename` destination getter re-read as `_createdAt` and defeated the `immutableCreatedAt` guard; an `$and` getter validated as a narrow filter and evaluated as a match-anything one, removing documents the validated filter never matched; and an `_id: { $in: [...] }` array mutated during `remove()`'s `await` deleted an extra document — past the validated size cap and with no `watch()` event, because it was absent from the candidate read.
+So a later read could decide what was configured, stored, evaluated, or deleted even though an earlier read supplied the checked value. Demonstrated: an accessor-backed database `key` could configure the datastore with a custom normalizer but leave the collection on default-key fast paths; a payload getter stored a `bigint` no validator ever saw; update getters could change after the first `await` or between matched documents; an `$and` getter could validate as a narrow filter and evaluate as a match-anything one; and an `_id: { $in: [...] }` array mutated during `remove()`'s `await` deleted an extra document.
 
 The array case shows this is not only about getters: any caller-owned object still reachable from the library across an `await` is mutable behind its back.
 
 ## Decision
 
-**Every caller-supplied input is read exactly once, into a snapshot the collection owns. Validation and use both operate on that snapshot; the caller's object is never read again.**
+**Configuration and per-operation data inputs are materialized at their owning public boundary. Each covered property is read once into an owned snapshot, and validation and use operate on that snapshot.** This contract covers `DatabaseConfig`, insert payloads, update operations/options, and filters; it is not a promise that user callbacks such as driver factories or key-definition functions are invoked only once.
 
 The copy therefore moves *before* validation, inverting ADR-025's ordering — the copy is what makes the check meaningful, not the other way round.
 
-- **Insert payloads** — `materializePayload` (`payloadValidator.ts`) returns a detached deep copy built with one `Object.entries` read per object, and applies the security rules (reserved keys, cycles, `maxDepth`, plain-object, leaf types) to that single read. `validateInsertPayload` then walks the copy. `toInsertPayload` no longer copies: it is handed a graph the collection already owns.
-- **Update operands** — `normalizeUpdateOperations` returns fresh operator maps holding one read per entry, with `$set`/`$push`/`$addToSet` values deep-copied by `materializeUpdateValue` in the same pass that validates them. A `$pull` operand is only ever compared, never written, so it is carried by reference (which also keeps a `RegExp` operand intact for `deepEqual`).
-- **Filters** — `snapshotFilter` (`filterSnapshot.ts`) is applied at every `Collection` entry point (`find`, `findOne`, `count`, `update`, `remove`) before anything else touches the filter. `RegExp` operands are carried by reference (they are compiled once into a private copy by `getCachedRegex`); other non-plain objects are leaf comparison values that are never stored, so they too are carried by reference. Cycles and nesting past `maxDepth` throw `ValidationError` — a filter's operand values carry arbitrary caller structure, unlike the `$and`/`$or` nesting that `MAX_FILTER_NESTING_DEPTH` already caps.
+- **Database configuration** — the constructor takes a shallow snapshot of the configuration's top-level own enumerable fields. An accessor or `Proxy` trap supplies one authoritative value for each captured field; later mutation of the caller's top-level config object does not alter the database. Nested configuration objects and callback functions remain shallow references. At collection creation, the effective key is resolved once (collection override when present, otherwise the captured database key), and that same value determines both the datastore configuration and whether custom-key identity safeguards are enabled.
+- **Insert payloads** — `materializePayload` (`payloadValidator.ts`) returns a detached deep copy built with one `Object.entries` read per object and applies the always-on structural checks to that single read. `validateInsertPayload` then walks the copy. `toInsertPayload` is handed a graph the collection already owns.
+- **Update operations and options** — `Collection.update()` captures `options.upsert` and normalizes the complete operation object before its first `await`. The resulting operator maps are the single operation set applied to every matched document and, when needed, to the upsert document. `$set`/`$push`/`$addToSet` values and `$pull` comparison operands are detached during normalization; per-document copies are still made for values written into more than one stored document.
+- **Filters and comparison values** — `snapshotFilter` (`filterSnapshot.ts`) runs at every `Collection` entry point (`find`, `findOne`, `count`, `update`, `remove`) before validation, candidate lookup, or evaluation. The root must pass the plain-record requirement in the same materialization pass, so a `Proxy` cannot pass one root classification and later switch to another representation. Arrays are copied recursively; plain objects, class instances, and other object comparison values are represented by detached copies of their own enumerable shape; `Date` is copied by timestamp; and `RegExp` is copied from one read each of `source` and `flags` plus one recursive copy of each enumerable own property. Prototypes and object identity are not comparison semantics. Cycles and nesting past `maxDepth` throw `ValidationError`.
 - **`_id` `$in` fast path** — `extractIdInclusion` returns the validated ids in a new array, so `getMany` and `deleteMany` cannot see a different operand.
 
 Two supporting rules fall out of this:
 
-- **Non-storable leaf types are rejected on every path**, including under `skipPayloadValidation`: `bigint`, `function`, `symbol`, `undefined`. `function` and `symbol` are *reference* types that `cloneDocument` copies by reference, so accepting one stored an object the caller still owned — mutating it afterwards changed what later `find()` and `distinct()` calls returned. The reduced validator used to wave through every non-object leaf.
+- **Non-storable leaf types are rejected on every write path**, including under `skipPayloadValidation`: `bigint`, `function`, `symbol`, `undefined`. Functions are reference values that cannot be detached by `cloneDocument`; symbols are primitives, but neither functions nor symbols are supported document values. The reduced validator used to wave through every non-object leaf.
 - **`"__proto__"` is copied as an own data property** (`defineOwnProperty` in `objectUtils.ts`). A plain assignment would set the copy's prototype instead of adding a key, silently swallowing the reserved-key `ValidationError` the caller is owed.
 
 ## Consequences
 
 ### Positive
 
-- What was validated is what is stored, evaluated, and deleted. There is no second read for a getter or a `Proxy` to answer differently, and no caller-owned object left reachable across an `await`.
+- What was captured is what is configured, validated, stored, evaluated, and deleted. Covered input objects are not consulted again after their boundary snapshot.
 - The write path costs no more than before: it always took one deep copy of the payload, and that copy is now the validator's input rather than its output.
 - `skipPayloadValidation` remains a *size*-check escape hatch, not a memory-safety one: aliasing and non-JSON leaves are rejected there too.
 
 ### Negative
 
-- Reading a filter now costs one copy per query. Filters are small relative to the documents they are matched against, and the copy is taken once per call, not once per candidate document.
-- The `WeakMap` caches keyed on operand array identity (`inclusionSetCache`, `operandAllPrimitiveCache`; [ADR-015](./015-weakmap-inclusion-set-cache.md)) no longer hit across calls, because each call snapshots its own operand array. Within one call the operand is stable, so the `Set` is still built once per scan and reused across every candidate document — which is where the benefit was. `RegExp` operands are carried by reference and so keep their cross-call cache.
+- Reading a filter and normalizing an update now costs one detached snapshot per call. The copy is taken once, not once per candidate or matched document.
+- Identity-keyed `WeakMap` caches for array operands and `RegExp` operands no longer hit across separate calls, because each call owns new array and regular-expression objects. Within a scan, all candidate documents share the same snapshot, so inclusion sets and compiled regular expressions are still built once and reused for that scan. This intentionally partially supersedes [ADR-015](./015-weakmap-inclusion-set-cache.md).
+- Database configuration is shallow-snapshotted. Mutating a nested configuration object that was captured by reference remains outside this decision.
 - A filter whose operand nests deeper than `maxDepth` is now a `ValidationError` rather than a non-match.
 
 ### Rejected alternatives

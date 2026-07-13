@@ -19,7 +19,11 @@ import {
   toStoredDocument,
 } from './collectionUtils.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
-import { applyUpdateOperations } from './updateApplier.js';
+import { applyNormalizedUpdateOperations } from './updateApplier.js';
+import {
+  normalizeUpdateOperations,
+  type NormalizedOperations,
+} from './updateValidator.js';
 import type { DatabaseCaches } from './databaseCaches.js';
 import type { ResultChainContext } from '../resultChain.js';
 import type {
@@ -219,6 +223,26 @@ export const createChainContext = <TDocument extends FrostpillarDocument>(
   };
 };
 
+export const buildUpsertDocumentFromNormalized = <
+  TDocument extends FrostpillarDocument,
+>(
+  filter: Filter,
+  operations: NormalizedOperations,
+  pathCache: Map<string, string[]>,
+): InsertDocument<TDocument> => {
+  const baseDoc = extractEqualityFields(filter, pathCache);
+  if (typeof baseDoc._id !== 'string' || baseDoc._id.length === 0) {
+    baseDoc._id = crypto.randomUUID();
+  }
+  const storedBase = baseDoc as FrostpillarStoredDocument<TDocument>;
+  const result = applyNormalizedUpdateOperations(
+    storedBase,
+    operations,
+    pathCache,
+  );
+  return result.document as InsertDocument<TDocument>;
+};
+
 export const buildUpsertDocument = <TDocument extends FrostpillarDocument>(
   filter: Filter,
   operations: UpdateOperations,
@@ -226,17 +250,14 @@ export const buildUpsertDocument = <TDocument extends FrostpillarDocument>(
   protectCreatedAt = false,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): InsertDocument<TDocument> => {
-  const baseDoc = extractEqualityFields(filter, pathCache);
-  if (typeof baseDoc._id !== 'string' || baseDoc._id.length === 0) {
-    baseDoc._id = crypto.randomUUID();
-  }
-  const storedBase = baseDoc as FrostpillarStoredDocument<TDocument>;
-  const result = applyUpdateOperations(
-    storedBase,
+  const normalized = normalizeUpdateOperations(
     operations,
-    pathCache,
     protectCreatedAt,
     maxDepth,
   );
-  return result.document as InsertDocument<TDocument>;
+  return buildUpsertDocumentFromNormalized<TDocument>(
+    filter,
+    normalized,
+    pathCache,
+  );
 };

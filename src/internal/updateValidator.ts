@@ -1,6 +1,7 @@
 import { ValidationError } from '../errors.js';
 import type { UpdateOperations } from '../types.js';
 import { validateFieldPath } from './documentPath.js';
+import { snapshotComparisonValue } from './filterSnapshot.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
 import {
   defineOwnProperty,
@@ -21,6 +22,7 @@ const UPDATE_OPERATORS = new Set([
 ]);
 
 export interface NormalizedOperations {
+  inputKeyCount: number;
   set: Record<string, unknown>;
   unset: Record<string, unknown>;
   inc: Record<string, unknown>;
@@ -28,6 +30,11 @@ export interface NormalizedOperations {
   push: Record<string, unknown>;
   pull: Record<string, unknown>;
   addToSet: Record<string, unknown>;
+}
+
+interface UpdateOperationsSnapshot {
+  readonly operations: UpdateOperations;
+  readonly inputKeyCount: number;
 }
 
 export const assertOperatorObject = (
@@ -39,6 +46,34 @@ export const assertOperatorObject = (
   }
 
   return value;
+};
+
+const snapshotUpdateOperations = (
+  operations: UpdateOperations,
+): UpdateOperationsSnapshot => {
+  const copy: Record<string, unknown> = {};
+  let inputKeyCount = 0;
+  for (const [operator, value] of Object.entries(operations)) {
+    defineOwnProperty(copy, operator, value);
+    inputKeyCount += 1;
+  }
+  return {
+    operations: copy as UpdateOperations,
+    inputKeyCount,
+  };
+};
+
+const snapshotOperatorMap = (
+  operator: string,
+  value: unknown,
+): Record<string, unknown> => {
+  if (value === undefined) return {};
+  const source = assertOperatorObject(operator, value);
+  const copy: Record<string, unknown> = {};
+  for (const [field, operand] of Object.entries(source)) {
+    defineOwnProperty(copy, field, operand);
+  }
+  return copy;
 };
 
 /**
@@ -160,7 +195,9 @@ export const materializeUpdateValue = (
     activePath.add(value);
     const copy: unknown[] = [];
     for (const element of value) {
-      copy.push(materializeUpdateValue(element, activePath, depth + 1, maxDepth));
+      copy.push(
+        materializeUpdateValue(element, activePath, depth + 1, maxDepth),
+      );
     }
     activePath.delete(value);
     return copy;
@@ -242,22 +279,10 @@ const extractAndValidateFieldOps = (
   protectCreatedAt: boolean,
   maxDepth: number,
 ): Pick<NormalizedOperations, 'set' | 'unset' | 'inc' | 'rename'> => {
-  const rawSet =
-    operations.$set === undefined
-      ? {}
-      : assertOperatorObject('$set', operations.$set);
-  const rawUnset =
-    operations.$unset === undefined
-      ? {}
-      : assertOperatorObject('$unset', operations.$unset);
-  const rawInc =
-    operations.$inc === undefined
-      ? {}
-      : assertOperatorObject('$inc', operations.$inc);
-  const rawRename =
-    operations.$rename === undefined
-      ? {}
-      : assertOperatorObject('$rename', operations.$rename);
+  const rawSet = snapshotOperatorMap('$set', operations.$set);
+  const rawUnset = snapshotOperatorMap('$unset', operations.$unset);
+  const rawInc = snapshotOperatorMap('$inc', operations.$inc);
+  const rawRename = snapshotOperatorMap('$rename', operations.$rename);
 
   const set: Record<string, unknown> = {};
   const unset: Record<string, unknown> = {};
@@ -302,18 +327,9 @@ const extractAndValidateArrayOps = (
   protectCreatedAt: boolean,
   maxDepth: number,
 ): Pick<NormalizedOperations, 'push' | 'pull' | 'addToSet'> => {
-  const rawPush =
-    operations.$push === undefined
-      ? {}
-      : assertOperatorObject('$push', operations.$push);
-  const rawPull =
-    operations.$pull === undefined
-      ? {}
-      : assertOperatorObject('$pull', operations.$pull);
-  const rawAddToSet =
-    operations.$addToSet === undefined
-      ? {}
-      : assertOperatorObject('$addToSet', operations.$addToSet);
+  const rawPush = snapshotOperatorMap('$push', operations.$push);
+  const rawPull = snapshotOperatorMap('$pull', operations.$pull);
+  const rawAddToSet = snapshotOperatorMap('$addToSet', operations.$addToSet);
 
   const push: Record<string, unknown> = {};
   const pull: Record<string, unknown> = {};
@@ -328,13 +344,12 @@ const extractAndValidateArrayOps = (
       materializeUpdateValue(value, updateValueActivePath, 2, maxDepth),
     );
   }
-  // A `$pull` operand is only ever *compared* against stored elements, never
-  // written, so it is carried by reference rather than deep-copied — that also
-  // keeps a `RegExp` or class instance intact for `deepEqual`. The map itself is
-  // still a copy, so `applyPull` reads the same entries this pass read.
+  // A `$pull` operand is only compared against stored elements. Detach it using
+  // the same structural semantics as filter comparison values so accessors and
+  // later caller mutations cannot change what subsequent documents observe.
   for (const [field, value] of Object.entries(rawPull)) {
     assertUpdatablePath('$pull', field, protectCreatedAt);
-    defineOwnProperty(pull, field, value);
+    defineOwnProperty(pull, field, snapshotComparisonValue(value, maxDepth, 2));
   }
   for (const [field, value] of Object.entries(rawAddToSet)) {
     assertUpdatablePath('$addToSet', field, protectCreatedAt);
@@ -353,16 +368,22 @@ export const normalizeUpdateOperations = (
   protectCreatedAt = false,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): NormalizedOperations => {
-  assertValidOperatorKeys(operations);
+  const snapshot = snapshotUpdateOperations(operations);
+  const owned = snapshot.operations;
+  assertValidOperatorKeys(owned);
   const fieldOps = extractAndValidateFieldOps(
-    operations,
+    owned,
     protectCreatedAt,
     maxDepth,
   );
   const arrayOps = extractAndValidateArrayOps(
-    operations,
+    owned,
     protectCreatedAt,
     maxDepth,
   );
-  return { ...fieldOps, ...arrayOps };
+  return {
+    inputKeyCount: snapshot.inputKeyCount,
+    ...fieldOps,
+    ...arrayOps,
+  };
 };

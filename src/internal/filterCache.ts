@@ -40,6 +40,68 @@ const CATASTROPHIC_PATTERNS: RegExp[] = [
   /([A-Za-z0-9])(?:[+*]|\{\d+,\d*\})\??\1(?:[+*]|\{\d+,\d*\})\??/,
 ];
 
+const consumeLazySuffix = (
+  pattern: string,
+  quantifierEndIndex: number,
+): number =>
+  pattern[quantifierEndIndex + 1] === '?'
+    ? quantifierEndIndex + 1
+    : quantifierEndIndex;
+
+/**
+ * Replace the contents of each `v`-flag Unicode-set character class with
+ * inert spaces while preserving its outer `[` / `]` boundary. Structural
+ * scanners can then ignore nested set syntax without losing the surrounding
+ * class atom or any quantifier applied after it.
+ */
+const maskUnicodeSetClassContents = (pattern: string): string => {
+  let classDepth = 0;
+  let escaped = false;
+  let masked = '';
+
+  for (const ch of pattern) {
+    if (classDepth === 0) {
+      masked += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '[') {
+        classDepth = 1;
+      }
+      continue;
+    }
+
+    if (escaped) {
+      masked += ' ';
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      masked += ' ';
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '[') {
+      masked += ' ';
+      classDepth += 1;
+      continue;
+    }
+
+    if (ch === ']') {
+      classDepth -= 1;
+      masked += classDepth === 0 ? ']' : ' ';
+      continue;
+    }
+
+    masked += ' ';
+  }
+
+  return masked;
+};
+
 /**
  * Count unescaped quantifier tokens in a regex pattern string.
  * Tokens inside character classes `[...]` are excluded.
@@ -97,6 +159,7 @@ const countQuantifiers = (pattern: string): number => {
 
     if (ch === '*' || ch === '+') {
       count++;
+      i = consumeLazySuffix(pattern, i);
       afterOpenParen = false;
       continue;
     }
@@ -105,6 +168,7 @@ const countQuantifiers = (pattern: string): number => {
       if (!afterOpenParen) {
         // Real quantifier — not part of group syntax.
         count++;
+        i = consumeLazySuffix(pattern, i);
       }
       // If afterOpenParen was true, this '?' is a group-syntax prefix
       // ((?:, (?=, (?!, (?<=, (?<!, (?<name>) and must not be counted.
@@ -120,6 +184,7 @@ const countQuantifiers = (pattern: string): number => {
         // Advance past the closing '}'.
         const closeIdx = rest.indexOf('}');
         i += closeIdx + 1;
+        i = consumeLazySuffix(pattern, i);
       }
       afterOpenParen = false;
       continue;
@@ -274,14 +339,11 @@ const quantifierIsVariableWidth = (bound: string): boolean => {
  * consumes the same width and therefore prunes no branch, so it does not make
  * the chain safe.
  *
- * Deliberately conservative in one spot: the lazy marker of `*?` / `+?` /
- * `{n,m}?` is itself a `?` token and is counted a second time. It over-counts
- * harmlessly.
- *
- * Scanning conventions mirror `countQuantifiers` above: tokens inside `[...]`
- * are ignored, escaped tokens (`\?`, `\*`) do not count, and a `?` immediately
- * after an unescaped `(` is group syntax (`(?:`, `(?=`, `(?<name>`), not a
- * quantifier.
+ * A lazy `?` suffix modifies the preceding base quantifier and is not counted a
+ * second time. Scanning ignores escaped tokens and quantifier-looking content
+ * inside character classes; for a `v`-flag pattern that includes nested
+ * Unicode-set class contents. A `?` immediately after an unescaped `(` is group
+ * syntax (`(?:`, `(?=`, `(?<name>`), not a quantifier.
  */
 export const countVariableWidthQuantifiers = (pattern: string): number => {
   let count = 0;
@@ -324,6 +386,7 @@ export const countVariableWidthQuantifiers = (pattern: string): number => {
 
     if (ch === '*' || ch === '+') {
       count += 1;
+      i = consumeLazySuffix(pattern, i);
       afterOpenParen = false;
       continue;
     }
@@ -332,6 +395,7 @@ export const countVariableWidthQuantifiers = (pattern: string): number => {
       if (!afterOpenParen) {
         // Real quantifier — not a group-syntax prefix.
         count += 1;
+        i = consumeLazySuffix(pattern, i);
       }
       afterOpenParen = false;
       continue;
@@ -347,6 +411,7 @@ export const countVariableWidthQuantifiers = (pattern: string): number => {
         }
         // Advance past the closing '}'.
         i += match[0].length;
+        i = consumeLazySuffix(pattern, i);
       }
       afterOpenParen = false;
       continue;
@@ -673,45 +738,51 @@ export const hasNestedQuantifier = (pattern: string): boolean => {
   return false;
 };
 
-const assertSafeRegexPattern = (pattern: string): void => {
+const assertSafeRegexPattern = (pattern: string, flags = ''): void => {
   if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
     throw new ValidationError(
       `$regex pattern exceeds maximum length of ${String(MAX_REGEX_PATTERN_LENGTH)} characters.`,
     );
   }
 
-  if (countQuantifiers(pattern) > MAX_REGEX_QUANTIFIERS) {
+  const scanPattern = flags.includes('v')
+    ? maskUnicodeSetClassContents(pattern)
+    : pattern;
+
+  if (countQuantifiers(scanPattern) > MAX_REGEX_QUANTIFIERS) {
     throw new ValidationError(
       `$regex pattern exceeds the maximum of ${String(MAX_REGEX_QUANTIFIERS)} quantifiers.`,
     );
   }
 
-  if (countVariableWidthQuantifiers(pattern) > MAX_REGEX_VARIABLE_QUANTIFIERS) {
+  if (
+    countVariableWidthQuantifiers(scanPattern) > MAX_REGEX_VARIABLE_QUANTIFIERS
+  ) {
     throw new ValidationError(
       `$regex pattern exceeds the maximum of ${String(MAX_REGEX_VARIABLE_QUANTIFIERS)} variable-width quantifiers (a chain of atoms whose width the engine can choose risks exponential backtracking).`,
     );
   }
 
-  if (countAlternationGroups(pattern) > MAX_REGEX_ALTERNATION_GROUPS) {
+  if (countAlternationGroups(scanPattern) > MAX_REGEX_ALTERNATION_GROUPS) {
     throw new ValidationError(
       `$regex pattern exceeds the maximum of ${String(MAX_REGEX_ALTERNATION_GROUPS)} alternation groups.`,
     );
   }
 
-  if (hasNestedQuantifier(pattern)) {
+  if (hasNestedQuantifier(scanPattern)) {
     throw new ValidationError(
       '$regex pattern contains a nested quantifier (a quantified group whose content is itself quantified), which risks catastrophic backtracking.',
     );
   }
 
-  if (hasQuantifiedAlternationGroup(pattern)) {
+  if (hasQuantifiedAlternationGroup(scanPattern)) {
     throw new ValidationError(
       '$regex pattern contains a repeated alternation group (an alternation group followed by a repeating quantifier), which risks catastrophic backtracking.',
     );
   }
 
   for (const detector of CATASTROPHIC_PATTERNS) {
-    if (detector.test(pattern)) {
+    if (detector.test(scanPattern)) {
       throw new ValidationError(
         '$regex pattern is rejected: potential catastrophic backtracking detected.',
       );
@@ -749,7 +820,7 @@ export const getCachedRegex = (
     // prototype getter could otherwise screen one pattern and compile another.
     const source = operand.source;
     const flags = operand.flags;
-    assertSafeRegexPattern(source);
+    assertSafeRegexPattern(source, flags);
     const safeFlags = flags.replace(/[gy]/g, '');
     const safe = new RegExp(source, safeFlags);
     regexCache.set(operand, safe);
@@ -784,10 +855,10 @@ export const getCachedRegex = (
  *
  * WeakMap semantics:
  * - Key is the array object reference, not its contents.
- * - Per-request filters (fresh array each call) are eligible for GC as soon as
- *   the caller drops the filter; no manual eviction required.
- * - Long-held filter objects (e.g. module-level constants) persist for their
- *   natural lifetime, which is the intended optimisation.
+ * - Public collection calls key this cache by their detached snapshot array,
+ *   not the caller's array (ADR-030).
+ * - Every candidate in one scan shares that key, so the Set is built once per
+ *   scan. Separate calls intentionally receive separate identities.
  *
  * Benchmarked in scripts/benchmarks/scenarios/filter-in-cache.bench.ts:
  *   N=10,000  per-request filters → delta after forced GC: +0.15 MB (bounded)
@@ -797,11 +868,8 @@ export const getCachedRegex = (
  * Conclusion: memory growth is effectively zero after GC; no LRU replacement needed.
  * See docs/adr/015-weakmap-inclusion-set-cache.md for full rationale.
  *
- * Mutation safety: the cached entry stores the operand length alongside the Set.
- * If `operand.length` differs from the stored length, the entry is rebuilt (O(1)
- * check). This fixes the foot-gun of push/pop/splice on a reused operand array
- * between queries. A same-length in-place element replacement is NOT detected;
- * operands should still be treated as effectively immutable.
+ * The cached entry retains a length consistency check. Public callers cannot
+ * mutate the owned snapshot through their original operand array.
  */
 export const inclusionSetCache = new WeakMap<
   unknown[],
@@ -814,14 +882,9 @@ export const inclusionSetCache = new WeakMap<
  * The operand is invariant across all documents in a scan, so the `allPrimitive`
  * check can be computed once per unique operand array reference and reused.
  *
- * Same WeakMap semantics as `inclusionSetCache`: keys are held weakly, so
- * per-request filter arrays are eligible for GC as soon as the caller drops them;
- * no manual eviction required.
- *
- * Mutation safety: the cached entry stores the operand length alongside the
- * boolean result. If `operand.length` differs from the stored length, the entry
- * is rebuilt. A same-length in-place element replacement is NOT detected; treat
- * operands as effectively immutable.
+ * Same WeakMap semantics as `inclusionSetCache`: the internal snapshot key is
+ * held weakly, reused throughout one scan, and intentionally not reused across
+ * separate collection calls. The cached length remains a consistency check.
  */
 export const operandAllPrimitiveCache = new WeakMap<
   unknown[],

@@ -62,7 +62,8 @@ const runPhase = async (
     // Build a fresh array each iteration — simulates per-request $in filter.
     const ids = makeIds(IDS_PER_FILTER);
     await col.find({ _id: { $in: ids } }).toArray();
-    // `ids` goes out of scope here; WeakMap entry becomes eligible for GC.
+    // The call-owned snapshot goes out of scope here; its WeakMap entry becomes
+    // eligible for GC. `ids` itself is not the cache key (ADR-030).
   }
 
   const afterIterMB = heapMB();
