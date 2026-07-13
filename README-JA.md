@@ -909,18 +909,22 @@ for await (const user of users
 
 frostpillar-db はすべての永続化を frostpillar-storage-engine に委譲します。`Database` コンストラクタにドライバーを渡してください。
 
-各コレクションは専用のデータストアで管理されるため、永続化するコレクションごとに独立した物理名前空間（ファイルパス、キープレフィックス、IndexedDB データベースなど）が必要です。コレクション名を受け取ってドライバーを返す**ドライバーファクトリ**を渡すことで、コレクションごとに分離された名前空間を割り当てられます。
+各コレクションは専用のデータストアで管理されるため、永続化するコレクションごとに独立した物理名前空間（ファイルパス、キープレフィックス、IndexedDB データベースなど）が必要です。コレクション名を受け取ってドライバーを返す**ドライバーファクトリ**を渡すことで、コレクションごとに分離された名前空間を割り当てられます。名前空間の断片は生のコレクション名からではなく、必ず **`collectionNamespace(name)`** で導出してください（下の警告を参照）。
 
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from '@frostpillar/frostpillar-db';
+import { Database, collectionNamespace } from '@frostpillar/frostpillar-db';
 import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
   driver: (name) =>
     fileDriver({
-      target: { kind: 'directory', directory: './data', fileName: name },
+      target: {
+        kind: 'directory',
+        directory: './data',
+        fileName: collectionNamespace(name),
+      },
     }),
   autoCommit: { frequency: '5s', maxPendingBytes: 1024 * 1024 },
 });
@@ -929,18 +933,24 @@ const db = new Database({
 **ブラウザ:**
 
 ```js
-const { Database, indexedDBDriver } = window.FrostpillarDB;
+const { Database, collectionNamespace, indexedDBDriver } = window.FrostpillarDB;
 
 const db = new Database({
   driver: (name) =>
     indexedDBDriver({
-      databaseName: `my-app-${name}`,
+      // スナップショットは*データベース*単位で保存されます。オブジェクトストアでは
+      // 分離できないため、コレクションごとに databaseName を分けてください。
+      databaseName: `my-app-${collectionNamespace(name)}`,
       objectStoreName: 'records',
       version: 1,
     }),
   autoCommit: { frequency: '5s' },
 });
 ```
+
+> **警告 — 名前空間の断片は `collectionNamespace()` で導出してください（[ADR-029](docs/adr/029-driver-namespace-derivation.md)）。** コレクション名には `.` を含められますが、これは各ドライバーがキー空間を組み立てる際の区切り文字でもあります。ファイルバックエンドは `<fileName>.fpdb.g.<generation>` というデータファイルを書き込み、オープン時に `<fileName>.fpdb.g.` で始まるファイル（自身のアクティブな世代を除く）をすべて削除します。そのため生の名前を使うと、いずれも正当な名前である `foo` と `foo.fpdb.g.0` が衝突し、`foo` を開いた時点でもう一方のデータファイルが**削除**され、そのコレクションは空の状態で復帰します。`collectionNamespace()` はドットをパーセントエスケープし（`orders.2026` → `orders%2E2026`）、他のコレクションの断片がプレフィックスになり得ない断片を生成します。ファクトリが導出するすべての断片（`fileName`、`databaseKey`、`databaseName`、`directoryName`、`keyPrefix`）に使用してください。
+
+> **警告 — IndexedDB を分離するのは `databaseName` であり、オブジェクトストアではありません。** frostpillar-storage-engine はデータストアのスナップショットを固定の場所（`_meta` オブジェクトストアのキー `config`）に保存しますが、これは*データベース*単位であり、スナップショットのロード・コミット時に `objectStoreName` は無視されます。1 つの `databaseName` の中で `objectStoreName` だけを変えるファクトリでは、すべてのコレクションが同一のスナップショット領域を共有し、コミットのたびに直前のコレクションのデータが上書きされます。上の例のように、必ずコレクションごとに `databaseName` を分けてください。
 
 単一のドライバーインスタンス（例: `driver: fileDriver({ filePath: './data/myapp.fpdb' })`）は、コレクションが **1 つだけ**のデータベースで引き続き使用できます。1 つのドライバーインスタンスは 1 つの物理名前空間に対応するため、この形式で 2 つ目のコレクションを作成すると `ConfigurationError` がスローされます。その場合はファクトリ形式に切り替えてください。
 
@@ -1144,6 +1154,12 @@ try {
 | `commit()`                   | `Promise<void>`     | 永続ストレージへのフラッシュ         |
 | `close()`                    | `Promise<void>`     | リソースの解放                       |
 | `on('error', listener)`      | `() => void`        | 非同期エラーの監視                   |
+
+### ヘルパー
+
+| 関数                        | 戻り値   | 説明                                                                                                                                         |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionNamespace(name)` | `string` | コレクション名を、衝突しないドライバーファクトリ用の名前空間断片へエンコードします（[ADR-029](docs/adr/029-driver-namespace-derivation.md)） |
 
 ### Collection
 

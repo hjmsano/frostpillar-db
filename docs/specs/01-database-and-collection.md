@@ -274,22 +274,48 @@ interface DatabaseConfig {
 }
 ```
 
-- **`DatabaseDriverFactory` (recommended for durable storage):** called once per collection when its `Datastore` is created lazily by `collection()`. The factory derives a per-collection namespace from the collection name:
+- **`DatabaseDriverFactory` (recommended for durable storage):** called once per collection when its `Datastore` is created lazily by `collection()`. The factory derives a per-collection namespace from the collection name, which **must be encoded with `collectionNamespace()`** (§1.7):
 
   ```ts
+  import { collectionNamespace } from '@frostpillar/frostpillar-db';
+
   const db = new Database({
     driver: (name) =>
       fileDriver({
         target: {
           kind: 'directory',
           directory: './data',
-          fileName: `${name}.fpdb`,
+          fileName: collectionNamespace(name),
         },
       }),
   });
   ```
 
-  Collection names are validated by `collection()` before the factory is invoked (letters, digits, `_`, `.`, `-`; no leading `_`; no `..`), so they are safe to embed in file names and storage keys.
+  Collection names are validated by `collection()` before the factory is invoked (letters, digits, `_`, `.`, `-`; no leading `_`; no `..`), so they are safe to _place_ in file names and storage keys — but a raw name is **not** safe to use as a namespace fragment, because a dot lets one collection's name sit inside another's derived key space. See §1.7.
+
+### 1.7 Namespace Derivation (`collectionNamespace`)
+
+```ts
+collectionNamespace(name: string): string;
+```
+
+Encodes a collection name into a namespace fragment that no other collection's fragment can collide with. Every character outside `[A-Za-z0-9_-]` is percent-escaped (`%XX`, uppercase hex), so for a valid collection name only `.` is rewritten: `orders.2026` → `orders%2E2026`. The name is validated first; an invalid one throws `ValidationError`.
+
+Two properties make the result safe as a namespace fragment:
+
+- **Injective.** `%` cannot occur in a valid collection name, so it is available as an escape character and distinct names always encode to distinct fragments.
+- **Delimiter-free.** The encoded fragment contains no `.`, the delimiter every driver uses to build its own key space, so no collection's fragment can be a _delimited prefix_ of another's.
+
+The second property is the one that matters. The file backend derives its data files as `<fileName>.fpdb.g.<generation>` and, on open, **deletes every file in the directory beginning with `<fileName>.fpdb.g.`** other than its own active generation. With raw names, the collections `foo` and `foo.fpdb.g.0` — both valid — produce base names `foo.fpdb` and `foo.fpdb.g.0.fpdb`; the second collection's data file `foo.fpdb.g.0.fpdb.g.0` begins with `foo.fpdb.g.`, so opening `foo` **deletes it**, and `foo.fpdb.g.0` reopens empty. Encoding the fragment removes the dot and with it the collision: `foo` and `foo%2Efpdb%2Eg%2E0` share no delimited prefix.
+
+The same helper should be used for every namespace fragment a factory derives (`fileName`, `databaseKey`, `databaseName`, `directoryName`, `keyPrefix`), so the choice does not have to be re-audited per driver.
+
+**IndexedDB — a distinct `databaseName` is required.** The snapshot of an IndexedDB-backed datastore is stored at a fixed location (`_meta` object store, key `config`) that is **per database, not per object store**: the storage engine's load and commit paths ignore `objectStoreName`. A factory that varies only `objectStoreName` within one `databaseName` therefore gives every collection the same snapshot slot, and each commit overwrites the previous collection's data — the exact last-writer-wins loss the factory exists to prevent. Vary `databaseName` per collection:
+
+```ts
+driver: (name) =>
+  indexedDBDriver({ databaseName: `my-app-${collectionNamespace(name)}` });
+```
 
 - **Plain `DatastoreDriver`:** supported for single-collection databases. Creating a **second** collection while another driver-backed collection exists throws `ConfigurationError`, because sharing one driver instance across collections would target the same lock/file (`DatabaseLockedError` on the file driver) or silently overwrite snapshots (last-writer-wins data loss on browser drivers). After `dropCollection()` closes the only driver-backed collection, a new collection may reuse the plain driver.
 

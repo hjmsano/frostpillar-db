@@ -909,18 +909,22 @@ for await (const user of users
 
 frostpillar-db delegates all persistence to frostpillar-storage-engine. Pass a driver to the `Database` constructor.
 
-Each collection is backed by its own datastore, so each durable collection needs its own physical namespace (file path, key prefix, IndexedDB database, etc.). Pass a **driver factory** — a function that receives the collection name and returns a driver — so every collection gets an isolated namespace:
+Each collection is backed by its own datastore, so each durable collection needs its own physical namespace (file path, key prefix, IndexedDB database, etc.). Pass a **driver factory** — a function that receives the collection name and returns a driver — so every collection gets an isolated namespace. Derive the namespace fragment with **`collectionNamespace(name)`**, never from the raw name (see the warning below):
 
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from '@frostpillar/frostpillar-db';
+import { Database, collectionNamespace } from '@frostpillar/frostpillar-db';
 import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
   driver: (name) =>
     fileDriver({
-      target: { kind: 'directory', directory: './data', fileName: name },
+      target: {
+        kind: 'directory',
+        directory: './data',
+        fileName: collectionNamespace(name),
+      },
     }),
   autoCommit: { frequency: '5s', maxPendingBytes: 1024 * 1024 },
 });
@@ -929,18 +933,24 @@ const db = new Database({
 **Browser:**
 
 ```js
-const { Database, indexedDBDriver } = window.FrostpillarDB;
+const { Database, collectionNamespace, indexedDBDriver } = window.FrostpillarDB;
 
 const db = new Database({
   driver: (name) =>
     indexedDBDriver({
-      databaseName: `my-app-${name}`,
+      // The snapshot lives per *database*, so each collection needs its own
+      // databaseName — an object store does not isolate it.
+      databaseName: `my-app-${collectionNamespace(name)}`,
       objectStoreName: 'records',
       version: 1,
     }),
   autoCommit: { frequency: '5s' },
 });
 ```
+
+> **Warning — derive namespace fragments with `collectionNamespace()` ([ADR-029](docs/adr/029-driver-namespace-derivation.md)).** A collection name may contain `.`, which is also the delimiter the drivers use to build their key spaces. The file backend writes `<fileName>.fpdb.g.<generation>` and, on open, deletes every file starting with `<fileName>.fpdb.g.` that is not its own active generation — so with raw names the collections `foo` and `foo.fpdb.g.0` (both legal) collide: opening `foo` **deletes** the other collection's data file, and it reopens empty. `collectionNamespace()` percent-escapes the dots (`orders.2026` → `orders%2E2026`), producing a fragment that no other collection's fragment can prefix. Use it for every fragment a factory derives: `fileName`, `databaseKey`, `databaseName`, `directoryName`, `keyPrefix`.
+
+> **Warning — IndexedDB isolates by `databaseName`, not by object store.** frostpillar-storage-engine keeps a datastore's snapshot in a fixed slot (`_meta` object store, key `config`) that is per _database_; `objectStoreName` is ignored when the snapshot is loaded and committed. A factory that varies only `objectStoreName` inside one `databaseName` gives every collection the same snapshot slot, and each commit overwrites the previous collection's data. Always vary `databaseName` per collection, as above.
 
 A plain driver instance (e.g. `driver: fileDriver({ filePath: './data/myapp.fpdb' })`) is still supported for databases with a **single** collection. Because one driver instance is bound to one physical namespace, creating a second collection with a plain driver throws `ConfigurationError` — switch to the factory form instead.
 
@@ -1144,6 +1154,12 @@ try {
 | `commit()`                   | `Promise<void>`     | Flush to durable storage             |
 | `close()`                    | `Promise<void>`     | Release resources                    |
 | `on('error', listener)`      | `() => void`        | Monitor async errors                 |
+
+### Helpers
+
+| Function                    | Returns  | Description                                                                                                                                |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collectionNamespace(name)` | `string` | Encode a collection name into a collision-proof driver-factory namespace fragment ([ADR-029](docs/adr/029-driver-namespace-derivation.md)) |
 
 ### Collection
 

@@ -21,7 +21,10 @@ This silently contradicted the per-collection isolation that ADR-012 established
 ```ts
 export type DatabaseDriverFactory = (collectionName: string) => DatastoreDriver;
 
-export type DatabaseConfig = Omit<DatastoreConfig, 'duplicateKeys' | 'driver'> & {
+export type DatabaseConfig = Omit<
+  DatastoreConfig,
+  'duplicateKeys' | 'driver'
+> & {
   driver?: DatastoreDriver | DatabaseDriverFactory;
   // ...
 };
@@ -31,7 +34,9 @@ export type DatabaseConfig = Omit<DatastoreConfig, 'duplicateKeys' | 'driver'> &
 - When `driver` is a **plain `DatastoreDriver` object**, it remains valid for a single collection. Creating a second collection while another driver-backed collection is registered throws `ConfigurationError` with guidance to use a factory. After `dropCollection()` closes the only driver-backed collection, the plain driver may be reused by a new collection.
 - Databases without a `driver` (in-memory) are unaffected.
 
-Collection names are validated (`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`, no leading `_`, no `..`) before the factory runs, so they are safe to embed in file names and storage keys.
+Collection names are validated (`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`, no leading `_`, no `..`) before the factory runs, so they cannot escape their directory or key space.
+
+> **Superseded in part by [ADR-029](./029-driver-namespace-derivation.md).** A validated name is safe to _place_ in a file name, but it is **not** safe to use as a namespace fragment: it may contain `.`, the delimiter the drivers build their own key spaces from, which let the collections `foo` and `foo.fpdb.g.0` destroy each other's files. Factories must derive the fragment with `collectionNamespace(name)`. ADR-029 also corrects the claim below that an IndexedDB **database/object store** pair is a namespace — the snapshot is stored per _database_, so each collection needs a distinct `databaseName`.
 
 ## Alternatives Considered
 

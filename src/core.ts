@@ -1,6 +1,7 @@
 export { Collection } from './collection.js';
 export { Database } from './database.js';
 export { ResultChain } from './resultChain.js';
+export { collectionNamespace } from './internal/collectionNamespace.js';
 export {
   ClosedDatabaseError,
   ConfigurationError,

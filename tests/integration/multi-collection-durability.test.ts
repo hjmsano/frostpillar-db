@@ -27,7 +27,11 @@ import { localStorageDriver } from '@frostpillar/frostpillar-storage-engine/driv
 import { opfsDriver } from '@frostpillar/frostpillar-storage-engine/drivers/opfs';
 import { syncStorageDriver } from '@frostpillar/frostpillar-storage-engine/drivers/syncStorage';
 
-import { ConfigurationError, Database } from '../../src/index.js';
+import {
+  collectionNamespace,
+  ConfigurationError,
+  Database,
+} from '../../src/index.js';
 import type { DatabaseDriverFactory } from '../../src/index.js';
 
 interface UserDoc {
@@ -105,9 +109,68 @@ void test('fileDriver: two collections commit, reopen, and drop independently', 
   try {
     await runTwoCollectionLifecycle((name) =>
       fileDriver({
-        target: { kind: 'directory', directory: tmpDir, fileName: name },
+        target: {
+          kind: 'directory',
+          directory: tmpDir,
+          fileName: collectionNamespace(name),
+        },
       }),
     );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Adversarial name pair for the file backend. Data files are named
+ * `<fileName>.fpdb.g.<generation>`, and opening a datastore deletes every file
+ * beginning with `<fileName>.fpdb.g.` other than its own active generation. Both
+ * names below are valid collection names, so with a raw-name factory the base
+ * name of `foo` (`foo.fpdb`) yields the deletion prefix `foo.fpdb.g.`, which
+ * swallows `foo.fpdb.g.0`'s data file (`foo.fpdb.g.0.fpdb.g.0`): reopening `foo`
+ * destroyed the other collection, which then came back empty.
+ *
+ * `collectionNamespace()` escapes the dots, so neither fragment is a delimited
+ * prefix of the other and both collections survive.
+ */
+void test('fileDriver: collectionNamespace isolates names that collide with generation files', async () => {
+  const tmpDir = makeTmpDir();
+  const factory: DatabaseDriverFactory = (name) =>
+    fileDriver({
+      target: {
+        kind: 'directory',
+        directory: tmpDir,
+        fileName: collectionNamespace(name),
+      },
+    });
+  const victim = 'foo.fpdb.g.0';
+
+  try {
+    {
+      const database = new Database({ driver: factory });
+      const foo = database.collection<UserDoc>('foo');
+      const shadow = database.collection<UserDoc>(victim);
+      await foo.insert({ name: 'alice' });
+      await shadow.insert({ name: 'bob' });
+      await database.commit();
+      await database.close();
+    }
+
+    {
+      // Open `foo` first: its generation-file cleanup runs here, and must not
+      // touch the other collection's files.
+      const database = new Database({ driver: factory });
+      const foo = database.collection<UserDoc>('foo');
+      assert.equal(await foo.find({}).count(), 1);
+      const shadow = database.collection<UserDoc>(victim);
+      assert.equal(
+        await shadow.find({}).count(),
+        1,
+        'opening "foo" must not delete the other collection\'s snapshot',
+      );
+      assert.ok(await shadow.findOne({ name: 'bob' }));
+      await database.close();
+    }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -157,7 +220,10 @@ void test('localStorageDriver: two collections commit, reopen, and drop independ
   globalRecord.localStorage = createLocalStorageMock();
   try {
     await runTwoCollectionLifecycle((name) =>
-      localStorageDriver({ keyPrefix: 'fp-test', databaseKey: name }),
+      localStorageDriver({
+        keyPrefix: 'fp-test',
+        databaseKey: collectionNamespace(name),
+      }),
     );
   } finally {
     delete globalRecord.localStorage;
@@ -205,7 +271,10 @@ void test('syncStorageDriver: two collections commit, reopen, and drop independe
   globalRecord.browser = createSyncStorageMock();
   try {
     await runTwoCollectionLifecycle((name) =>
-      syncStorageDriver({ keyPrefix: 'fp-test', databaseKey: name }),
+      syncStorageDriver({
+        keyPrefix: 'fp-test',
+        databaseKey: collectionNamespace(name),
+      }),
     );
   } finally {
     delete globalRecord.browser;
@@ -245,9 +314,7 @@ const createIdbRequest = (result: unknown): IdbRequestMock => {
   return request;
 };
 
-const createIdbObjectStore = (
-  data: IdbStoreData,
-): Record<string, unknown> => ({
+const createIdbObjectStore = (data: IdbStoreData): Record<string, unknown> => ({
   get: (key: string): IdbRequestMock => createIdbRequest(data.get(key)),
   put: (value: unknown, key: string): IdbRequestMock => {
     data.set(key, value);
@@ -257,8 +324,7 @@ const createIdbObjectStore = (
     data.clear();
     return createIdbRequest(undefined);
   },
-  getAll: (): IdbRequestMock =>
-    createIdbRequest(Array.from(data.values())),
+  getAll: (): IdbRequestMock => createIdbRequest(Array.from(data.values())),
 });
 
 const createIdbDatabase = (
@@ -336,8 +402,65 @@ void test('indexedDBDriver: two collections commit, reopen, and drop independent
   globalRecord.indexedDB = createIdbFactoryMock();
   try {
     await runTwoCollectionLifecycle((name) =>
-      indexedDBDriver({ databaseName: `fp-test-${name}` }),
+      indexedDBDriver({
+        databaseName: `fp-test-${collectionNamespace(name)}`,
+      }),
     );
+  } finally {
+    delete globalRecord.indexedDB;
+  }
+});
+
+/**
+ * Pins the constraint spec 01 §1.7 states: for IndexedDB the namespace is the
+ * *database*, not the database/object-store pair. The storage engine keeps a
+ * datastore's snapshot at a fixed location (`_meta` store, key `config`) and
+ * ignores `objectStoreName` on both load and commit, so a factory that varies
+ * only the object store leaves every collection sharing one snapshot slot and
+ * the last commit wins.
+ *
+ * The assertion below therefore encodes *broken* isolation deliberately. If it
+ * ever fails, the storage engine has gained per-object-store snapshots: relax
+ * the "distinct databaseName" requirement in spec 01 §1.7, ADR-024, and both
+ * READMEs, and turn this into a normal isolation test.
+ */
+void test('indexedDBDriver: a shared databaseName does not isolate collections, however the object store varies', async () => {
+  globalRecord.indexedDB = createIdbFactoryMock();
+  try {
+    const factory: DatabaseDriverFactory = (name) =>
+      indexedDBDriver({
+        databaseName: 'fp-test-shared',
+        objectStoreName: `records-${collectionNamespace(name)}`,
+      });
+
+    {
+      const database = new Database({ driver: factory });
+      const users = database.collection<UserDoc>('users');
+      const posts = database.collection<UserDoc>('posts');
+      await users.insert({ name: 'alice' });
+      await users.insert({ name: 'bob' });
+      await posts.insert({ name: 'hello' });
+      await database.commit();
+      await database.close();
+    }
+
+    {
+      const database = new Database({ driver: factory });
+      const users = database.collection<UserDoc>('users');
+      // Both collections read the same per-database snapshot, so `users` comes
+      // back holding whichever collection committed last — not its own data.
+      const survived = await users.find({}).count();
+      assert.equal(
+        survived,
+        1,
+        'object-store names do not namespace the snapshot: the last commit wins',
+      );
+      assert.ok(
+        await users.findOne({ name: 'hello' }),
+        "users must have been overwritten by posts' snapshot",
+      );
+      await database.close();
+    }
   } finally {
     delete globalRecord.indexedDB;
   }
@@ -402,9 +525,7 @@ const installOpfsMock = (): (() => void) => {
             directories.set(directoryName, new Map());
           }
           return Promise.resolve(
-            createOpfsDirectoryMock(
-              directories.get(directoryName)!,
-            ),
+            createOpfsDirectoryMock(directories.get(directoryName)!),
           );
         },
       }),
@@ -430,7 +551,7 @@ void test('opfsDriver: two collections commit, reopen, and drop independently', 
   const restoreNavigator = installOpfsMock();
   try {
     await runTwoCollectionLifecycle((name) =>
-      opfsDriver({ directoryName: `fp-${name}` }),
+      opfsDriver({ directoryName: `fp-${collectionNamespace(name)}` }),
     );
   } finally {
     restoreNavigator();
