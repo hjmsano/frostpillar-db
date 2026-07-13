@@ -196,9 +196,9 @@ export class Database {
     const resolvedOptions = resolveCollectionOptions(options);
     const existing = this.collections.get(name);
     if (existing !== undefined) {
-      // Invariant: whenever a collection exists in `this.collections`, its resolved
-      // options are also stored in `this.collectionOptions` (both set together in
-      // the create path below). Non-null assertion is safe; drop the dead guard.
+      // Invariant: whenever a collection exists in `this.collections`, its
+      // resolved options are also stored in `this.collectionOptions` (both are
+      // set together in the create path below).
       const existingOptions = this.collectionOptions.get(name);
       if (
         existingOptions === undefined ||

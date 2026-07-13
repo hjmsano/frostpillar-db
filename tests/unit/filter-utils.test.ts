@@ -113,8 +113,8 @@ void test('extractIdEquality returns id for explicit $eq', () => {
   assert.equal(extractIdEquality({ _id: { $eq: 'abc' } }), 'abc');
 });
 
-void test('extractIdEquality returns null when filter has extra keys', () => {
-  assert.equal(extractIdEquality({ _id: 'abc', name: 'Alice' }), null);
+void test('extractIdEquality returns id from a conjunctive filter', () => {
+  assert.equal(extractIdEquality({ _id: 'abc', name: 'Alice' }), 'abc');
 });
 
 void test('extractIdEquality returns null for non-string _id', () => {
@@ -278,8 +278,8 @@ void test('extractIdInclusion returns null for a non-string element', () => {
   assert.equal(extractIdInclusion({ _id: { $in: ['a', 1] } }), null);
 });
 
-void test('extractIdInclusion returns null when the filter has other keys', () => {
-  assert.equal(extractIdInclusion({ _id: { $in: ['a'] }, v: 1 }), null);
+void test('extractIdInclusion returns ids from a conjunctive filter', () => {
+  assert.deepEqual(extractIdInclusion({ _id: { $in: ['a'] }, v: 1 }), ['a']);
 });
 
 void test('extractEqualityFields keeps an object-valued implicit equality', () => {

@@ -39,8 +39,15 @@ find(filter)
 
 > **Optimizations:** The following operations bypass the full scan when applicable:
 >
-> - `_id` equality and `$in` filters — use `Datastore.getFirst()` / `get()` / `getMany()` to obtain candidates before applying the filter to each document.
-> - `findOne({ _id: 'value' })` — under the default key definition, uses `Datastore.getFirst(key)` as the complete result. With a custom key, the indexed result is only a candidate set and the stored `_id` is checked exactly.
+> - `_id` equality and `$in` filters — including filters with additional
+>   top-level conjunctive predicates — use `Datastore.getFirst()` / `get()` /
+>   `getMany()` to obtain candidates before applying the complete filter to
+>   each document.
+> - `findOne({ _id: 'value' })` — only the exact one-key form under the default
+>   key definition uses `Datastore.getFirst(key)` as the complete result.
+>   Conjunctive forms use the same lookup as a candidate set and evaluate every
+>   predicate. With a custom key, the indexed result is always only a candidate
+>   set and the stored `_id` is checked exactly.
 > - Bounded `_id` ranges — use `Datastore.getRange()` only under the default key definition. A custom key may order normalized keys differently from `_id` strings, so ranges use `getAll()`.
 > - `remove({ _id: 'value' })` — uses `Datastore.delete(key)` directly only on non-TTL, default-key collections whose duplicate policy is not `'allow'`. Custom-key removals confirm each candidate's stored `_id` and call `deleteById()`.
 > - `insertMany(docs)` — uses `Datastore.putMany()` for batch insertion.

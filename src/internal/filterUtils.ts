@@ -72,20 +72,17 @@ export interface IdRange {
 }
 
 /**
- * Returns the _id value when the filter is a simple _id equality condition.
+ * Returns the _id value when the filter contains a top-level _id equality
+ * condition. Additional top-level predicates are safe: callers use the result
+ * only to narrow candidates, then evaluate the complete filter.
  *
  * Recognises two forms:
  * - `{ _id: 'value' }`         (implicit $eq)
  * - `{ _id: { $eq: 'value' } }` (explicit $eq)
  *
- * Returns `null` when the filter contains other keys or is not a simple _id equality.
+ * Returns `null` when `_id` is not a simple equality condition.
  */
 export const extractIdEquality = (filter: Filter): string | null => {
-  const keys = Object.keys(filter);
-  if (keys.length !== 1 || keys[0] !== '_id') {
-    return null;
-  }
-
   const value = filter._id;
   if (typeof value === 'string' && value.length > 0) {
     validateIdString(value);
@@ -107,7 +104,9 @@ export const extractIdEquality = (filter: Filter): string | null => {
 };
 
 /**
- * Returns the _id values when the filter is a simple `{ _id: { $in: [...] } }` condition.
+ * Returns the _id values when the filter contains a top-level
+ * `{ _id: { $in: [...] } }` condition. Additional top-level predicates are
+ * safe because callers fully evaluate the filter after candidate retrieval.
  * All elements must be non-empty strings. Returns `null` otherwise.
  *
  * The operand is asserted with the same `assertInclusionOperand` the structural
@@ -126,9 +125,6 @@ export const extractIdEquality = (filter: Filter): string | null => {
  * emitted no `watch()` event.
  */
 export const extractIdInclusion = (filter: Filter): string[] | null => {
-  const keys = Object.keys(filter);
-  if (keys.length !== 1 || keys[0] !== '_id') return null;
-
   const value = filter._id;
   if (!isObjectRecord(value)) return null;
 

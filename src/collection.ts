@@ -21,6 +21,7 @@ import {
   assertNoDuplicateBatchIds,
   findPersistedBatchKeys,
   prepareInsertRecord,
+  reclaimExpiredInsertConflict,
   rethrowStorageError,
 } from './internal/collectionUtils.js';
 import { DEFAULT_MAX_DEPTH } from './internal/limits.js';
@@ -179,6 +180,13 @@ export class Collection<
       Date.now(),
       this.ttl,
     );
+    if (this.duplicateKeys === 'reject') {
+      await reclaimExpiredInsertConflict(
+        this.context.datastore,
+        record.key,
+        this.ttl,
+      );
+    }
     try {
       await this.context.datastore.put(record);
     } catch (e) {
@@ -221,6 +229,7 @@ export class Collection<
         this.context.datastore,
         records,
         this.name,
+        this.ttl,
       );
     }
     try {
@@ -285,12 +294,15 @@ export class Collection<
       this.maxDepth,
     );
     const idKey = owned !== undefined ? extractIdEquality(owned) : null;
+    const hasOnlyIdCondition =
+      owned !== undefined && Object.keys(owned).length === 1;
     // A custom key definition can route several `_id` strings to one storage
     // key, so `getFirst` may answer with a different document than the filter
     // asked for. The generic path still uses the key index to fetch candidates,
     // then confirms `_id` per document (ADR-027).
     if (
       idKey !== null &&
+      hasOnlyIdCondition &&
       !this.context.hasCustomKey &&
       !(this.duplicateKeys === 'allow' && this.ttl !== undefined)
     ) {

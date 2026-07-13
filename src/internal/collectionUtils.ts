@@ -5,6 +5,7 @@ import {
 } from '@frostpillar/frostpillar-storage-engine';
 import type {
   Datastore,
+  KeyedRecord,
   RecordPayload,
 } from '@frostpillar/frostpillar-storage-engine';
 
@@ -79,6 +80,50 @@ export interface PreparedRecord<TDocument extends FrostpillarDocument> {
 }
 
 /**
+ * Returns the entry IDs that are expired at one shared point in time. Write
+ * paths use these IDs for targeted reclamation before duplicate enforcement;
+ * records without a valid TTL timestamp remain live, matching read behavior.
+ */
+export const getExpiredRecordIds = (
+  records: readonly KeyedRecord<unknown>[],
+  ttl: number | undefined,
+): KeyedRecord<unknown>['_id'][] => {
+  const expiryThreshold = computeExpiryThreshold(ttl);
+  if (expiryThreshold === undefined) return [];
+
+  const expiredIds: KeyedRecord<unknown>['_id'][] = [];
+  for (const record of records) {
+    const document = toStoredDocument(record.payload);
+    if (
+      isDocumentExpiredAt(
+        document as Record<string, unknown>,
+        expiryThreshold,
+      )
+    ) {
+      expiredIds.push(record._id);
+    }
+  }
+  return expiredIds;
+};
+
+/**
+ * Removes expired records occupying one incoming storage key. This is a narrow
+ * write-conflict cleanup rather than a collection scan. A live candidate is
+ * left for the storage engine to reject normally.
+ */
+export const reclaimExpiredInsertConflict = async (
+  datastore: Datastore,
+  key: string,
+  ttl: number | undefined,
+): Promise<void> => {
+  if (ttl === undefined) return;
+  const existing = await datastore.get(key);
+  const expiredIds = getExpiredRecordIds(existing, ttl);
+  if (expiredIds.length === 0 || expiredIds.length !== existing.length) return;
+  await datastore.deleteByIds(expiredIds);
+};
+
+/**
  * Prepares the record for a single insert. `document` must be the collection's
  * own snapshot of the caller's payload (`materializePayload`), not the caller's
  * object: it is stored by reference and stamped with `_id`/`_createdAt`.
@@ -118,12 +163,15 @@ export const prepareInsertRecord = <TDocument extends FrostpillarDocument>(
  * duplicate key by definition. Duplicates are detected on the `_id` strings, so
  * a custom key definition whose `normalize` collapses two distinct `_id`s of the
  * same batch onto one storage key still surfaces from the storage engine
- * (ADR-027).
+ * (ADR-027). On TTL collections, stored candidates are reclaimed only when all
+ * of them have expired, preserving the no-write result for a batch blocked by a
+ * live duplicate.
  */
 export const assertNoDuplicateBatchIds = async (
   datastore: Datastore,
   records: readonly { key: string; payload: RecordPayload }[],
   collectionName: string,
+  ttl: number | undefined,
 ): Promise<void> => {
   const keys = new Set<string>();
   for (const record of records) {
@@ -137,10 +185,14 @@ export const assertNoDuplicateBatchIds = async (
   if (keys.size === 0) return;
 
   const existing = await datastore.getMany([...keys]);
-  if (existing.length > 0) {
+  const expiredIds = getExpiredRecordIds(existing, ttl);
+  if (expiredIds.length !== existing.length) {
     throw new DuplicateIdError(
       `Duplicate _id in collection "${sanitizeForLog(collectionName)}".`,
     );
+  }
+  if (expiredIds.length > 0) {
+    await datastore.deleteByIds(expiredIds);
   }
 };
 

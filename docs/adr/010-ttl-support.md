@@ -21,6 +21,13 @@ We implement lazy TTL support at the collection level.
 
 4. **Explicit cleanup via `purgeExpired()`:** A dedicated method allows users to remove expired documents from storage on their own schedule. Returns the count of removed documents.
 
+4a. **Write-conflict reclamation:** An expired entry that collides with an
+incoming TTL write is removed before duplicate-key enforcement. For
+`insertMany()`, reclamation occurs when all stored conflicts are expired; a
+live conflict leaves the batch unchanged. This narrow cleanup lets `insert()`,
+`insertMany()`, and upsert reuse a logically absent `_id` without turning
+ordinary writes into a collection-wide purge.
+
 5. **No background timer:** We deliberately avoid background timers for deletion. Reasons:
    - Keeps implementation simple and deterministic.
    - No timer management complexity or cleanup lifecycle concerns.
@@ -45,6 +52,8 @@ The TTL check is applied in `executeFilter()` and `executeFilterWithStats()` aft
 
 - Collections without `ttl` have zero overhead: no `_createdAt` injection, no expiration checks.
 - Storage is not automatically reclaimed. Users must call `purgeExpired()` or `remove()` explicitly.
+- A conflicting write may reclaim an expired record for its storage key; this
+  is the sole automatic physical cleanup and does not scan unrelated records.
 - The `_createdAt` field is not reserved; it is a normal document field that users can set explicitly.
 - `purgeExpired()` performs a full collection scan, similar to `remove()`.
 

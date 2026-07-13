@@ -884,6 +884,13 @@ Because `_createdAt` exists purely as TTL bookkeeping, **any collection with a `
 
 > **Note:** `update()` does not reset `_createdAt`, and — on a TTL collection — `_createdAt` cannot be changed at all: any operator that targets it (`$set`, `$unset`, `$inc`, `$push`, `$pull`, `$addToSet`, `$rename`) throws `ValidationError`. TTL expiration is based on creation time only and cannot be extended in place; remove and re-insert the document to reset it.
 
+An expired record is treated as absent when a TTL write reuses its storage key:
+`insert()` and an upsert remove the expired collision before checking duplicate
+keys. `insertMany()` applies the same reclamation when its stored conflicts are
+all expired. This is targeted cleanup for the conflicting key, not a
+collection-wide purge. A non-expired collision still throws `DuplicateIdError`
+on a `'reject'` collection.
+
 #### `immutableCreatedAt` option
 
 TTL collections protect `_createdAt` automatically (see above), so `immutableCreatedAt` is not needed to secure them. Set `immutableCreatedAt: true` to get the update-time part of that protection on a collection that does **not** use `ttl`:

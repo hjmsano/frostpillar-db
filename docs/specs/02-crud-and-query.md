@@ -19,10 +19,14 @@ Inserts a single document into the collection.
 2. Validate that `_id` is a non-empty string of at most 1024 characters with no control characters (codepoints `< 0x20` other than tab/newline/carriage-return, or `0x7f`). Otherwise throw `ValidationError`.
 3. Construct the storage key: `{_id}`. (Each collection has its own dedicated `Datastore` per [ADR-012](../adr/012-per-collection-datastore-isolation.md), so a collection name prefix is not needed.)
 4. **Deep-copy** the document and ensure `_id` is included in the payload (see §12).
+5. On a TTL collection, an expired record occupying the incoming storage key is
+   treated as absent. The expired entry is removed immediately before duplicate
+   enforcement; this targeted reclamation is not a collection-wide purge. A
+   non-expired collision still follows the configured duplicate-key policy.
 
 **Policy-specific behavior:**
 
-| Policy      | Step 5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Policy      | Step 6                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `'reject'`  | Call `Datastore.put({ key, payload })`. The storage engine (configured with `duplicateKeys: 'reject'`) throws on duplicate keys, which frostpillar-db catches and re-throws as `DuplicateIdError`. Internally, the storage engine uses a bloom filter as a fast-path negative check before falling back to `has()` for confirmation; this is an internal optimization with no user-facing configuration. The `tests/integration/collection-bloom-filter.test.ts` suite exercises this path, including correct behavior after removals when the bloom filter may still report "maybe present". |
 | `'replace'` | Call `Datastore.put({ key, payload })`. The storage engine (configured with `duplicateKeys: 'replace'`) silently overwrites the existing record.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -38,7 +42,15 @@ Returns an array of `_id` values in the same order as the input.
 
 **Duplicate `_id` pre-check (`'reject'` collections):** before any record is written, the batch is checked for duplicate `_id`s — both within the batch and against the stored documents (one `Datastore.getMany()` over the batch's keys). A duplicate throws `DuplicateIdError` with **nothing written**. `putMany()` writes records in order and throws on the offending one, so without this pre-check a duplicate in the middle of a batch persisted the records before it — and, because the events are emitted only after `putMany()` resolves, emitted no `'insert'` event for any of them: storage and the `watch()` stream disagreed. The pre-check does not apply to `'replace'` / `'allow'` collections, where a duplicate key is not an error.
 
-The pre-check compares `_id` strings. Under a custom `key` definition whose `normalize` maps two distinct `_id`s onto one storage key ([ADR-027](../adr/027-custom-key-id-identity.md)), a collision _between two records of the same batch_ is not caught by it and still surfaces from the storage engine at write time.
+The pre-check compares `_id` strings. When every stored candidate for the
+batch's keys is expired, a TTL collection discards those candidates and
+continues; an expired physical record does not block a new document. If any
+non-expired record remains, `DuplicateIdError` is thrown and the pre-check
+does not reclaim expired candidates from that failed batch. Under a custom
+`key` definition whose `normalize` maps two distinct `_id`s onto one storage
+key ([ADR-027](../adr/027-custom-key-id-identity.md)), a collision _between two
+records of the same batch_ is not caught by it and still surfaces from the
+storage engine at write time.
 
 **Error semantics:** If any insertion fails (e.g., `ValidationError`, `QuotaExceededError`, or a `DuplicateIdError` the pre-check could not anticipate), the error propagates to the caller immediately. Remaining documents are not processed. Documents that were already inserted before the failure are **not** rolled back (no transaction support; see ADR-007). The caller receives the thrown error, not a partial result. The IDs of previously inserted documents are not accessible from the error object.
 
@@ -60,11 +72,31 @@ The prototype rule matters because filter conditions are read from **own** enume
 
 Equivalent to `find(filter).limit(1).toArray()`, returning the first match or `null`.
 
-When the filter is a simple `_id` equality under the default key definition, `findOne` uses `Datastore.getFirst(key)` for a direct O(1) result, bypassing the full scan pipeline. **Exceptions:** With both `duplicateKeys: 'allow'` and TTL, all records for the key must be checked because the first may be expired. With a custom key definition, the normalized-key lookup supplies candidates only: distinct `_id` strings may share one storage key, so the generic path checks each candidate's stored `_id` before returning a match (ADR-027).
+When the filter is an exact one-key `_id` equality under the default key
+definition, `findOne` uses `Datastore.getFirst(key)` for a direct O(1) result,
+bypassing the full scan pipeline. An `_id` equality with additional predicates
+still uses the key lookup to obtain candidates, then evaluates the complete
+filter before returning a result. **Exceptions:** With both
+`duplicateKeys: 'allow'` and TTL, all records for the key must be checked
+because the first may be expired. With a custom key definition, the
+normalized-key lookup supplies candidates only: distinct `_id` strings may
+share one storage key, so the generic path checks each candidate's stored `_id`
+before returning a match (ADR-027).
 
 #### Single-key Optimization in Internal Record Retrieval
 
-When the collection's `duplicateKeys` policy is not `'allow'` (i.e., `'reject'` or `'replace'`), an `_id` equality filter in the internal `getRecordsByFilter` path uses `Datastore.getFirst(key)` instead of `Datastore.get(key)`. Since at most one record can exist for a given key under these policies, `getFirst` avoids array allocation and exits early. When `duplicateKeys` is `'allow'`, `Datastore.get(key)` retrieves all records sharing the key. Under a custom key, either result remains a candidate set and the in-memory filter confirms exact `_id` equality.
+When the collection's `duplicateKeys` policy is not `'allow'` (i.e., `'reject'`
+or `'replace'`), any filter containing a top-level `_id` equality condition in
+the internal `getRecordsByFilter` path uses `Datastore.getFirst(key)` instead
+of `Datastore.get(key)`. Since at most one record can exist for a given key
+under these policies, `getFirst` avoids array allocation and exits early. When
+`duplicateKeys` is `'allow'`, `Datastore.get(key)` retrieves all records
+sharing the key. Top-level conditions are conjunctive, so additional
+predicates safely narrow the candidate set; the in-memory filter always
+evaluates them before acting. The same candidate-only rule applies to a
+top-level `_id: { $in: [...] }` condition, which uses `Datastore.getMany()`.
+Under a custom key, either result remains a candidate set and the in-memory
+filter confirms exact `_id` equality.
 
 #### Range Query Optimization
 
@@ -105,7 +137,13 @@ interface UpdateResult {
 4. **Payload validation:** Validate the resulting document against the same payload limits enforced on `insert` (see Spec 01 §1.2). If the document exceeds any limit (e.g., `maxTotalBytes`, `maxDepth`, `maxStringBytes`), throw `ValidationError` immediately. When `skipPayloadValidation` is `true`, only the always-on type and structural checks are applied.
 5. **No-op detection:** If the resulting payload is identical to the original document (deep equality on every touched field), the document is considered unmodified — `replaceById` is **not** called, no `'update'` change event is emitted, and `modifiedCount` is **not** incremented.
 6. Persist each **actually modified** document atomically via `Datastore.replaceById(entryId, updatedPayload)`, preserving the key and entry ID.
-7. If no document matched and the captured `upsert` value is true, build the inserted document from the same snapshotted filter and normalized operation set; do not read the caller's operations or options again. If the captured value is false (the default), return `{ modifiedCount: 0, upsertedId: null }`.
+7. If no document matched and the captured `upsert` value is true, build the
+   inserted document from the same snapshotted filter and normalized operation
+   set; do not read the caller's operations or options again. On a TTL
+   collection, this insert has the same expired-collision reclamation as
+   `insert()`; an expired physical record cannot cause `DuplicateIdError`. If
+   the captured value is false (the default), return `{ modifiedCount: 0,
+   upsertedId: null }`.
 
 **Upsert behavior** (when `upsert: true` and no documents match the filter):
 

@@ -105,6 +105,9 @@ export const removeNoTtlFastPath = async (
   // the same key, and would emit the filter's `_id` rather than the stored one.
   // The generic path re-checks each candidate's `_id` before deleting it.
   if (hasCustomKey) return null;
+  // Key deletion does not evaluate other predicates, so it is correct only
+  // when the `_id` condition is the entire filter.
+  if (Object.keys(filter).length !== 1) return null;
   const idKey = extractIdEquality(filter);
   if (idKey !== null) {
     const removed = await datastore.delete(idKey);

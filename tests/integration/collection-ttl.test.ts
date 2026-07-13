@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Database } from '../../src/index.js';
+import { Database, DuplicateIdError } from '../../src/index.js';
 
 interface SessionDocument {
   _id?: string;
@@ -25,6 +25,48 @@ void test('documents with TTL get _createdAt auto-injected', async () => {
     assert.equal(typeof doc!._createdAt, 'number');
     assert.ok(doc!._createdAt! >= before);
     assert.ok(doc!._createdAt! <= after);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('expired TTL records do not block insert, insertMany, or upsert', async () => {
+  const database = new Database({});
+  const sessions = database.collection<SessionDocument>('ttl-write-reuse', {
+    ttl: 1,
+  });
+
+  try {
+    await sessions.insert({ _id: 'insert-id', token: 'expired-insert' });
+    await sessions.insert({ _id: 'batch-id', token: 'expired-batch' });
+    await sessions.insert({ _id: 'upsert-id', token: 'expired-upsert' });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    await sessions.insert({ _id: 'insert-id', token: 'inserted' });
+    await sessions.insertMany([{ _id: 'batch-id', token: 'batched' }]);
+    const upserted = await sessions.update(
+      { _id: 'upsert-id' },
+      { $set: { token: 'upserted' } },
+      { upsert: true },
+    );
+
+    assert.equal(upserted.upsertedId, 'upsert-id');
+    assert.deepEqual(
+      (await sessions.find().toArray())
+        .map((document) => [document._id, document.token])
+        .sort(([left], [right]) => left.localeCompare(right)),
+      [
+        ['batch-id', 'batched'],
+        ['insert-id', 'inserted'],
+        ['upsert-id', 'upserted'],
+      ],
+    );
+
+    await sessions.insert({ _id: 'live-id', token: 'live' });
+    await assert.rejects(
+      () => sessions.insert({ _id: 'live-id', token: 'duplicate' }),
+      DuplicateIdError,
+    );
   } finally {
     await database.close();
   }

@@ -884,6 +884,8 @@ await sessions.insert({ userId: 'u1', token: 'abc123' });
 
 > **注意:** `update()` は `_createdAt` をリセットしません。さらに、TTL が設定されたコレクションでは `_createdAt` を一切変更できません。`_createdAt` を対象とする演算子（`$set`、`$unset`、`$inc`、`$push`、`$pull`、`$addToSet`、`$rename`）はすべて `ValidationError` をスローします。TTL の有効期限は作成時刻のみに基づき、その場で延長することはできません。有効期限をリセットするには、ドキュメントを削除して再挿入してください。
 
+TTL コレクションで期限切れレコードと同じストレージキーに書き込む場合、そのレコードは存在しないものとして扱われます。`insert()` と upsert は重複キーを確認する前に期限切れの競合レコードを削除します。`insertMany()` でも、保存済みの競合レコードがすべて期限切れの場合に同じクリーンアップを行います。これは競合したキーだけを対象とするクリーンアップであり、コレクション全体の purge ではありません。`'reject'` コレクションでは、有効期限が切れていない競合に対して引き続き `DuplicateIdError` がスローされます。
+
 #### `immutableCreatedAt` オプション
 
 TTL コレクションは上記の通り自動的に `_createdAt` を保護するため、`immutableCreatedAt` を設定する必要はありません。`ttl` を**使用しない**コレクションで、この保護のうち更新時の部分を得たい場合に `immutableCreatedAt: true` を設定します:
