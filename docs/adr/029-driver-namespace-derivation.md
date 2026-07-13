@@ -37,6 +37,6 @@ For IndexedDB, the namespace is the **database**: factories must vary `databaseN
 ## Consequences
 
 - Multi-collection durable configurations are safe for every legal collection name, including the adversarial ones. `tests/integration/multi-collection-durability.test.ts` covers the `foo` / `foo.fpdb.g.0` pair.
-- Users who wrote a factory before this ADR and used raw names keep working **only** if none of their collection names contains a dot. Names with dots must be migrated: encode the fragment, and rename the existing on-disk file/key to the encoded form.
+- A factory written before this ADR that passed raw names through keeps reading its existing data only if no collection name contains a dot; a name with a dot now resolves to an encoded fragment (`orders.2026` -> `orders%2E2026`) and so points at a different file or key. **No migration path is provided** — the package is pre-1.0 (see the README's pre-1.0 notice), so affected data is recreated rather than moved. A user who wants to keep it can rename the file or storage key to the encoded form by hand.
 - The IndexedDB constraint is pinned by a test that asserts the _broken_ shared-database behavior. If the storage engine gains per-object-store snapshots, that test fails — the signal to relax this ADR's requirement rather than to discover the change by data loss.
 - ADR-024's "safe to embed" sentence is superseded by this ADR.
