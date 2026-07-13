@@ -60,7 +60,7 @@ frostpillar-db **always** sets `skipPayloadValidation: true` on the underlying d
 - `update()` validates the resulting document after operators are applied, preventing updates from producing documents that would be rejected on insert.
 - The collection-level validator supports all JSON-compatible types including arrays, avoiding inconsistencies with the datastore-level validator.
 
-When the user explicitly sets `skipPayloadValidation: true`, the full structural validator is skipped, but a lightweight security-only validator still runs. The security validator checks for reserved keys, circular references, and enforces a nesting-depth cap (default `DEFAULT_MAX_DEPTH` = 64, or the configured `payloadLimits.maxDepth`) to prevent stack-overflow DoS. Documents exceeding the depth cap are rejected with `ValidationError` even in skip mode.
+When the user explicitly sets `skipPayloadValidation: true`, the full structural validator is skipped, but a lightweight security-only validator still runs. The security validator checks for reserved keys, circular references, non-plain object values, and the non-storable leaf types (`bigint`, `function`, `symbol`, `undefined`), and enforces a nesting-depth cap (default `DEFAULT_MAX_DEPTH` = 64, or the configured `payloadLimits.maxDepth`) to prevent stack-overflow DoS. Documents violating any of these are rejected with `ValidationError` even in skip mode. `function` and `symbol` are rejected specifically because they are reference types: the write path copies them by reference, so a stored document would keep sharing the caller's object (see [ADR-030](../adr/030-read-once-input-snapshots.md)). Skip mode drops the *size* checks (bytes, key counts, string/key lengths), never the memory-safety ones.
 
 The security validator also rejects a **non-plain object** anywhere in the payload (a class instance, a `Date`/`Map`/`Set`, an `Object.create(proto)` object) with `ValidationError`, exactly as the full validator does. It does not merely decline to descend into one: a value it will not traverse is a value whose reserved keys and cycles it cannot see, and the write paths deep-clone the payload afterwards — a self-referential class instance was accepted here and then overflowed the stack inside the clone. Size limits (bytes, key counts) remain unenforced in skip mode; the type, cycle, depth, and reserved-key guards do not.
 
@@ -105,7 +105,7 @@ const db = new Database({
 });
 ```
 
-**Scope:** Payload limits are database-wide and apply to all collections. They are enforced at the Collection level on every `insert`, `insertMany`, and `update` operation. For `update`, the resulting document is validated after operators are applied but before it is persisted. When `skipPayloadValidation` is `true`, size limits (bytes, key counts, etc.) are not enforced, but the `maxDepth` cap is still enforced by the security validator to prevent stack-overflow DoS.
+**Scope:** Payload limits are database-wide and apply to all collections. They are enforced at the Collection level on every `insert`, `insertMany`, and `update` operation. For `update`, the resulting document is validated after operators are applied but before it is persisted. When `skipPayloadValidation` is `true`, size limits (bytes, key counts, etc.) are not enforced, but the `maxDepth` cap is still enforced by the security validator to prevent stack-overflow DoS. `maxDepth` also bounds the copy taken of every filter (see [Spec 02 §12](./02-crud-and-query.md#12-input-isolation)).
 
 **Limits are evaluated against the stored document, including generated fields:** the write path adds `_id` when the caller omits it, and `_createdAt` on a TTL collection. Those fields count toward `maxKeysPerObject`, `maxTotalKeys`, and `maxTotalBytes` on insert, even though they are absent from the caller's object — a generated `_id` is charged as a 36-character UUID and `_createdAt` as a millisecond epoch. Otherwise a document could pass insert at exactly `maxKeysPerObject` keys and then fail every subsequent `update` under the same limit, because `update` validates the stored document, which carries the generated fields. When the caller supplies `_id` (or `_createdAt`), it is already part of the object and is counted once, not twice.
 
@@ -625,6 +625,8 @@ const items = db.collection('items', { key: numericKey });
 | `insert` under `duplicateKeys` | Applies at the **key** level: `"01"` and `"1"` share a key, so the second insert is rejected (`'reject'`) or replaces the first (`'replace'`), as for any key collision. |
 
 Colliding `_id`s are therefore best avoided: keep `normalize` injective over the `_id` strings the collection actually stores. See [ADR-027](../adr/027-custom-key-id-identity.md) for the rationale and the fast-path implications.
+
+**A `key` on the `DatabaseConfig` behaves identically.** Every collection's datastore inherits the database-level `key`, so a collection that declares no `key` of its own is still subject to its `normalize` — and gets the same `_id`-identity treatment as one configured with `key` directly. A collection option, where present, overrides the database-level definition.
 
 ## 3. Error Types
 

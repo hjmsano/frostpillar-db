@@ -2,12 +2,13 @@ import type { RecordPayload } from '@frostpillar/frostpillar-storage-engine';
 
 import { ClosedDatabaseError } from './errors.js';
 import { ChangeEmitter } from './internal/changeEmitter.js';
+import { extractIdEquality, validateIdString } from './internal/filterUtils.js';
 import {
-  extractIdEquality,
-  validateFilterArgument,
-  validateIdString,
-} from './internal/filterUtils.js';
+  snapshotOptionalFilterArgument,
+  snapshotRequiredFilterArgument,
+} from './internal/filterSnapshot.js';
 import {
+  materializePayload,
   validateInsertPayload,
   validatePayloadSecurity,
 } from './internal/payloadValidator.js';
@@ -61,7 +62,8 @@ export class Collection<
   private readonly queryContext: QueryContext;
   /** Whether `_createdAt` update protection is active (ADR-016): true if `immutableCreatedAt` is set, or unconditionally whenever `ttl` is set. */
   private readonly protectCreatedAt: boolean;
-  private readonly updateMaxDepth: number;
+  /** Nesting cap for every recursive walk of caller input: payloads, update values, filters. */
+  private readonly maxDepth: number;
   /** Top-level fields the insert path generates: `_id`, plus `_createdAt` under a TTL. */
   private readonly generatedInsertKeys: readonly string[];
   private dropped = false;
@@ -79,7 +81,7 @@ export class Collection<
     this.ttl = ttl;
     this.immutableCreatedAt = immutableCreatedAt;
     this.protectCreatedAt = immutableCreatedAt || ttl !== undefined;
-    this.updateMaxDepth = context.payloadLimits?.maxDepth ?? DEFAULT_MAX_DEPTH;
+    this.maxDepth = context.payloadLimits?.maxDepth ?? DEFAULT_MAX_DEPTH;
     this.generatedInsertKeys =
       ttl !== undefined ? ['_id', '_createdAt'] : ['_id'];
     if (context.onListenerError !== undefined) {
@@ -129,31 +131,47 @@ export class Collection<
   }
 
   /**
-   * `generatedKeys` names the top-level fields `prepareInsertRecord` will add
-   * after validation, so the payload is measured against the limits as it will
-   * be stored. The update path passes none: its input is the stored document,
-   * which already carries them.
+   * Validates a document the collection already owns: the update path's result,
+   * which is a copy of the stored document with the (already materialized)
+   * update values applied. The insert path uses `materializeInsertDocument`
+   * instead — it must copy the caller's object before validating it.
    */
-  private validatePayload(
-    document: unknown,
-    generatedKeys: readonly string[] = [],
-  ): void {
+  private validateOwnedDocument(document: unknown): void {
     if (this.context.skipInsertValidation) {
-      validatePayloadSecurity(document, this.context.payloadLimits?.maxDepth);
+      validatePayloadSecurity(document, this.maxDepth);
     } else {
+      validateInsertPayload(document, this.context.payloadLimits);
+    }
+  }
+
+  /**
+   * Takes the write path's single read of the caller's document and validates
+   * that copy (ADR-030). Validating the caller's object and copying it
+   * afterwards read every property twice, so an accessor could pass validation
+   * with one value and store another.
+   *
+   * `generatedInsertKeys` names the top-level fields `prepareInsertRecord` adds
+   * after validation, so the payload is measured against the limits as it will
+   * be stored.
+   */
+  private materializeInsertDocument(
+    document: InsertDocument<TDocument>,
+  ): InsertDocument<TDocument> {
+    const snapshot = materializePayload(document, this.maxDepth);
+    if (!this.context.skipInsertValidation) {
       validateInsertPayload(
-        document,
+        snapshot,
         this.context.payloadLimits,
-        generatedKeys,
+        this.generatedInsertKeys,
       );
     }
+    return snapshot as InsertDocument<TDocument>;
   }
 
   public async insert(document: InsertDocument<TDocument>): Promise<string> {
     this.assertOpen();
-    this.validatePayload(document, this.generatedInsertKeys);
     const { id, payload, record } = prepareInsertRecord<TDocument>(
-      document,
+      this.materializeInsertDocument(document),
       Date.now(),
       this.ttl,
     );
@@ -170,17 +188,20 @@ export class Collection<
     documents: InsertDocument<TDocument>[],
   ): Promise<string[]> {
     this.assertOpen();
-    for (const doc of documents) {
-      this.validatePayload(doc, this.generatedInsertKeys);
+    const count = documents.length;
+    // Every document is materialized (and so validated) before any of them is
+    // prepared, keeping the batch's all-or-nothing validation contract.
+    const snapshots = new Array<InsertDocument<TDocument>>(count);
+    for (let i = 0; i < count; i++) {
+      snapshots[i] = this.materializeInsertDocument(documents[i]);
     }
     const now = Date.now();
-    const count = documents.length;
     const records = new Array<{ key: string; payload: RecordPayload }>(count);
     const ids = new Array<string>(count);
     const payloads = new Array<FrostpillarStoredDocument<TDocument>>(count);
     for (let i = 0; i < count; i++) {
       const { id, payload, record } = prepareInsertRecord<TDocument>(
-        documents[i],
+        snapshots[i],
         now,
         this.ttl,
       );
@@ -235,18 +256,31 @@ export class Collection<
     }
   }
 
+  /** Opens a chain over a filter this collection already owns (see `snapshotFilterArgument`). */
+  private chain(filter?: Filter): ResultChain<TDocument> {
+    return new ResultChain<TDocument>(this.chainContext, { filter });
+  }
+
   public find(filter?: Filter): ResultChain<TDocument> {
     this.assertOpen();
-    validateFilterArgument(filter, 'Collection.find', true);
-    return new ResultChain<TDocument>(this.chainContext, { filter });
+    const owned = snapshotOptionalFilterArgument(
+      filter,
+      'Collection.find',
+      this.maxDepth,
+    );
+    return this.chain(owned);
   }
 
   public async findOne(
     filter?: Filter,
   ): Promise<FrostpillarStoredDocument<TDocument> | null> {
     this.assertOpen();
-    validateFilterArgument(filter, 'Collection.findOne', true);
-    const idKey = filter !== undefined ? extractIdEquality(filter) : null;
+    const owned = snapshotOptionalFilterArgument(
+      filter,
+      'Collection.findOne',
+      this.maxDepth,
+    );
+    const idKey = owned !== undefined ? extractIdEquality(owned) : null;
     // A custom key definition can route several `_id` strings to one storage
     // key, so `getFirst` may answer with a different document than the filter
     // asked for. The generic path still uses the key index to fetch candidates,
@@ -262,7 +296,7 @@ export class Collection<
         this.ttl,
       );
     }
-    return (await this.find(filter).limit(1).toArray())[0] ?? null;
+    return (await this.chain(owned).limit(1).toArray())[0] ?? null;
   }
 
   public async update(
@@ -271,15 +305,19 @@ export class Collection<
     options?: UpdateOptions,
   ): Promise<UpdateResult> {
     this.assertOpen();
-    validateFilterArgument(filter, 'Collection.update', false);
+    const owned = snapshotRequiredFilterArgument(
+      filter,
+      'Collection.update',
+      this.maxDepth,
+    );
     if (Object.keys(operations).length === 0)
       return { modifiedCount: 0, upsertedId: null };
 
-    const records = await getRecordsByFilter(this.queryContext, filter);
+    const records = await getRecordsByFilter(this.queryContext, owned);
     const matches = collectFilteredDocuments<TDocument>(
       this.queryContext,
       records,
-      filter,
+      owned,
     );
 
     let updated = 0;
@@ -289,10 +327,10 @@ export class Collection<
         operations,
         this.context.caches.pathCache,
         this.protectCreatedAt,
-        this.updateMaxDepth,
+        this.maxDepth,
       );
       if (!result.changed) continue;
-      this.validatePayload(result.document);
+      this.validateOwnedDocument(result.document);
       if (
         !(await this.context.datastore.replaceById(
           record._id,
@@ -311,7 +349,7 @@ export class Collection<
     if (matches.length > 0 || !options?.upsert) {
       return { modifiedCount: updated, upsertedId: null };
     }
-    return await this.performUpsert(filter, operations);
+    return await this.performUpsert(owned, operations);
   }
 
   private async performUpsert(
@@ -323,7 +361,7 @@ export class Collection<
       operations,
       this.context.caches.pathCache,
       this.protectCreatedAt,
-      this.updateMaxDepth,
+      this.maxDepth,
     );
     const insertedId = await this.insert(insertDoc);
     return { modifiedCount: 0, upsertedId: insertedId };
@@ -331,10 +369,14 @@ export class Collection<
 
   public async remove(filter: Filter): Promise<number> {
     this.assertOpen();
-    validateFilterArgument(filter, 'Collection.remove', false);
+    const owned = snapshotRequiredFilterArgument(
+      filter,
+      'Collection.remove',
+      this.maxDepth,
+    );
     const fastPath = await removeNoTtlFastPath(
       this.context.datastore,
-      filter,
+      owned,
       this.ttl,
       this.duplicateKeys,
       (id) => this.emitChange('remove', id, null),
@@ -342,11 +384,11 @@ export class Collection<
     );
     if (fastPath !== null) return fastPath;
 
-    const records = await getRecordsByFilter(this.queryContext, filter);
+    const records = await getRecordsByFilter(this.queryContext, owned);
     const matches = collectFilteredDocuments<TDocument>(
       this.queryContext,
       records,
-      filter,
+      owned,
     );
     // Delete per-id so each emitted change-event corresponds to a record that
     // was actually deleted: deleteById returns whether that specific record was

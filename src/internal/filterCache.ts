@@ -1,9 +1,9 @@
 import { ValidationError } from '../errors.js';
 import {
   MAX_REGEX_ALTERNATION_GROUPS,
-  MAX_REGEX_OPTIONAL_QUANTIFIERS,
   MAX_REGEX_PATTERN_LENGTH,
   MAX_REGEX_QUANTIFIERS,
+  MAX_REGEX_VARIABLE_QUANTIFIERS,
 } from './limits.js';
 
 /**
@@ -228,45 +228,62 @@ const quantifierRepeats = (bound: string): boolean => {
 };
 
 /**
- * Decide whether a `{n}` / `{n,}` / `{n,m}` bound lets its target match zero
- * times — i.e. whether it makes the atom skippable. `bound` is the
- * digits/comma between `{` and `}` (e.g. `"0,5"`, `"1,10"`, `"3"`).
+ * Decide whether a `{n}` / `{n,}` / `{n,m}` bound is *variable-width*: whether
+ * its minimum and maximum repetition counts differ, so the engine has a choice
+ * of how many repetitions to consume. `{n,}` is always variable (unbounded
+ * maximum); `{n,m}` is variable iff `m > n`; a bare `{n}` (and the degenerate
+ * `{n,n}`) is fixed-width. `bound` is the digits/comma between `{` and `}`
+ * (e.g. `"0,5"`, `"1,2"`, `"3"`).
  */
-const quantifierAllowsZero = (bound: string): boolean => {
+const quantifierIsVariableWidth = (bound: string): boolean => {
   const commaIndex = bound.indexOf(',');
-  const min = commaIndex === -1 ? bound : bound.slice(0, commaIndex);
-  return Number(min) === 0;
+  if (commaIndex === -1) return false; // `{n}` — fixed width.
+  const max = bound.slice(commaIndex + 1);
+  if (max === '') return true; // `{n,}` — unbounded.
+  const min = bound.slice(0, commaIndex);
+  return Number(max) > Number(min);
 };
 
 /**
- * Count *optional* quantifier tokens: those whose minimum repetition count is
- * zero, so the atom they quantify can be skipped — `?`, `*`, and `{0}`/`{0,}`/
- * `{0,m}` bounds. `+`, `{1,m}`, `{n}` (n >= 1) are mandatory and not counted.
+ * Count *variable-width* quantifier tokens: those whose minimum and maximum
+ * repetition counts differ, so the atom they quantify can be consumed at more
+ * than one width — `?` (0-1), `*` (0-inf), `+` (1-inf), and any `{n,}` or
+ * `{n,m}` bound with `m > n`. A fixed-width `{n}` is not counted: it consumes
+ * exactly n repetitions and offers the engine nothing to backtrack over.
  *
- * Each optional quantifier is an independent binary choice (take the atom or
- * skip it) for the backtracking engine, so a chain of k of them costs up to
- * 2^k paths whenever the overall match *fails* — and a failing match is the
- * common case during a scan. This is the one catastrophic shape none of the
- * other screens see: `^.?.?...aaa...$` (20 `.?` atoms, then 20 literal `a`s)
- * repeats no atom, nests no quantifier, contains no alternation, and has no
+ * Each variable-width quantifier is an independent choice point for the
+ * backtracking engine, so a chain of k of them costs an exponential number of
+ * paths whenever the overall match *fails* — and a failing match is the common
+ * case during a scan. This is the one catastrophic shape none of the other
+ * screens see: `^.?.?...aaa...$` (20 `.?` atoms, then 20 literal `a`s) repeats
+ * no atom, nests no quantifier, contains no alternation, and has no
  * adjacent-duplicate pair for `CATASTROPHIC_PATTERNS` to match, yet it burns
- * ~2^20 paths per failing test. `MAX_REGEX_OPTIONAL_QUANTIFIERS` caps the
+ * ~2^20 paths per failing test. `MAX_REGEX_VARIABLE_QUANTIFIERS` caps the
  * exponent; see `assertSafeRegexPattern`.
  *
- * The count is over the whole pattern, not over the longest adjacent run: a
- * mandatory atom interleaved between the optional ones (`.?\w.?\w…`) always
- * matches and therefore prunes no branch, so it does not make the chain safe.
+ * The counter originally recognised only the *skippable* quantifiers — those
+ * with a minimum of zero. Raising the minimum to one preserved the shape and
+ * evaded the cap entirely: `(?:.{1,2}){1}`-style chains of `{1,2}` atoms still
+ * distribute a failing match 2^k ways (~5.2 ms per warmed non-match, which a
+ * collection scan multiplies by the document count), and a chain of `+`/`{1,}`
+ * atoms is worse still. Minimum-of-zero is therefore not the property that
+ * matters; a variable width is.
  *
- * Deliberately conservative in two spots: the lazy marker of `*?` / `+?` /
- * `{n,m}?` is itself a `?` token and is counted, and `{0}` (which can never
- * match at all) counts as optional. Both over-count harmlessly.
+ * The count is over the whole pattern, not over the longest adjacent run: a
+ * fixed-width atom interleaved between the variable ones (`.?\w.?\w…`) always
+ * consumes the same width and therefore prunes no branch, so it does not make
+ * the chain safe.
+ *
+ * Deliberately conservative in one spot: the lazy marker of `*?` / `+?` /
+ * `{n,m}?` is itself a `?` token and is counted a second time. It over-counts
+ * harmlessly.
  *
  * Scanning conventions mirror `countQuantifiers` above: tokens inside `[...]`
  * are ignored, escaped tokens (`\?`, `\*`) do not count, and a `?` immediately
  * after an unescaped `(` is group syntax (`(?:`, `(?=`, `(?<name>`), not a
  * quantifier.
  */
-export const countOptionalQuantifiers = (pattern: string): number => {
+export const countVariableWidthQuantifiers = (pattern: string): number => {
   let count = 0;
   let inClass = false;
   let escaped = false;
@@ -305,7 +322,7 @@ export const countOptionalQuantifiers = (pattern: string): number => {
       continue;
     }
 
-    if (ch === '*') {
+    if (ch === '*' || ch === '+') {
       count += 1;
       afterOpenParen = false;
       continue;
@@ -325,7 +342,7 @@ export const countOptionalQuantifiers = (pattern: string): number => {
       const match = /^\d+,?\d*\}/.exec(rest);
       if (match !== null) {
         const bound = match[0].slice(0, -1); // strip the closing '}'
-        if (quantifierAllowsZero(bound)) {
+        if (quantifierIsVariableWidth(bound)) {
           count += 1;
         }
         // Advance past the closing '}'.
@@ -669,9 +686,9 @@ const assertSafeRegexPattern = (pattern: string): void => {
     );
   }
 
-  if (countOptionalQuantifiers(pattern) > MAX_REGEX_OPTIONAL_QUANTIFIERS) {
+  if (countVariableWidthQuantifiers(pattern) > MAX_REGEX_VARIABLE_QUANTIFIERS) {
     throw new ValidationError(
-      `$regex pattern exceeds the maximum of ${String(MAX_REGEX_OPTIONAL_QUANTIFIERS)} optional quantifiers (a chain of skippable atoms risks exponential backtracking).`,
+      `$regex pattern exceeds the maximum of ${String(MAX_REGEX_VARIABLE_QUANTIFIERS)} variable-width quantifiers (a chain of atoms whose width the engine can choose risks exponential backtracking).`,
     );
   }
 
@@ -728,9 +745,13 @@ export const getCachedRegex = (
     if (cached !== undefined) {
       return cached;
     }
-    assertSafeRegexPattern(operand.source);
-    const safeFlags = operand.flags.replace(/[gy]/g, '');
-    const safe = new RegExp(operand.source, safeFlags);
+    // `source` and `flags` are read once each: an own accessor shadowing either
+    // prototype getter could otherwise screen one pattern and compile another.
+    const source = operand.source;
+    const flags = operand.flags;
+    assertSafeRegexPattern(source);
+    const safeFlags = flags.replace(/[gy]/g, '');
+    const safe = new RegExp(source, safeFlags);
     regexCache.set(operand, safe);
     return safe;
   }

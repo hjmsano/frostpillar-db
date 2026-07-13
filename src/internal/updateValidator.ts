@@ -3,6 +3,7 @@ import type { UpdateOperations } from '../types.js';
 import { validateFieldPath } from './documentPath.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
 import {
+  defineOwnProperty,
   hasOwn,
   isObjectRecord,
   isPlainObject,
@@ -69,31 +70,39 @@ const assertUpdatablePath = (
   }
 };
 
-const validateUpdateValueObject = (
+const materializeUpdateValueObject = (
   value: Record<string, unknown>,
   activePath: WeakSet<object>,
   depth: number,
   maxDepth: number,
-): void => {
+): Record<string, unknown> => {
   if (activePath.has(value)) {
     throw new ValidationError(
       'Circular references are not supported in update values.',
     );
   }
   activePath.add(value);
+  const copy: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
     if (isReservedKey(key)) {
       throw new ValidationError(
         `Update value key "${key}" is reserved and not allowed.`,
       );
     }
-    validateUpdateValue(nested, activePath, depth + 1, maxDepth);
+    copy[key] = materializeUpdateValue(nested, activePath, depth + 1, maxDepth);
   }
   activePath.delete(value);
+  return copy;
 };
 
 /**
- * Validates a single value written by `$set` / `$push` / `$addToSet`.
+ * Validates a single value written by `$set` / `$push` / `$addToSet` **and
+ * returns the copy that will be written**. Validating the caller's value and
+ * deep-copying it afterwards (in `applySet` / `applyPush`) read it twice, so an
+ * accessor property could pass this check with a plain number and hand the
+ * write path a function or a `bigint` (ADR-030). The value returned here is the
+ * one that was checked, so the two cannot diverge.
+ *
  * Mirrors `validateSecurityValue` in `payloadValidator.ts`: recursion into
  * arrays/objects is bounded by `maxDepth`, checked BEFORE descending further,
  * to prevent a pathologically deep update value from overflowing the call
@@ -108,19 +117,23 @@ const validateUpdateValueObject = (
  * `validatePayloadSecurity` in `payloadValidator.ts`), so a value assigned
  * directly to a top-level field is one level deeper. This keeps the two
  * independent depth checks — this one (pre-merge, on the value alone) and
- * the post-merge whole-document check in `Collection.validatePayload` —
+ * the post-merge whole-document check in `Collection.validateOwnedDocument` —
  * aligned on the same effective boundary for the common case of a
  * non-dotted field path, so both report `ValidationError` at the same
  * nesting depth rather than one silently being stricter than the other.
  */
-export const validateUpdateValue = (
+export const materializeUpdateValue = (
   value: unknown,
   activePath: WeakSet<object>,
   depth: number,
   maxDepth: number,
-): void => {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return;
+): unknown => {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+  ) {
+    return value;
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
@@ -128,13 +141,15 @@ export const validateUpdateValue = (
         'Update values must not contain non-finite numbers.',
       );
     }
-    return;
+    return value;
   }
   if (typeof value === 'bigint') {
     throw new ValidationError('Update values must not contain bigint.');
   }
   if (depth > maxDepth) {
-    throw new ValidationError(`Update value nesting depth must be <= ${maxDepth}.`);
+    throw new ValidationError(
+      `Update value nesting depth must be <= ${maxDepth}.`,
+    );
   }
   if (Array.isArray(value)) {
     if (activePath.has(value)) {
@@ -143,18 +158,18 @@ export const validateUpdateValue = (
       );
     }
     activePath.add(value);
+    const copy: unknown[] = [];
     for (const element of value) {
-      validateUpdateValue(element, activePath, depth + 1, maxDepth);
+      copy.push(materializeUpdateValue(element, activePath, depth + 1, maxDepth));
     }
     activePath.delete(value);
-    return;
+    return copy;
   }
   if (typeof value === 'object') {
     if (!isPlainObject(value)) {
       throw new ValidationError('Update values must be plain objects.');
     }
-    validateUpdateValueObject(value, activePath, depth, maxDepth);
-    return;
+    return materializeUpdateValueObject(value, activePath, depth, maxDepth);
   }
   throw new ValidationError(
     'Update values must be string | number | boolean | null, an array, or a plain object.',
@@ -214,49 +229,69 @@ const validateRenameEntry = (
   validateFieldPath(target);
 };
 
+/**
+ * Every normalized map is a fresh object holding the *single* read of each
+ * caller-supplied entry: the operator maps are re-read by the `apply*` helpers
+ * (per matched document, across `await`s), and re-reading the caller's object
+ * there let an accessor supply a value the validator never saw — a `$rename`
+ * destination could turn into `_createdAt` after `validateRenameEntry` had
+ * cleared a different one (ADR-030).
+ */
 const extractAndValidateFieldOps = (
   operations: UpdateOperations,
   protectCreatedAt: boolean,
   maxDepth: number,
 ): Pick<NormalizedOperations, 'set' | 'unset' | 'inc' | 'rename'> => {
-  const set =
+  const rawSet =
     operations.$set === undefined
       ? {}
       : assertOperatorObject('$set', operations.$set);
-  const unset =
+  const rawUnset =
     operations.$unset === undefined
       ? {}
       : assertOperatorObject('$unset', operations.$unset);
-  const inc =
+  const rawInc =
     operations.$inc === undefined
       ? {}
       : assertOperatorObject('$inc', operations.$inc);
-  const rename =
+  const rawRename =
     operations.$rename === undefined
       ? {}
       : assertOperatorObject('$rename', operations.$rename);
 
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, unknown> = {};
+  const inc: Record<string, unknown> = {};
+  const rename: Record<string, unknown> = {};
+
   const updateValueActivePath = new WeakSet<object>();
-  for (const [field, value] of Object.entries(set)) {
+  for (const [field, value] of Object.entries(rawSet)) {
     assertUpdatablePath('$set', field, protectCreatedAt);
-    if (hasOwn(unset, field)) {
+    if (hasOwn(rawUnset, field)) {
       throw new ValidationError(
         `Cannot combine $set and $unset for "${field}".`,
       );
     }
-    validateUpdateValue(value, updateValueActivePath, 2, maxDepth);
+    defineOwnProperty(
+      set,
+      field,
+      materializeUpdateValue(value, updateValueActivePath, 2, maxDepth),
+    );
   }
-  for (const field of Object.keys(unset)) {
+  for (const [field, value] of Object.entries(rawUnset)) {
     assertUpdatablePath('$unset', field, protectCreatedAt);
+    defineOwnProperty(unset, field, value);
   }
-  for (const [source, target] of Object.entries(rename)) {
+  for (const [source, target] of Object.entries(rawRename)) {
     validateRenameEntry(source, target, protectCreatedAt);
+    defineOwnProperty(rename, source, target);
   }
-  for (const [field, value] of Object.entries(inc)) {
+  for (const [field, value] of Object.entries(rawInc)) {
     assertUpdatablePath('$inc', field, protectCreatedAt);
     if (typeof value !== 'number' || !Number.isFinite(value)) {
       throw new ValidationError('$inc values must be finite numbers.');
     }
+    defineOwnProperty(inc, field, value);
   }
 
   return { set, unset, inc, rename };
@@ -267,30 +302,47 @@ const extractAndValidateArrayOps = (
   protectCreatedAt: boolean,
   maxDepth: number,
 ): Pick<NormalizedOperations, 'push' | 'pull' | 'addToSet'> => {
-  const push =
+  const rawPush =
     operations.$push === undefined
       ? {}
       : assertOperatorObject('$push', operations.$push);
-  const pull =
+  const rawPull =
     operations.$pull === undefined
       ? {}
       : assertOperatorObject('$pull', operations.$pull);
-  const addToSet =
+  const rawAddToSet =
     operations.$addToSet === undefined
       ? {}
       : assertOperatorObject('$addToSet', operations.$addToSet);
 
+  const push: Record<string, unknown> = {};
+  const pull: Record<string, unknown> = {};
+  const addToSet: Record<string, unknown> = {};
+
   const updateValueActivePath = new WeakSet<object>();
-  for (const [field, value] of Object.entries(push)) {
+  for (const [field, value] of Object.entries(rawPush)) {
     assertUpdatablePath('$push', field, protectCreatedAt);
-    validateUpdateValue(value, updateValueActivePath, 2, maxDepth);
+    defineOwnProperty(
+      push,
+      field,
+      materializeUpdateValue(value, updateValueActivePath, 2, maxDepth),
+    );
   }
-  for (const field of Object.keys(pull)) {
+  // A `$pull` operand is only ever *compared* against stored elements, never
+  // written, so it is carried by reference rather than deep-copied — that also
+  // keeps a `RegExp` or class instance intact for `deepEqual`. The map itself is
+  // still a copy, so `applyPull` reads the same entries this pass read.
+  for (const [field, value] of Object.entries(rawPull)) {
     assertUpdatablePath('$pull', field, protectCreatedAt);
+    defineOwnProperty(pull, field, value);
   }
-  for (const [field, value] of Object.entries(addToSet)) {
+  for (const [field, value] of Object.entries(rawAddToSet)) {
     assertUpdatablePath('$addToSet', field, protectCreatedAt);
-    validateUpdateValue(value, updateValueActivePath, 2, maxDepth);
+    defineOwnProperty(
+      addToSet,
+      field,
+      materializeUpdateValue(value, updateValueActivePath, 2, maxDepth),
+    );
   }
 
   return { push, pull, addToSet };

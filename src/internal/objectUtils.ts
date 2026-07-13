@@ -32,6 +32,30 @@ export const hasOwn = (
 };
 
 /**
+ * Adds an own enumerable data property to an object built from caller input.
+ * A plain `target[key] = value` assignment with `key === '__proto__'` sets the
+ * object's prototype instead of adding a key, so the key would vanish from the
+ * copy — taking with it the reserved-key error a later validation pass owes the
+ * caller. `defineProperty` always creates the own property.
+ */
+export const defineOwnProperty = (
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void => {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    return;
+  }
+  target[key] = value;
+};
+
+/**
  * Object keys that could enable prototype-pollution if accepted from user
  * input. Centralised here so filter/validator/evaluator code share one source
  * of truth.

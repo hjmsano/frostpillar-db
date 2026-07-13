@@ -153,7 +153,14 @@ export class Database {
       {
         assertOpen: () => this.assertOpen(),
         datastore,
-        hasCustomKey: resolvedOptions.key !== undefined,
+        // A database-level `key` is inherited by every datastore (it is part of
+        // the spread base config in `createDatastore`), so its `normalize` maps
+        // distinct `_id`s onto one storage key for collections that declared no
+        // `key` of their own. Reading only the collection option left those
+        // collections on the key-index fast paths, where `_id: "01"` resolved to
+        // the record stored under `"1"` (ADR-027).
+        hasCustomKey:
+          resolvedOptions.key !== undefined || this.baseConfig.key !== undefined,
         skipInsertValidation: this.baseConfig.skipPayloadValidation === true,
         payloadLimits: this.baseConfig.payloadLimits,
         caches: this.caches,

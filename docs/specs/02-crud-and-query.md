@@ -101,7 +101,7 @@ interface UpdateResult {
 
 1. Resolve matching documents via `getRecordsByFilter` — this uses the same `_id` fast paths (`getFirst`, `getMany`, `getRange`) documented in §2, falling back to `getAll()` for non-`_id` filters.
 2. For each matching document, apply the update operations to produce a new payload. Values written by `$set`, `$push`, and `$addToSet` are **deep-copied** before they enter the payload (see §12).
-3. **Payload validation:** Validate the resulting document against the same payload limits enforced on `insert` (see Spec 01 §1.2). If the document exceeds any limit (e.g., `maxTotalBytes`, `maxDepth`, `maxStringBytes`), throw `ValidationError` immediately. When `skipPayloadValidation` is `true`, only security checks (reserved keys, circular references) are applied.
+3. **Payload validation:** Validate the resulting document against the same payload limits enforced on `insert` (see Spec 01 §1.2). If the document exceeds any limit (e.g., `maxTotalBytes`, `maxDepth`, `maxStringBytes`), throw `ValidationError` immediately. When `skipPayloadValidation` is `true`, only security checks are applied (reserved keys, circular references, the `maxDepth` cap, plain-object values, and the non-storable leaf types `bigint` / `function` / `symbol` / `undefined`).
 4. **No-op detection:** If the resulting payload is identical to the original document (deep equality on every touched field), the document is considered unmodified — `replaceById` is **not** called, no `'update'` change event is emitted, and `modifiedCount` is **not** incremented. Examples: `$set` to the same value, `$inc` by `0` on an existing field, `$addToSet` of an already-present value.
 5. Persist each **actually modified** document atomically via `Datastore.replaceById(entryId, updatedPayload)`. The storage engine replaces the payload in-place, preserving the key and entry ID.
 6. Return `{ modifiedCount: <actually modified count>, upsertedId: null }`.
@@ -326,11 +326,13 @@ For `RegExp` operands, the `g` and `y` flags are stripped to ensure stateless ev
 
 Patterns may contain at most `MAX_REGEX_QUANTIFIERS` (20) quantifiers; exceeding this limit throws `ValidationError`. **Group-syntax `?` is excluded:** a `?` immediately following an unescaped `(` is part of JS group syntax (`(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`, `(?<name>`) and is not counted as a quantifier token, so `(?:a)` counts zero quantifiers and `(?:a?)` counts one.
 
-**Optional quantifier limit:** Patterns may contain at most `MAX_REGEX_OPTIONAL_QUANTIFIERS` (8) _optional_ quantifiers (`countOptionalQuantifiers`) — quantifier tokens whose minimum repetition count is zero: `?`, `*`, and any `{0}` / `{0,}` / `{0,m}` bound. Exceeding this limit throws `ValidationError`.
+**Variable-width quantifier limit:** Patterns may contain at most `MAX_REGEX_VARIABLE_QUANTIFIERS` (8) _variable-width_ quantifiers (`countVariableWidthQuantifiers`) — quantifier tokens whose minimum and maximum repetition counts differ, so the engine may choose how much its atom consumes: `?`, `*`, `+`, `{n,}`, and any `{n,m}` with `m > n`. A fixed-width `{n}` is not counted. Exceeding this limit throws `ValidationError`.
 
-An optional quantifier makes its atom independently skippable, so _k_ of them give a backtracking engine up to 2^_k_ ways to distribute a failing match across the pattern. `^.?.?….?aaa…a$` (20 `.?` atoms followed by 20 literal `a`s) passes every screen above — no quantifier repeats an atom, no group is nested or alternated, and no two adjacent atoms match a hand-written detector — yet it explodes to ~2^20 backtracking paths, ≈1.5 ms per _failing_ evaluation, which extrapolates to ≈15 s for a zero-match scan of 10,000 documents. `maxMatchedDocuments` cannot cut such a scan short, because a pattern that matches nothing never increments the match count. Capping optional quantifiers at 8 bounds this shape at ~2^8 = 256 paths (~0.01 ms per failing evaluation).
+A variable-width quantifier is an independent choice point, so _k_ of them give a backtracking engine an exponential number of ways to distribute a failing match across the pattern. `^.?.?….?aaa…a$` (20 `.?` atoms followed by 20 literal `a`s) passes every screen above — no quantifier repeats an atom, no group is nested or alternated, and no two adjacent atoms match a hand-written detector — yet it explodes to ~2^20 backtracking paths, ≈1.5 ms per _failing_ evaluation, which extrapolates to ≈15 s for a zero-match scan of 10,000 documents. `maxMatchedDocuments` cannot cut such a scan short, because a pattern that matches nothing never increments the match count. Capping the count at 8 bounds this shape at ~2^8 = 256 paths (~0.01 ms per failing evaluation).
 
-The cap is a **total count over the whole pattern**, not the length of an adjacent run: mandatory atoms interleaved between the optional ones (`.?\w.?\w…`) still match unconditionally, so they do not prune any branch and the path count stays exponential in the total. The count is deliberately conservative in two ways — a lazy marker (`*?`, `+?`, `{n,m}?`) is itself a `?` token and counts, and `{0}` (which can never match) counts as well. Group-syntax `?` is excluded exactly as it is for `MAX_REGEX_QUANTIFIERS`, so `(?:a)` counts zero and `(?:a)?` counts one.
+**A minimum of zero is not what matters.** The cap originally counted only _skippable_ atoms (minimum repetition count of zero), which a chain of `{1,2}` atoms evaded while reproducing the shape exactly: each atom must match, but it may take one character _or two_, so a failing match still has 2^_k_ distributions to explore (≈5.2 ms per warmed non-match, multiplied by every document a scan touches). A chain of `+` / `{1,}` atoms is worse still, since each has an unbounded maximum. Any quantifier whose width the engine can choose is therefore counted.
+
+The cap is a **total count over the whole pattern**, not the length of an adjacent run: fixed-width atoms interleaved between the variable ones (`.?\w.?\w…`) always consume the same width, so they prune no branch and the path count stays exponential in the total. The count is deliberately conservative in one way — a lazy marker (`*?`, `+?`, `{n,m}?`) is itself a `?` token and counts a second time. Group-syntax `?` is excluded exactly as it is for `MAX_REGEX_QUANTIFIERS`, so `(?:a)` counts zero and `(?:a)?` counts one.
 
 **Alternation group limit:** Patterns may contain at most `MAX_REGEX_ALTERNATION_GROUPS` (4) alternation groups — parenthesized groups whose own top-level content has an unescaped `|` (e.g. `(a|b)`, `(?:a|b)`; a `|` inside a nested sub-group does not count toward its enclosing group). This closes a gap the quantifier-based checks above cannot see: repeating an ambiguous alternation group with no quantifier at all (e.g. `(a|aa)(a|aa)(a|aa)...`) produces the same exponential backtracking blowup as a quantified alternation, but carries zero quantifier tokens, so `MAX_REGEX_QUANTIFIERS` and the quantifier-keyed patterns above never see it. Exceeding this limit throws `ValidationError`.
 
@@ -603,7 +605,7 @@ For `$inc` specifically:
 - The increment operand must be a finite number (rejects `Infinity`, `-Infinity`, `NaN`).
 - The computed result (`existing + increment`) must also be finite; otherwise `ValidationError` is thrown. This prevents silent production of `NaN` or `Infinity` from overflow-like scenarios (e.g., `Number.MAX_VALUE + Number.MAX_VALUE`).
 
-**Document-level validation:** In addition to per-value validation above, `update()` validates the **complete resulting document** against the database's `payloadLimits` configuration (see Spec 01 §1.2) after all operators have been applied. This ensures that an update cannot produce a document exceeding `maxTotalBytes`, `maxDepth`, `maxStringBytes`, `maxKeyBytes`, `maxKeysPerObject`, or `maxTotalKeys` — the same limits enforced on `insert`. When `skipPayloadValidation` is `true`, only security checks (reserved keys, circular references) are applied.
+**Document-level validation:** In addition to per-value validation above, `update()` validates the **complete resulting document** against the database's `payloadLimits` configuration (see Spec 01 §1.2) after all operators have been applied. This ensures that an update cannot produce a document exceeding `maxTotalBytes`, `maxDepth`, `maxStringBytes`, `maxKeyBytes`, `maxKeysPerObject`, or `maxTotalKeys` — the same limits enforced on `insert`. When `skipPayloadValidation` is `true`, only security checks are applied (reserved keys, circular references, the `maxDepth` cap, plain-object values, and the non-storable leaf types `bigint` / `function` / `symbol` / `undefined`).
 
 ## 11. Result Set Size Limit
 
@@ -629,22 +631,28 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 - For `find()` queries: when a `limit(n)` is specified without a `sort`, the effective cap is `max(n, maxMatchedDocuments)`. Because an explicit limit already bounds how many documents are buffered, a limit larger than the cap returns normally instead of throwing. The scanner still stops collecting after `n` documents. The strict `maxMatchedDocuments` cap applies to unbounded scans and to queries with a `sort` (a sort must collect all matching documents before ordering, so the limit hint is not applied at scan time).
 - `count()` is **not** affected by this cap because it does not buffer documents (it uses `Datastore.count()` or iterates without materialising the result set).
 
-## 12. Write-Path Input Isolation
+## 12. Input Isolation
 
-Documents and update operands supplied by the caller are **deep-copied** on every write path. Once a write returns, the caller's object graph and the stored record share no references, so subsequent mutation of the caller's objects cannot alter stored data.
+Every input the caller supplies — insert documents, update operands, and filters — is **copied into a snapshot the collection owns, and read exactly once while doing so**. Validation, evaluation, storage, and `watch()` all operate on that snapshot; the caller's object is never read a second time. Once a call returns, the caller's object graph and the stored record share no references, so mutating the caller's objects cannot alter stored data.
 
-**Where copying happens:**
+**What is snapshotted:**
 
-| Path                                  | Copied value                                                |
-| ------------------------------------- | ----------------------------------------------------------- |
-| `insert()` / `insertMany()` / upsert  | The whole document, including all nested objects and arrays |
-| `update()` with `$set`                | Each assigned value                                         |
-| `update()` with `$push` / `$addToSet` | Each value appended to the target array                     |
+| Input                                     | Snapshot                                                                    |
+| ----------------------------------------- | --------------------------------------------------------------------------- |
+| `insert()` / `insertMany()` / upsert      | The whole document, including all nested objects and arrays                  |
+| `update()` with `$set`                    | Each assigned value                                                          |
+| `update()` with `$push` / `$addToSet`     | Each value appended to the target array                                      |
+| `update()` with `$unset` / `$inc` / `$rename` / `$pull` | The operator map (its entries; the `$pull` comparison value is not deep-copied) |
+| `find()` / `findOne()` / `count()` / `update()` / `remove()` | The filter, at the entry point, before any other stage sees it |
 
-`$unset`, `$inc`, `$rename`, and `$pull` never place a caller-supplied object into the document — their operands are read-only (a field path, a finite number, or a deep-equality comparison value) — so no copy is made.
+A `RegExp` in a filter is carried by reference (`$regex` compiles it once into a private copy); so is a `$pull` comparison value and any other non-plain object operand, since none of them is ever written into a document.
+
+**Reading each input once is part of the contract, not an implementation detail.** An accessor property (`{ get score() {…} }`) or a `Proxy` answers every read independently, so validating the caller's object and then re-reading it — to clone it, to evaluate it against each document, or to delete by it after an `await` — let the second read supply a value the first never saw. See [ADR-030](../adr/030-read-once-input-snapshots.md).
+
+Filters are snapshotted with the same rules as payloads: a cyclic filter, or one nesting deeper than `maxDepth`, throws `ValidationError`.
 
 **Why this is required:** frostpillar-db always constructs the underlying `Datastore` with `skipPayloadValidation: true` (see [Spec 01 §1.1](./01-database-and-collection.md)), which also disables the storage engine's defensive copy of the payload. The object handed to the datastore therefore _becomes_ the stored record. Without isolation at the collection level, a caller mutating an inserted object after the fact would silently rewrite stored data, and injecting a cycle into it would make later reads throw `RangeError` from stack overflow instead of a clean error. See [ADR-025](../adr/025-write-path-input-isolation.md).
 
-**Order:** the copy is taken **after** validation, so the validated graph and the copied graph are the same one and cannot diverge (a TOCTOU-style bypass). Because validation caps nesting at `maxDepth` on every path — including `skipPayloadValidation` mode — the recursive copy is bounded and cannot overflow the stack.
+**Order:** the copy is taken **before** validation, in the same pass — the validator's input _is_ the snapshot, so the checked graph and the stored graph are the same one and no second read can diverge from it. The copy walk is itself bounded by `maxDepth` and rejects cycles, on every path including `skipPayloadValidation` mode, so it cannot overflow the stack.
 
-**Not covered:** documents _returned_ from reads (`find()`, `findOne()`, `watch()` events) are not copied; treat them as read-only snapshots.
+**Reads are copied too:** documents returned by `find()`, `findOne()`, and `watch()` events are deep copies of the stored records, not references to them (a `watch()` event's document is one copy shared by that event's listeners). Mutating what a read returns cannot alter stored data.

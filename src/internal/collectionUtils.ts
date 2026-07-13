@@ -14,7 +14,7 @@ import type {
   FrostpillarStoredDocument,
   InsertDocument,
 } from '../types.js';
-import { cloneDocument, hasOwn, isObjectRecord } from './objectUtils.js';
+import { hasOwn, isObjectRecord } from './objectUtils.js';
 import { validateIdString } from './filterUtils.js';
 
 export const assertDocumentId = (value: unknown): string => {
@@ -37,12 +37,14 @@ export const toStoredDocument = <TDocument extends FrostpillarDocument>(
 };
 
 /**
- * Deep-copies the caller's document into the payload that will be stored
- * (ADR-025). A shallow spread would leave every nested object and array owned
- * by the caller: because the datastore runs with `skipPayloadValidation: true`
- * it does not copy the payload either, so the caller could keep mutating the
- * stored record after the write returned. Called only after validation, so the
- * graph is acyclic and depth-capped and the recursion is bounded.
+ * Turns the write path's document snapshot into the payload that will be stored
+ * (ADR-025, ADR-030). The caller's object was already deep-copied by
+ * `materializePayload`, in the same pass that validated it, so `document` here
+ * is a graph this collection owns outright: it is stamped with the `_id` and
+ * handed to the datastore as-is. No second copy is taken — and none may be
+ * skipped either, because the datastore runs with `skipPayloadValidation: true`
+ * and does not copy the payload, so whatever is passed here *becomes* the
+ * stored record.
  */
 export const toInsertPayload = <TDocument extends FrostpillarDocument>(
   document: InsertDocument<TDocument>,
@@ -52,7 +54,7 @@ export const toInsertPayload = <TDocument extends FrostpillarDocument>(
     throw new ValidationError('Document must be an object.');
   }
 
-  const payload = cloneDocument(document as Record<string, unknown>);
+  const payload = document as Record<string, unknown>;
   payload._id = id;
   return payload as FrostpillarStoredDocument<TDocument>;
 };
@@ -77,6 +79,10 @@ export interface PreparedRecord<TDocument extends FrostpillarDocument> {
 }
 
 /**
+ * Prepares the record for a single insert. `document` must be the collection's
+ * own snapshot of the caller's payload (`materializePayload`), not the caller's
+ * object: it is stored by reference and stamped with `_id`/`_createdAt`.
+ *
  * `_createdAt` exists purely as TTL bookkeeping (see ADR-016) — nothing else
  * reads it. Whenever the collection has a `ttl`, the server-generated
  * `createdAt` is unconditionally written, overwriting any caller-supplied

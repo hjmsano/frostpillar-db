@@ -14,18 +14,28 @@ export const MAX_REGEX_PATTERN_LENGTH = 1024;
 export const MAX_REGEX_QUANTIFIERS = 20;
 
 /**
- * Maximum number of *optional* quantifiers (minimum repetition count of zero:
- * `?`, `*`, `{0}`, `{0,}`, `{0,m}`) allowed in a $regex pattern.
+ * Maximum number of *variable-width* quantifiers allowed in a $regex pattern: a
+ * quantifier whose minimum repetition count differs from its maximum, so the
+ * width its atom consumes is not fixed — `?`, `*`, `+`, `{n,}`, and any `{n,m}`
+ * with `m > n`. A fixed-width `{n}` / `{n,n}` is not counted: it consumes
+ * exactly n repetitions, offering the engine no choice to backtrack over.
  *
- * Each optional quantifier makes its atom independently skippable, so k of them
- * give a backtracking engine up to 2^k ways to distribute a *failing* match.
- * None of the other screens see this shape — no atom is repeated, no group is
- * nested or alternated — so `^.?.?...aaa...$` with 20 `.?` atoms sat inside
- * MAX_REGEX_QUANTIFIERS and cost ~1.5 ms per failing evaluation (~15 s over a
- * 10,000-document zero-match scan, which `maxMatchedDocuments` never cuts short
- * because nothing matches). A cap of 8 bounds the shape at ~2^8 = 256 paths.
+ * Each variable-width quantifier is an independent choice point, so k of them
+ * give a backtracking engine an exponential number of ways to distribute a
+ * *failing* match. None of the other screens see this shape — no atom is
+ * repeated, no group is nested or alternated — so `^.?.?...aaa...$` with 20 `.?`
+ * atoms sat inside MAX_REGEX_QUANTIFIERS and cost ~1.5 ms per failing
+ * evaluation (~15 s over a 10,000-document zero-match scan, which
+ * `maxMatchedDocuments` never cuts short because nothing matches).
+ *
+ * The cap originally counted only the *skippable* quantifiers (minimum of
+ * zero). That left the identical shape reachable with a minimum of one: a chain
+ * of `{1,2}` atoms takes one-or-two characters each — still 2^k distributions of
+ * a failing match, measured at ~5.2 ms per warmed non-match — and a chain of
+ * `+`/`{1,}` atoms is worse still, since each is unbounded. Counting every
+ * variable-width quantifier bounds all of them at 8.
  */
-export const MAX_REGEX_OPTIONAL_QUANTIFIERS = 8;
+export const MAX_REGEX_VARIABLE_QUANTIFIERS = 8;
 
 /**
  * Maximum number of alternation groups `(a|b)` allowed in a $regex pattern

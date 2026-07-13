@@ -372,7 +372,7 @@ const numericKey: DatastoreKeyDefinition<number> = {
 const items = db.collection('items', { key: numericKey });
 ```
 
-The key definition controls storage layout and ordering only: `_id` remains the string stored on the document, and queries match it by exact string equality. Keep `normalize` injective over the `_id` strings you store — `normalize: Number` maps `"01"` and `"1"` onto one storage key, so they cannot coexist.
+The key definition controls storage layout and ordering only: `_id` remains the string stored on the document, and queries match it by exact string equality. Keep `normalize` injective over the `_id` strings you store — `normalize: Number` maps `"01"` and `"1"` onto one storage key, so they cannot coexist. A `key` set on the `Database` config applies to every collection that does not override it, with exactly the same semantics.
 
 Per-collection options take precedence over database-level configuration. Re-accessing a collection with a different value for any of these fields throws `ConfigurationError`. See [Spec 01](docs/specs/01-database-and-collection.md) §2.8–§2.11 for full details.
 
@@ -487,7 +487,20 @@ input.tags.push('b'); // does not touch the stored document
 const stored = await users.findOne({ _id: id }); // tags: ['a']
 ```
 
-The reverse does not hold: documents **returned** from `find()`, `findOne()`, and `watch()` events are references to stored records, not copies. Treat them as read-only snapshots — copy before mutating.
+Reads are copied as well: the documents **returned** by `find()`, `findOne()`, and `watch()` events are deep copies, not references to the stored records, so mutating a result never touches stored data. (A `watch()` event's document is one copy shared by that event's listeners, so listeners of the same event still see each other's mutations.)
+
+Filters are copied too, and every input is read **exactly once**. A getter or a `Proxy` therefore cannot show the validator one value and the query engine another:
+
+```ts
+// The getter is read once, by the snapshot; the stored value is the validated one.
+await users.insert({
+  get score() {
+    return callCount++ === 0 ? 1 : 10n; // the 10n is never reachable
+  },
+});
+```
+
+See [ADR-030](docs/adr/030-read-once-input-snapshots.md).
 
 ### Identity Queries
 
@@ -1007,7 +1020,7 @@ const db = new Database({
 
 Only use this option when you fully control the data being inserted — skipping validation lets oversized documents reach storage.
 
-A lightweight security validator still runs on every write, even in skip mode. It rejects reserved keys, circular references, documents nested deeper than `maxDepth`, and non-plain object values (class instances, `Date`, `Map`, `Set`, `Object.create(proto)`) with `ValidationError`. What skip mode turns off is the size accounting — byte counts, key counts, and string/key length limits.
+A lightweight security validator still runs on every write, even in skip mode. It rejects reserved keys, circular references, documents nested deeper than `maxDepth`, non-plain object values (class instances, `Date`, `Map`, `Set`, `Object.create(proto)`), and the non-storable leaf types `bigint`, `function`, `symbol`, and `undefined` with `ValidationError`. Functions and symbols are rejected because they are reference types — a stored document would keep sharing your object, and mutating it afterwards would change what later reads return. What skip mode turns off is the size accounting — byte counts, key counts, and string/key length limits.
 
 #### `maxMatchedDocuments`
 
@@ -1039,7 +1052,7 @@ In addition to per-document payload limits, frostpillar-db enforces fixed operat
 | Max operand array size            | 10,000  | Elements in a `$in` / `$nin` / `$all` operand array                                        |
 | Max `$regex` pattern length       | 1,024   | Characters in a `$regex` string pattern                                                    |
 | Max `$regex` quantifiers          | 20      | Quantifier tokens (`*`, `+`, `?`, `{n,m}`) in a `$regex` pattern                           |
-| Max `$regex` optional quantifiers | 8       | Skippable quantifier tokens (`?`, `*`, `{0,m}`) in a `$regex` pattern                      |
+| Max `$regex` variable quantifiers | 8       | Variable-width quantifier tokens (`?`, `*`, `+`, `{n,}`, `{n,m}` with `m > n`) in a `$regex` pattern |
 | Max `$regex` alternation groups   | 4       | Parenthesized alternation groups (`(a\|b)`) in a `$regex` pattern                          |
 | Max `$regex` test length          | 8,192   | Characters in a field value tested against a `$regex`                                      |
 | Max document array length         | 100,000 | Per-document array size after `$push` / `$addToSet`                                        |
@@ -1056,7 +1069,7 @@ In addition to per-document payload limits, frostpillar-db enforces fixed operat
 - A structural quantified-alternation-group check: a _repeating_ quantifier — `+`, `*`, unbounded `{n,}`, or a `{n}`/`{n,m}` whose maximum is 2 or more — applied to a group that contains an unescaped `|` **at any nesting depth** is rejected (e.g. `(a|a)+`, `(a|ab)*`, `(aa|a){2,}`, `(?:aa|a){2,50}`, and wrapped forms such as `((a|aa))+` and `(?:(?:a|ab))+` where a redundant group would otherwise hide the alternation from the outer repeat). The screen is conservative and does no ambiguity analysis, so a repeated group carrying a pipe anywhere within it (e.g. `(x(a|b)y)+`) is also rejected. A non-repeating quantifier (`?`, `{0,1}`, `{1}`) or a bare alternation group with no quantifier is accepted.
 - Hand-written detectors for other catastrophic shapes: overlapping wildcards, adjacent quantifiers, and backreferences with quantifiers.
 
-The optional-quantifier cap is a backstop against a chain of independently skippable atoms (e.g. `^.?.?….?aaa…a$`): every quantifier there matches at most once, so no repeat, nesting, or alternation check sees anything wrong, yet each atom is a separate take-or-skip choice and a failing match explores up to 2^k of them. Capping optional quantifiers at 8 bounds that at ~256 paths. It counts the whole pattern, not adjacent runs, because mandatory atoms wedged between the optional ones (`.?\w.?\w…`) always match and prune no branch.
+The variable-width-quantifier cap is a backstop against a chain of atoms whose width the engine gets to choose (e.g. `^.?.?….?aaa…a$`): no quantifier there repeats an atom, so no repeat, nesting, or alternation check sees anything wrong, yet each atom is a separate choice point and a failing match explores up to 2^k of them. Capping them at 8 bounds that at ~256 paths. A minimum of zero is *not* the property that matters — a chain of `{1,2}` atoms must match every atom, yet each still takes one character or two, so the same 2^k blowup is available; `+` and `{n,}` are worse still. Any quantifier whose minimum and maximum differ is therefore counted, and only a fixed-width `{n}` is free. It counts the whole pattern, not adjacent runs, because fixed-width atoms wedged between the variable ones (`.?\w.?\w…`) consume the same width every time and prune no branch.
 
 The alternation-group cap is a backstop against manually-unrolled ambiguous alternation (e.g. repeating `(a|aa)` several times with no quantifier character at all), which carries no quantifier token and so would otherwise evade the quantifier-based checks above. As with the other pattern heuristics, all of the above are defense-in-depth screens against known catastrophic-backtracking shapes, not a formal proof that every `$regex` pattern executes in linear time — they narrow the risk significantly but do not eliminate the category.
 

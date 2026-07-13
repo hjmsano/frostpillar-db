@@ -117,6 +117,13 @@ export const extractIdEquality = (filter: Filter): string | null => {
  * structural walk: an unchecked operand reached `getMany`/`deleteMany` first, so
  * an oversized `remove()` deleted its documents and returned without ever
  * throwing (spec 02 §5, §8.3).
+ *
+ * The returned array is a detached copy of the validated elements, never the
+ * operand itself. `remove()`'s fast path reads it on both sides of an `await`
+ * (`getMany`, then `deleteMany`), so an aliased operand let a caller grow the
+ * array while the removal was in flight: the extra `_id` was past the validated
+ * length cap, was deleted anyway, and — being absent from the `getMany` result —
+ * emitted no `watch()` event.
  */
 export const extractIdInclusion = (filter: Filter): string[] | null => {
   const keys = Object.keys(filter);
@@ -131,12 +138,14 @@ export const extractIdInclusion = (filter: Filter): string[] | null => {
   const arr = assertInclusionOperand(value.$in, '$in');
   if (arr.length === 0) return null;
 
+  const ids: string[] = [];
   for (const item of arr) {
     if (typeof item !== 'string' || item.length === 0) return null;
     validateIdString(item);
+    ids.push(item);
   }
 
-  return arr as string[];
+  return ids;
 };
 
 /**

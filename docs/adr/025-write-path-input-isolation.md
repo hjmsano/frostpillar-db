@@ -25,11 +25,11 @@ Validation of the input graph is not a defence here: the caller still holds the 
 
 Every user-facing write path **deep-copies** caller-supplied data into a graph the caller cannot reach:
 
-- `toInsertPayload` deep-copies the whole document via `cloneDocument` (used by `insert`, `insertMany`, and upsert).
+- The whole document is deep-copied on `insert`, `insertMany`, and upsert.
 - `$set` deep-copies each assigned value; `$push` and `$addToSet` deep-copy each value that enters the target array.
-- `$unset`, `$inc`, `$rename`, and `$pull` are unchanged: their operands are read-only (a field path, a finite number, a deep-equality comparison value) and never enter the document.
+- `$unset`, `$inc`, `$rename`, and `$pull` place no caller-supplied object into the document: their operands are read-only (a field path, a finite number, a deep-equality comparison value).
 
-The copy is taken **after** validation, not before, so the graph that was validated is the graph that is copied — a caller cannot swap in a different object between the two steps.
+> **Superseded in part by [ADR-030](./030-read-once-input-snapshots.md).** This ADR took the copy **after** validation and argued that the validated graph and the copied graph were therefore the same one. That holds only for objects whose properties are plain data: an accessor property (or a `Proxy` `get` trap) answers each read differently, so validating the caller's object and then re-reading it to copy let the second read supply a value the first never saw. The copy now runs **first**, in the same pass that validates it (`materializePayload`, `materializeUpdateValue`), and every later stage reads only the copy. The isolation guarantee below is unchanged — it is the ordering that was wrong.
 
 `cloneDocument` (`objectUtils.ts`) is reused rather than `structuredClone`: documents are validated as JSON-safe (no `Date`, `Map`, `Set`, class instances, or `bigint`), so the full structured-clone algorithm is unnecessary overhead. Its recursion is safe because validation caps nesting at `maxDepth` on every path, including `skipPayloadValidation` mode.
 
@@ -53,6 +53,8 @@ The copy is taken **after** validation, not before, so the graph that was valida
 - Writes cost one deep copy of the payload (insert) or of the operand (`$set`/`$push`/`$addToSet`). For documents within the default `payloadLimits` (1 MB, depth 64) this is bounded and dominated by the storage write itself. Callers inserting many large documents pay for a copy they previously got for free — at the cost of aliasing.
 - `update()` already deep-copied the target document before applying operators, so the operand copy is the only added work on that path.
 
-### Not covered
+### Also copied on read
 
-Documents **returned** from reads (`find()`, `findOne()`, and `watch()` event payloads) are still references to stored records, not copies. They are read-only snapshots by contract, and copying them would tax the read path. Aggregation results are defensively copied — for the value accumulators by ADR-021/ADR-023, and for `distinct()` values and `groupBy()` `_key` values by [ADR-026](./026-aggregation-result-isolation.md).
+Documents **returned** from reads are copies too, not references to the stored record: `find()`/`cursor()`/`toArray()` and `findOne()` deep-copy each document they yield, and `watch()` deep-copies the document once per event (all listeners of that event share that one copy). A caller may mutate what a read returns without touching stored data. Aggregation results are defensively copied as well — for the value accumulators by ADR-021/ADR-023, and for `distinct()` values and `groupBy()` `_key` values by [ADR-026](./026-aggregation-result-isolation.md).
+
+An earlier revision of this ADR listed the read path as *not covered* and told callers to treat results as read-only references. That was never true of the shipped implementation, which has always cloned on read.

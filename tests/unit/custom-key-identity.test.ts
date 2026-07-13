@@ -110,6 +110,58 @@ void test('range filter with custom key matches every document the filter accept
   await db.close();
 });
 
+// A `key` on the DatabaseConfig is inherited by every collection's datastore,
+// so it has exactly the same normalize-collision hazard as a per-collection
+// `key` — but the collection was only told about the latter, leaving these
+// collections on the fast paths that trust the storage key for `_id` identity.
+
+void test('database-level key: findOne does not report a normalize-collision hit', async () => {
+  const db = new Database({ key: numericKey });
+  const col = db.collection<TestDoc>('items');
+  await col.insert({ _id: '01', value: 1 });
+
+  assert.equal(await col.findOne({ _id: '1' }), null);
+  assert.equal((await col.findOne({ _id: '01' }))?._id, '01');
+  await db.close();
+});
+
+void test('database-level key: exists compares the stored _id, not the storage key', async () => {
+  const db = new Database({ key: numericKey });
+  const col = db.collection<TestDoc>('items');
+  await col.insert({ _id: '01', value: 1 });
+
+  assert.equal(await col.exists('1'), false);
+  assert.equal(await col.exists('01'), true);
+  await db.close();
+});
+
+void test('database-level key: remove does not delete a normalize collision', async () => {
+  const db = new Database({ key: numericKey });
+  const col = db.collection<TestDoc>('items');
+  await col.insert({ _id: '01', value: 1 });
+  const removedIds: string[] = [];
+  col.watch((event) => {
+    if (event.type === 'remove') removedIds.push(event.documentId);
+  });
+
+  assert.equal(await col.remove({ _id: '1' }), 0);
+  assert.equal(await col.count(), 1);
+  assert.deepEqual(removedIds, []);
+
+  assert.equal(await col.remove({ _id: '01' }), 1);
+  assert.deepEqual(removedIds, ['01']);
+  await db.close();
+});
+
+void test('database-level key: ids returns stored _id strings', async () => {
+  const db = new Database({ key: numericKey });
+  const col = db.collection<TestDoc>('items');
+  await col.insert({ _id: '01', value: 1 });
+
+  assert.deepEqual(await col.ids(), ['01']);
+  await db.close();
+});
+
 void test('default string keys keep the index fast paths intact', async () => {
   const db = new Database();
   const col = db.collection<TestDoc>('items');
