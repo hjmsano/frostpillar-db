@@ -1014,6 +1014,8 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 
 > **Tip:** If you only need the first _n_ results, add `.limit(n)` to your query — this short-circuits the scan (when no `sort` is applied) and avoids hitting the cap.
 
+> **Known limitation — the cap bounds the matched set, not the scan ([ADR-028](docs/adr/028-candidate-set-materialization.md)):** a scan first asks the storage engine for candidate records, and its read API returns arrays. The candidate array is therefore fully allocated before a filter is evaluated or a `.limit(n)` takes effect, so `.limit(10)` on a 10-million-document collection still materializes ten million records and keeps ten. A filter on `_id` (equality, `$in`, or a bounded range) is narrowed by the index before any array is built and does not have this cost; a filter with no `_id` predicate does. Lifting this needs a streaming read API in frostpillar-storage-engine, which the current version does not expose.
+
 ### Operational Limits
 
 In addition to per-document payload limits, frostpillar-db enforces fixed operational limits on filters, update operators, and aggregation outputs. These are not configurable — they protect against pathological inputs and runaway resource use.

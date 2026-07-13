@@ -38,7 +38,7 @@ Returns an array of `_id` values in the same order as the input.
 
 **Duplicate `_id` pre-check (`'reject'` collections):** before any record is written, the batch is checked for duplicate `_id`s — both within the batch and against the stored documents (one `Datastore.getMany()` over the batch's keys). A duplicate throws `DuplicateIdError` with **nothing written**. `putMany()` writes records in order and throws on the offending one, so without this pre-check a duplicate in the middle of a batch persisted the records before it — and, because the events are emitted only after `putMany()` resolves, emitted no `'insert'` event for any of them: storage and the `watch()` stream disagreed. The pre-check does not apply to `'replace'` / `'allow'` collections, where a duplicate key is not an error.
 
-The pre-check compares `_id` strings. Under a custom `key` definition whose `normalize` maps two distinct `_id`s onto one storage key ([ADR-027](../adr/027-custom-key-identity.md)), a collision _between two records of the same batch_ is not caught by it and still surfaces from the storage engine at write time.
+The pre-check compares `_id` strings. Under a custom `key` definition whose `normalize` maps two distinct `_id`s onto one storage key ([ADR-027](../adr/027-custom-key-id-identity.md)), a collision _between two records of the same batch_ is not caught by it and still surfaces from the storage engine at write time.
 
 **Error semantics:** If any insertion fails (e.g., `ValidationError`, `QuotaExceededError`, or a `DuplicateIdError` the pre-check could not anticipate), the error propagates to the caller immediately. Remaining documents are not processed. Documents that were already inserted before the failure are **not** rolled back (no transaction support; see ADR-007). The caller receives the thrown error, not a partial result. The IDs of previously inserted documents are not accessible from the error object.
 
@@ -610,6 +610,8 @@ For `$inc` specifically:
 ### `maxMatchedDocuments` Guard
 
 `find().toArray()`, `update()`, and `remove()` all buffer matched documents in memory before returning. Without a cap this can OOM the host process on large collections.
+
+**Scope — the cap bounds the matched set, not the scan ([ADR-028](../adr/028-candidate-set-materialization.md)):** a scan first asks the datastore for its candidate records, and the storage engine's read API returns arrays (`getAll()`, `getRange()`, `getMany()`). The candidate array is therefore fully materialized before frostpillar-db can evaluate the filter against a single record or honour a single `.limit(n)` — so `.limit(10)` on a 10-million-document collection still allocates ten million records and keeps ten. `maxMatchedDocuments` and `.limit(n)` bound how many documents are _retained_, and the `_id` fast paths (equality, `$in`, bounded range) narrow the candidates through the index before any array is built; a filter with no `_id` predicate cannot. Lifting this requires a streaming read API in frostpillar-storage-engine, which the current version does not expose.
 
 **Configuration:**
 
