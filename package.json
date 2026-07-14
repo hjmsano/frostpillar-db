@@ -1,6 +1,6 @@
 {
   "name": "@frostpillar/frostpillar-db",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "A tiny, light and fast flexible database for TypeScript, Node.js, and browser JavaScript, with no third-party runtime dependencies.",
   "type": "module",
   "author": "Hajime Sano",
