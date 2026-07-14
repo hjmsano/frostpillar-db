@@ -368,6 +368,9 @@ export const normalizeUpdateOperations = (
   protectCreatedAt = false,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): NormalizedOperations => {
+  if (!isPlainObject(operations)) {
+    throw new ValidationError('Update operations must be a plain object.');
+  }
   const snapshot = snapshotUpdateOperations(operations);
   const owned = snapshot.operations;
   assertValidOperatorKeys(owned);

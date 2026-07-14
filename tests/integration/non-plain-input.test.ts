@@ -97,6 +97,51 @@ void test('$and/$or reject non-plain sub-filters instead of matching all', async
   }
 });
 
+void test('update rejects non-plain operations instead of ignoring them', async () => {
+  const database = new Database({});
+  const col = database.collection<Doc>('t');
+  try {
+    await col.insert({ _id: 'a', v: 1 });
+
+    const asOperations = (value: unknown): Record<string, unknown> =>
+      value as Record<string, unknown>;
+    const invalidOperations: unknown[] = [
+      undefined,
+      null,
+      1,
+      'x',
+      [],
+      new Date(),
+      Object.create({ $set: { z: 9 } }),
+    ];
+    for (const operations of invalidOperations) {
+      await assert.rejects(
+        () => col.update({ _id: 'a' }, asOperations(operations)),
+        ValidationError,
+      );
+    }
+
+    assert.equal((await col.findOne({ _id: 'a' }))?.z, undefined);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('update accepts an empty operations object as a no-op', async () => {
+  const database = new Database({});
+  const col = database.collection<Doc>('t');
+  try {
+    await col.insert({ _id: 'a', v: 1 });
+
+    const result = await col.update({ _id: 'a' }, {});
+
+    assert.deepEqual(result, { modifiedCount: 0, upsertedId: null });
+    assert.equal((await col.findOne({ _id: 'a' }))?.v, 1);
+  } finally {
+    await database.close();
+  }
+});
+
 void test('insert rejects Date, Map, and inherited-only documents', async () => {
   const database = new Database({});
   const col = database.collection<Doc>('t');

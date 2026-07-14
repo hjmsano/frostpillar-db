@@ -116,6 +116,8 @@ Updates all documents matching `filter` using the specified update operators.
 
 A filter argument is always required. Passing `undefined`, `null`, or any non-plain-object value throws `ValidationError` — `update` must never silently match all documents. To update every document, pass `{}` explicitly.
 
+The `operations` argument is likewise required and must be a plain object. Passing `undefined`, `null`, a primitive, an array, a class instance (including `Date`, `Map`, `Set`), or an inherited-only object (`Object.create(proto)`) throws `ValidationError` synchronously — a malformed operation set must never be silently treated as "no operators". An empty plain object `{}` remains a valid no-op: it matches the `inputKeyCount === 0` short-circuit and resolves to `{ modifiedCount: 0, upsertedId: null }` without touching any document.
+
 **Types:**
 
 ```ts
