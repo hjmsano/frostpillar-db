@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.3.1](https://github.com/hjmsano/frostpillar-db/compare/v1.3.0...v1.3.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* assert the collection is open in watch() ([aea9800](https://github.com/hjmsano/frostpillar-db/commit/aea98008af2e851a2de4703466287d1f8500c4de))
+* cap the optional quantifiers a $regex pattern may contain ([d14a5b0](https://github.com/hjmsano/frostpillar-db/commit/d14a5b0a9d00d6e1ffa2376692673c94bcb0a8df))
+* clone aggregation results out of storage ([799a3b6](https://github.com/hjmsano/frostpillar-db/commit/799a3b627f08248ec3f0b880ca89965287ee16a5))
+* close every datastore when one close() fails ([dc57bfb](https://github.com/hjmsano/frostpillar-db/commit/dc57bfba1d51a8b14eac68af36a41c874d78862d))
+* close input snapshot and regex review gaps ([197008a](https://github.com/hjmsano/frostpillar-db/commit/197008a69bd4ae71383aa4e8dced24ff07e387c5))
+* count generated _id/_createdAt against the insert payload limits ([3d451ea](https://github.com/hjmsano/frostpillar-db/commit/3d451ea7e0d7fea8a76ff89c6b49a1601c8b5813))
+* cumulative input-isolation, validation-hardening, and lifecycle fixes ([549117c](https://github.com/hjmsano/frostpillar-db/commit/549117cf98f584e4ec112d0702f96f53fdb9c197))
+* deep-copy caller input on every write path ([d74a06c](https://github.com/hjmsano/frostpillar-db/commit/d74a06c420c86a68f3eb57ae33b3682353091792))
+* derive driver namespaces with collectionNamespace() ([8f8a469](https://github.com/hjmsano/frostpillar-db/commit/8f8a4690a295d9b01484f19da27563a921a079f5))
+* enforce the operand size limit on the _id $in fast path ([8b2fc22](https://github.com/hjmsano/frostpillar-db/commit/8b2fc22f0f5c8e698a8c0503bdd62b956035af12))
+* isolate durable driver namespaces per collection ([ca613bb](https://github.com/hjmsano/frostpillar-db/commit/ca613bbcf9fd5673de1b8b82d895b9e6b9704bc0))
+* keep _id identity independent of custom key normalization ([5644fc4](https://github.com/hjmsano/frostpillar-db/commit/5644fc44ce6ff4cd84fc236775ac4eea2558d87e))
+* keep insertMany's storage and watch stream consistent ([1503f62](https://github.com/hjmsano/frostpillar-db/commit/1503f62cecb87f9d2034bef299e99a254b38be19))
+* keep object-valued implicit equality in upsert documents ([71351bd](https://github.com/hjmsano/frostpillar-db/commit/71351bd77be54e91fab6a51fecf3444ea2b97389))
+* make ids() duplicate-consistent under duplicateKeys: 'allow' ([ac4ecf0](https://github.com/hjmsano/frostpillar-db/commit/ac4ecf0128696e4c779dfb0f967c4571c82a88b4))
+* read every caller input exactly once (ADR-030) ([0eac082](https://github.com/hjmsano/frostpillar-db/commit/0eac0825133cfa64c5af6fe74052ff74b7e70788))
+* reclaim expired ttl conflicts ([0ea1566](https://github.com/hjmsano/frostpillar-db/commit/0ea15663e8a6612faf26471f375aeef58183344f))
+* reject DEL (\x7f) in _id validation ([b3685cb](https://github.com/hjmsano/frostpillar-db/commit/b3685cb9545f74bd23fc4f97754ca61deedaf82a))
+* reject non-plain objects at document and filter boundaries ([3adfcd4](https://github.com/hjmsano/frostpillar-db/commit/3adfcd4408c2c2988a48d4e603aae75f4d25aaf0))
+* reject non-plain objects in the security-only payload traversal ([d536c36](https://github.com/hjmsano/frostpillar-db/commit/d536c368f458df96aeebc8c2629f3ba35ffdbec1))
+* reject non-plain update operations with ValidationError ([857e357](https://github.com/hjmsano/frostpillar-db/commit/857e3574d04937b72e373d8d2c12b2bf0f36b066))
+* require the $count accumulator operand to be true ([7954dcf](https://github.com/hjmsano/frostpillar-db/commit/7954dcf3877a7f9200adb0a0437b1a6533ba6181))
+* validate filter structure exhaustively, independent of documents ([f2ec567](https://github.com/hjmsano/frostpillar-db/commit/f2ec567d819ba9b0e555fc4df68cbd8164b5d042))
+* validate groupBy accumulator output names ([aa29f41](https://github.com/hjmsano/frostpillar-db/commit/aa29f41782b0e56864655526a220c61ae804d8e5))
+
+
+### Performance Improvements
+
+* bound and memoize groupBy accumulator work ([8d39ba0](https://github.com/hjmsano/frostpillar-db/commit/8d39ba0dec536195970e212a8b23548999f057c0))
+
 ## [1.3.0](https://github.com/hjmsano/frostpillar-db/compare/v1.2.0...v1.3.0) (2026-07-11)
 
 
