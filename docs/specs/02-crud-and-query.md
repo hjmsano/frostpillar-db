@@ -18,11 +18,15 @@ Inserts a single document into the collection.
 1. If `doc._id` is provided, use it as the document ID. Otherwise, generate one via `crypto.randomUUID()`.
 2. Validate that `_id` is a non-empty string of at most 1024 characters with no control characters (codepoints `< 0x20` other than tab/newline/carriage-return, or `0x7f`). Otherwise throw `ValidationError`.
 3. Construct the storage key: `{_id}`. (Each collection has its own dedicated `Datastore` per [ADR-012](../adr/012-per-collection-datastore-isolation.md), so a collection name prefix is not needed.)
-4. Clone the document and ensure `_id` is included in the payload.
+4. **Deep-copy** the document and ensure `_id` is included in the payload (see §12).
+5. On a TTL collection, an expired record occupying the incoming storage key is
+   treated as absent. The expired entry is removed immediately before duplicate
+   enforcement; this targeted reclamation is not a collection-wide purge. A
+   non-expired collision still follows the configured duplicate-key policy.
 
 **Policy-specific behavior:**
 
-| Policy      | Step 5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Policy      | Step 6                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `'reject'`  | Call `Datastore.put({ key, payload })`. The storage engine (configured with `duplicateKeys: 'reject'`) throws on duplicate keys, which frostpillar-db catches and re-throws as `DuplicateIdError`. Internally, the storage engine uses a bloom filter as a fast-path negative check before falling back to `has()` for confirmation; this is an internal optimization with no user-facing configuration. The `tests/integration/collection-bloom-filter.test.ts` suite exercises this path, including correct behavior after removals when the bloom filter may still report "maybe present". |
 | `'replace'` | Call `Datastore.put({ key, payload })`. The storage engine (configured with `duplicateKeys: 'replace'`) silently overwrites the existing record.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -36,7 +40,21 @@ Inserts multiple documents. Each document follows the same policy-specific behav
 
 Returns an array of `_id` values in the same order as the input.
 
-**Error semantics:** If any insertion fails (e.g., `DuplicateIdError` on a `'reject'` collection, or `ValidationError`), the error propagates to the caller immediately. Remaining documents are not processed. Documents that were already inserted before the failure are **not** rolled back (no transaction support; see ADR-007). The caller receives the thrown error, not a partial result. The IDs of previously inserted documents are not accessible from the error object.
+**Duplicate `_id` pre-check (`'reject'` collections):** before any record is written, the batch is checked for duplicate `_id`s — both within the batch and against the stored documents (one `Datastore.getMany()` over the batch's keys). A duplicate throws `DuplicateIdError` with **nothing written**. `putMany()` writes records in order and throws on the offending one, so without this pre-check a duplicate in the middle of a batch persisted the records before it — and, because the events are emitted only after `putMany()` resolves, emitted no `'insert'` event for any of them: storage and the `watch()` stream disagreed. The pre-check does not apply to `'replace'` / `'allow'` collections, where a duplicate key is not an error.
+
+The pre-check compares `_id` strings. When every stored candidate for the
+batch's keys is expired, a TTL collection discards those candidates and
+continues; an expired physical record does not block a new document. If any
+non-expired record remains, `DuplicateIdError` is thrown and the pre-check
+does not reclaim expired candidates from that failed batch. Under a custom
+`key` definition whose `normalize` maps two distinct `_id`s onto one storage
+key ([ADR-027](../adr/027-custom-key-id-identity.md)), a collision _between two
+records of the same batch_ is not caught by it and still surfaces from the
+storage engine at write time.
+
+**Error semantics:** If any insertion fails (e.g., `ValidationError`, `QuotaExceededError`, or a `DuplicateIdError` the pre-check could not anticipate), the error propagates to the caller immediately. Remaining documents are not processed. Documents that were already inserted before the failure are **not** rolled back (no transaction support; see ADR-007). The caller receives the thrown error, not a partial result. The IDs of previously inserted documents are not accessible from the error object.
+
+**Watch events on failure:** on a `'reject'` collection, an `'insert'` event is emitted for each record that was actually persisted before the failure, so the `watch()` stream never silently omits a stored document. Those records are identified by re-reading the batch's keys: the pre-check established that none of them existed, so any that exist now were written by this call. On a `'replace'` / `'allow'` collection this reconciliation is not possible — a key that exists afterwards may be a pre-existing record — so a partially-applied failed batch emits no events there, and callers should treat a failed `insertMany()` as "state unknown" and re-read.
 
 ## 2. Find
 
@@ -46,21 +64,43 @@ Returns a `ResultChain` for lazy query composition. The query is **not executed*
 
 If `filter` is omitted or `{}`, all documents in the collection are matched.
 
-**Filter shape validation:** When `filter` is provided, it must be a plain object (`Record<string, unknown>`). Passing `null`, arrays, or primitives throws `ValidationError` synchronously at the entry point. This applies to all query methods (`find`, `findOne`, `count`, `update`, `remove`).
+**Filter shape validation:** When `filter` is provided, it must be a plain object (`Record<string, unknown>`) — an object whose prototype is `Object.prototype` or `null`. Passing `null`, arrays, primitives, class instances (including `Date`, `Map`, `Set`), or objects created with `Object.create(proto)` throws `ValidationError` synchronously at the entry point. This applies to all query methods (`find`, `findOne`, `count`, `update`, `remove`).
+
+The prototype rule matters because filter conditions are read from **own** enumerable keys only: an object such as `Object.create({ _id: 'missing' })` has no own keys, so accepting it would make it indistinguishable from `{}` and turn a targeted `update`/`remove` into a match-all. The same rule is enforced on every nested sub-filter (`$and` / `$or` array elements, `$elemMatch` and `$not` operands), so a non-plain sub-filter throws instead of silently matching every document.
 
 ### `collection.findOne(filter?: Filter): Promise<Document | null>`
 
 Equivalent to `find(filter).limit(1).toArray()`, returning the first match or `null`.
 
-When the filter is a simple `_id` equality, `findOne` uses `Datastore.getFirst(key)` for a direct O(1) lookup, bypassing the full scan pipeline. **Exception:** When the collection has both `duplicateKeys: 'allow'` and a TTL configured, the `getFirst` fast path is disabled and `findOne` falls through to the scan pipeline. This is because `getFirst` returns only the first record for a given key; if that record is expired, other non-expired duplicates would be missed.
+When the filter is an exact one-key `_id` equality under the default key
+definition, `findOne` uses `Datastore.getFirst(key)` for a direct O(1) result,
+bypassing the full scan pipeline. An `_id` equality with additional predicates
+still uses the key lookup to obtain candidates, then evaluates the complete
+filter before returning a result. **Exceptions:** With both
+`duplicateKeys: 'allow'` and TTL, all records for the key must be checked
+because the first may be expired. With a custom key definition, the
+normalized-key lookup supplies candidates only: distinct `_id` strings may
+share one storage key, so the generic path checks each candidate's stored `_id`
+before returning a match (ADR-027).
 
 #### Single-key Optimization in Internal Record Retrieval
 
-When the collection's `duplicateKeys` policy is not `'allow'` (i.e., `'reject'` or `'replace'`), an `_id` equality filter in the internal `getRecordsByFilter` path uses `Datastore.getFirst(key)` instead of `Datastore.get(key)`. Since at most one record can exist for a given key under these policies, `getFirst` avoids array allocation and exits early. When `duplicateKeys` is `'allow'`, `Datastore.get(key)` is used to retrieve all matching records.
+When the collection's `duplicateKeys` policy is not `'allow'` (i.e., `'reject'`
+or `'replace'`), any filter containing a top-level `_id` equality condition in
+the internal `getRecordsByFilter` path uses `Datastore.getFirst(key)` instead
+of `Datastore.get(key)`. Since at most one record can exist for a given key
+under these policies, `getFirst` avoids array allocation and exits early. When
+`duplicateKeys` is `'allow'`, `Datastore.get(key)` retrieves all records
+sharing the key. Top-level conditions are conjunctive, so additional
+predicates safely narrow the candidate set; the in-memory filter always
+evaluates them before acting. The same candidate-only rule applies to a
+top-level `_id: { $in: [...] }` condition, which uses `Datastore.getMany()`.
+Under a custom key, either result remains a candidate set and the in-memory
+filter confirms exact `_id` equality.
 
 #### Range Query Optimization
 
-When the filter contains range operators (`$gt`, `$gte`, `$lt`, `$lte`) on the `_id` field with both a lower and upper bound, the query engine delegates to `Datastore.getRange(start, end)` instead of scanning all records via `getAll()`. This performs an efficient B+Tree leaf-level range scan.
+When the filter contains range operators (`$gt`, `$gte`, `$lt`, `$lte`) on the `_id` field with both a lower and upper bound, the query engine delegates to `Datastore.getRange(start, end)` instead of scanning all records via `getAll()`. This performs an efficient B+Tree leaf-level range scan under the default key definition. A custom key can order normalized storage keys differently from `_id` strings, so custom-key range filters use `getAll()` and evaluate the requested `_id` range in memory (ADR-027).
 
 - Both bounds must be present (lower and upper) for the optimization to apply.
 - Both bounds must be the same primitive type (both `string` or both `number`). If the types differ, `extractIdRange` throws `ValidationError` immediately — mixed-type bounds (e.g. `{ _id: { $gte: '10', $lte: 20 } }`) almost certainly represent a caller bug. The error message names the field and both types.
@@ -75,6 +115,8 @@ When the filter contains range operators (`$gt`, `$gte`, `$lt`, `$lte`) on the `
 Updates all documents matching `filter` using the specified update operators.
 
 A filter argument is always required. Passing `undefined`, `null`, or any non-plain-object value throws `ValidationError` — `update` must never silently match all documents. To update every document, pass `{}` explicitly.
+
+The `operations` argument is likewise required and must be a plain object. Passing `undefined`, `null`, a primitive, an array, a class instance (including `Date`, `Map`, `Set`), or an inherited-only object (`Object.create(proto)`) throws `ValidationError` synchronously — a malformed operation set must never be silently treated as "no operators". An empty plain object `{}` remains a valid no-op: it matches the `inputKeyCount === 0` short-circuit and resolves to `{ modifiedCount: 0, upsertedId: null }` without touching any document.
 
 **Types:**
 
@@ -91,18 +133,23 @@ interface UpdateResult {
 
 **Behavior:**
 
-1. Resolve matching documents via `getRecordsByFilter` — this uses the same `_id` fast paths (`getFirst`, `getMany`, `getRange`) documented in §2, falling back to `getAll()` for non-`_id` filters.
-2. For each matching document, apply the update operations to produce a new payload.
-3. **Payload validation:** Validate the resulting document against the same payload limits enforced on `insert` (see Spec 01 §1.2). If the document exceeds any limit (e.g., `maxTotalBytes`, `maxDepth`, `maxStringBytes`), throw `ValidationError` immediately. When `skipPayloadValidation` is `true`, only security checks (reserved keys, circular references) are applied.
-4. **No-op detection:** If the resulting payload is identical to the original document (deep equality on every touched field), the document is considered unmodified — `replaceById` is **not** called, no `'update'` change event is emitted, and `modifiedCount` is **not** incremented. Examples: `$set` to the same value, `$inc` by `0` on an existing field, `$addToSet` of an already-present value.
-5. Persist each **actually modified** document atomically via `Datastore.replaceById(entryId, updatedPayload)`. The storage engine replaces the payload in-place, preserving the key and entry ID.
-6. Return `{ modifiedCount: <actually modified count>, upsertedId: null }`.
-7. If no documents matched and `upsert` is `true`, perform the upsert (see below).
-8. If no documents matched and `upsert` is `false` (default), return `{ modifiedCount: 0, upsertedId: null }`.
+1. Before the first `await`, snapshot the filter, capture `options.upsert`, and normalize the complete operation object into one owned operation set. Accessors and caller mutation cannot change these values after the call begins.
+2. Resolve matching documents via `getRecordsByFilter` — this uses the same key-definition-aware `_id` candidate paths (`getFirst`, `get`, `getMany`, or default-key-only `getRange`) documented in §2, falling back to `getAll()` otherwise.
+3. Apply the same normalized operation set to every matching document. Values written by `$set`, `$push`, and `$addToSet` are copied per stored document; `$pull` compares against its detached snapshot (see §12).
+4. **Payload validation:** Validate the resulting document against the same payload limits enforced on `insert` (see Spec 01 §1.2). If the document exceeds any limit (e.g., `maxTotalBytes`, `maxDepth`, `maxStringBytes`), throw `ValidationError` immediately. When `skipPayloadValidation` is `true`, only the always-on type and structural checks are applied.
+5. **No-op detection:** If the resulting payload is identical to the original document (deep equality on every touched field), the document is considered unmodified — `replaceById` is **not** called, no `'update'` change event is emitted, and `modifiedCount` is **not** incremented.
+6. Persist each **actually modified** document atomically via `Datastore.replaceById(entryId, updatedPayload)`, preserving the key and entry ID.
+7. If no document matched and the captured `upsert` value is true, build the
+   inserted document from the same snapshotted filter and normalized operation
+   set; do not read the caller's operations or options again. On a TTL
+   collection, this insert has the same expired-collision reclamation as
+   `insert()`; an expired physical record cannot cause `DuplicateIdError`. If
+   the captured value is false (the default), return `{ modifiedCount: 0,
+   upsertedId: null }`.
 
 **Upsert behavior** (when `upsert: true` and no documents match the filter):
 
-1. Create a new document from equality conditions in the filter (implicit `$eq` and explicit `$eq` only — skip `$gt`, `$or`, and all other non-equality operators). Dot-notation keys (e.g. `'address.city'`) are expanded into nested objects (e.g. `{ address: { city: … } }`) rather than stored as literal top-level keys.
+1. Create a new document from equality conditions in the filter (implicit `$eq` and explicit `$eq` only — skip `$gt`, `$or`, and all other non-equality operators). Dot-notation keys (e.g. `'address.city'`) are expanded into nested objects (e.g. `{ address: { city: … } }`) rather than stored as literal top-level keys. An equality condition whose value is an object or an array (e.g. `{ profile: { tier: 'pro' } }`, `{ tags: ['a'] }`) is an equality condition like any other — the filter matches it by deep equality (§8.1) — so it is carried into the upserted document, deep-cloned so the caller's filter object is not aliased by stored data. A field condition that mixes operator keys with regular keys is rejected by filter validation and never reaches this step; a pure operator expression (every key `$`-prefixed) is skipped unless it is exactly `{ $eq: … }`.
 2. Apply all update operators from the update spec to the new document.
 3. Generate `_id` via `crypto.randomUUID()` if not derived from filter.
 4. Insert the document into the collection.
@@ -141,7 +188,9 @@ When no TTL is configured on the collection, `remove` applies fast-path optimiza
 | `{ _id: { $in: [...] } }` (inclusion) | `Datastore.getMany(keys)` + `Datastore.deleteMany(keys)` | Resolves which keys exist, then batch-deletes in a single mutex acquisition |
 | Any other filter                      | Scan + `Datastore.deleteById(entryId)` per record        | Scan-based path, per-id deletion for exact change-event attribution         |
 
-**Exception:** When the collection's `duplicateKeys` policy is `'allow'`, the no-TTL fast paths (equality and `$in`) are disabled and `remove` always falls through to the scan-based path. This is because `Datastore.delete(key)` and `Datastore.deleteMany(keys)` can remove multiple records per key under the `'allow'` policy, but the fast paths would emit only one `'remove'` change event per key — under-reporting to watch listeners. The scan-based path iterates individual records and emits one event per deletion, maintaining the watch event contract.
+**Operand validation:** The `$in` fast path applies the `MAX_OPERAND_ARRAY_SIZE` limit (§8.3) and the `_id` string rules before calling `getMany` / `deleteMany`. An oversized or malformed operand therefore throws `ValidationError` and deletes nothing, exactly as it would on the scan-based path.
+
+**Exceptions:** When the collection's `duplicateKeys` policy is `'allow'`, the no-TTL fast paths (equality and `$in`) are disabled because deleting by key can remove several records while emitting only one event. They are also disabled under a custom key definition because distinct `_id` strings may normalize to one storage key. Both cases use candidate retrieval plus exact in-memory matching, then `deleteById` per confirmed record, preserving document identity and one event per deletion (ADR-027).
 
 The fast-path batch deletes (`deleteMany`) use a single storage-engine call rather than issuing individual `delete(key)` calls in a loop. The scan-based path issues one `deleteById` call per matched record to keep change-event attribution accurate; this trades batch throughput for event correctness on that path.
 
@@ -173,9 +222,10 @@ Returns `true` if a document with the given `_id` exists **and has not expired**
 
 **Behavior:**
 
-- If the collection has no TTL configured, uses `Datastore.has(key)` for an O(1) lookup without loading the document payload (fast path).
-- If the collection has a TTL configured and `duplicateKeys` is not `'allow'`, loads the document via `Datastore.getFirst(id)` and evaluates `isDocumentExpired`. Returns `false` for expired documents, consistent with `findOne({ _id: id })` returning `null`.
-- If the collection has a TTL configured and `duplicateKeys` is `'allow'`, loads all records for the key via `Datastore.get(id)` and returns `true` if **any** record is non-expired. This avoids falsely returning `false` when only the first record is expired but other live duplicates exist.
+- If the collection has no TTL configured and uses the default key definition, uses `Datastore.has(key)` for an O(1) lookup without loading the document payload (fast path).
+- If the collection has a custom key definition, loads all records sharing the normalized key and returns `true` only when a candidate's stored `_id` exactly equals `id` (and is not expired when TTL applies).
+- If the collection has TTL, uses the default key definition, and `duplicateKeys` is not `'allow'`, loads the document via `Datastore.getFirst(id)` and evaluates `isDocumentExpired`. Returns `false` for expired documents, consistent with `findOne({ _id: id })` returning `null`.
+- If the collection has TTL, uses the default key definition, and `duplicateKeys` is `'allow'`, loads all records for the key via `Datastore.get(id)` and returns `true` if **any** record is non-expired. This avoids falsely returning `false` when only the first record is expired but other live duplicates exist.
 
 ## 7. IDs
 
@@ -183,10 +233,13 @@ Returns `true` if a document with the given `_id` exists **and has not expired**
 
 Returns an array of all **non-expired** document IDs in the collection.
 
+The result has **one entry per document**, not per storage key: under `duplicateKeys: 'allow'`, a collection holding three documents with `_id: 'a'` returns `'a'` three times, so `ids().length === count()` and the result stays consistent with `find()`.
+
 **Behavior:**
 
-- If the collection has no TTL configured, uses `Datastore.keys()` for a direct key scan without loading document payloads (fast path). The returned order is determined by the storage engine's key ordering.
-- If the collection has a TTL configured, loads all records via `Datastore.getAll()`, filters out expired documents using `isDocumentExpired`, and returns the `_id` field of each non-expired document. This ensures consistency with `find()`, `findOne()`, and `count()`.
+- If the collection has no TTL configured, no custom key definition, and `duplicateKeys` is not `'allow'`, uses `Datastore.keys()` for a direct key scan without loading document payloads (fast path). The returned order is determined by the storage engine's key ordering.
+- Otherwise (TTL configured, a custom key definition, or `duplicateKeys: 'allow'`), loads all records via `Datastore.getAll()`, filters out expired documents using `isDocumentExpired`, and returns the `_id` field of each non-expired document. This ensures consistency with `find()`, `findOne()`, and `count()`.
+- The `Datastore.keys()` fast path is disabled under `duplicateKeys: 'allow'` because it yields each storage key once, however many documents share it — the same reason it is disabled under a custom key definition (which reports normalized keys rather than stored `_id` strings; see Spec 01 §5).
 
 ## 8. Filter Operators
 
@@ -232,7 +285,9 @@ Comparison operators work on `number`, `string`, and `boolean` values. Type coer
 
 **Operand size limit:** The operand array for `$in`, `$nin`, and `$all` must contain at most `MAX_OPERAND_ARRAY_SIZE` (10,000) elements. Exceeding this limit throws `ValidationError`.
 
-**Operand immutability:** Treat `$in`, `$nin`, and `$all` operand arrays as immutable. The inclusion-set cache rebuilds when the operand length changes, so pushing or popping elements between queries is safe. However, a same-length in-place change on a reused operand array (e.g. replacing an element at an existing index) is not detected and yields undefined results. Pass a fresh array when the contents change.
+The limit also applies to the `_id` `$in` fast paths used by `find`, `findOne`, `count`, `update`, and `remove` (§2, §5, §6). The operand is checked while the fast path is being recognised, i.e. **before** any storage call (`getMany` / `deleteMany`) is issued, so an oversized operand can neither read nor delete records.
+
+**Operand snapshots:** `$in`, `$nin`, and `$all` operand arrays are copied at each collection call. Mutating or reusing the caller's array cannot change a pending call; a later call snapshots its then-current contents. Identity-keyed caches intentionally do not reuse entries across calls, while all candidate documents in one scan reuse the same snapshot and inclusion set (ADR-015/ADR-030).
 
 **Array field matching:** When the document field contains an array, `$in` matches if **any element** of the document's array is present in the operand array. Conversely, `$nin` matches only if **no element** of the document's array is present in the operand array.
 
@@ -260,16 +315,9 @@ Comparison operators work on `number`, `string`, and `boolean` values. Type coer
 - Primitives (`number`, `string`, `boolean`, `null`, `undefined`, `NaN`)
 - `Date` (compared by `.getTime()`)
 - Plain arrays (element-by-element recursion)
-- Plain objects (own enumerable key-by-key recursion)
+- Other objects, including class instances, by own enumerable key-by-key recursion; prototypes and internal slots are ignored
 
-The following types are **not** supported and will not compare correctly:
-
-- `Map` and `Set`
-- `RegExp`
-- Typed arrays (`Uint8Array`, `Float32Array`, etc.)
-- Any other exotic or host objects
-
-Passing unsupported types as filter operands produces unspecified results (typically `false` for equality tests). Only primitives, plain objects, arrays, and `Date` should be used as filter or update operand values.
+This is structural comparison, not native object semantics: `Map`/`Set` entries and `RegExp` pattern state are internal slots and therefore do not participate in ordinary equality. Enumerable own properties added to a `RegExp` do participate, like those of any other non-Date object. Use `$regex` for pattern matching. Before evaluation, the operand is detached into the same semantic representation: arrays recursively, `Date` by timestamp, `RegExp` by one captured `source`/`flags` pair plus a recursive copy of its enumerable own properties, and other objects by own enumerable shape.
 
 ### 8.4 Logical Operators
 
@@ -309,7 +357,17 @@ For `RegExp` operands, the `g` and `y` flags are stripped to ensure stateless ev
   - Backreference with quantifier (`(a+)\1+`)
   - Adjacent/chained quantifiers on overlapping atoms (`\d+\d+`, `.+.+`, `[a-z]+[a-z]+`, `a+a+`)
 
-Patterns may contain at most `MAX_REGEX_QUANTIFIERS` (20) quantifiers; exceeding this limit throws `ValidationError`. **Group-syntax `?` is excluded:** a `?` immediately following an unescaped `(` is part of JS group syntax (`(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`, `(?<name>`) and is not counted as a quantifier token, so `(?:a)` counts zero quantifiers and `(?:a?)` counts one.
+Patterns may contain at most `MAX_REGEX_QUANTIFIERS` (20) base quantifiers; exceeding this limit throws `ValidationError`. A lazy suffix does not add a second token: `*?`, `+?`, `??`, and `{n,m}?` each count once. **Group-syntax `?` is excluded:** a `?` immediately following an unescaped `(` is part of JS group syntax (`(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`, `(?<name>`) and is not counted as a quantifier token, so `(?:a)` counts zero quantifiers and `(?:a?)` counts one.
+
+**Variable-width quantifier limit:** Patterns may contain at most `MAX_REGEX_VARIABLE_QUANTIFIERS` (8) _variable-width_ quantifiers (`countVariableWidthQuantifiers`) — quantifier tokens whose minimum and maximum repetition counts differ, so the engine may choose how much its atom consumes: `?`, `*`, `+`, `{n,}`, and any `{n,m}` with `m > n`. A fixed-width `{n}` is not counted. Exceeding this limit throws `ValidationError`.
+
+A variable-width quantifier is an independent choice point, so _k_ of them give a backtracking engine an exponential number of ways to distribute a failing match across the pattern. `^.?.?….?aaa…a$` (20 `.?` atoms followed by 20 literal `a`s) passes every screen above — no quantifier repeats an atom, no group is nested or alternated, and no two adjacent atoms match a hand-written detector — yet it explodes to ~2^20 backtracking paths, ≈1.5 ms per _failing_ evaluation, which extrapolates to ≈15 s for a zero-match scan of 10,000 documents. `maxMatchedDocuments` cannot cut such a scan short, because a pattern that matches nothing never increments the match count. Capping the count at 8 bounds this shape at ~2^8 = 256 paths (~0.01 ms per failing evaluation).
+
+**A minimum of zero is not what matters.** The cap originally counted only _skippable_ atoms (minimum repetition count of zero), which a chain of `{1,2}` atoms evaded while reproducing the shape exactly: each atom must match, but it may take one character _or two_, so a failing match still has 2^_k_ distributions to explore (≈5.2 ms per warmed non-match, multiplied by every document a scan touches). A chain of `+` / `{1,}` atoms is worse still, since each has an unbounded maximum. Any quantifier whose width the engine can choose is therefore counted.
+
+The cap is a **total count over the whole pattern**, not the length of an adjacent run: fixed-width atoms interleaved between the variable ones (`.?\w.?\w…`) always consume the same width, so they prune no branch and the path count stays exponential in the total. It counts base quantifiers only: the trailing `?` in lazy `*?`, `+?`, `??`, or `{n,m}?` changes greediness and is not a second quantifier. Group-syntax `?` is likewise not a quantifier. Quantifier-looking characters inside a character class are ignored; with the `v` flag, that includes all nested Unicode-set class contents. Fixed `{n}` and `{n,n}` bounds are not variable-width and do not count.
+
+Counting `+` and other non-zero-minimum variable bounds is an intentional compatibility tightening. A pattern containing more than eight base variable-width quantifiers is rejected even if an earlier release accepted it.
 
 **Alternation group limit:** Patterns may contain at most `MAX_REGEX_ALTERNATION_GROUPS` (4) alternation groups — parenthesized groups whose own top-level content has an unescaped `|` (e.g. `(a|b)`, `(?:a|b)`; a `|` inside a nested sub-group does not count toward its enclosing group). This closes a gap the quantifier-based checks above cannot see: repeating an ambiguous alternation group with no quantifier at all (e.g. `(a|aa)(a|aa)(a|aa)...`) produces the same exponential backtracking blowup as a quantified alternation, but carries zero quantifier tokens, so `MAX_REGEX_QUANTIFIERS` and the quantifier-keyed patterns above never see it. Exceeding this limit throws `ValidationError`.
 
@@ -479,6 +537,8 @@ Removes all occurrences of a value from an array field using deep equality.
 // tags: ['a', 'deprecated', 'b', 'deprecated'] → tags: ['a', 'b']
 ```
 
+The comparison value for each `$pull` entry is detached during update normalization before the first `await`. The same captured value is used for every matched document; changing the caller's operand cannot change an update already in progress.
+
 - If the target field does not exist, the operation is a no-op for that field.
 - If the target field exists but is not an array, throws `ValidationError`.
 - Removes **all** matching elements (compared via deep equality).
@@ -513,6 +573,22 @@ Adds a value to an array field only if it does not already exist (using deep equ
 - Empty filter objects (`{}`) match all documents.
 - Empty update objects (`{}`) are no-ops and return `{ modifiedCount: 0, upsertedId: null }`.
 - Combining `$set` and `$unset` on the same field in one operation throws `ValidationError`.
+
+### 10.0 Structural Filter Validation
+
+Every query path (`find`, `findOne`, `count`, `update`, `remove`) validates the **whole filter tree** before evaluating it against any document. Validation is performed by a dedicated walk (`internal/filterValidator.ts`), not by evaluating the filter against an empty document: `matchesFilter` short-circuits on the first false predicate, so an evaluation-based check stops at `a` in `{ a: 1, b: { $nope: 2 } }` and never inspects `b`. Such a filter was consequently accepted on an empty collection — and with `upsert: true` inserted a document — while throwing on a populated one.
+
+The validator visits every branch regardless of match outcome and throws `ValidationError` for:
+
+- Reserved keys (§8) at any level, including inside `$and` / `$or` branches.
+- Invalid field paths (empty, over-long, too many segments, restricted segments).
+- Unknown operators, at the top level and inside any field condition, `$not`, or `$elemMatch` sub-condition.
+- Field conditions that mix operator keys with regular keys (e.g. `{ a: { $eq: 1, b: 2 } }`).
+- Malformed operands: non-array or over-sized `$in` / `$nin` / `$all`, non-boolean `$exists`, non-integer or negative `$size`, non-string/RegExp or unsafe `$regex` pattern (§8.5).
+- Non-plain-object `$and` / `$or` elements, non-array `$and` / `$or` operands, and operand arrays over `MAX_LOGICAL_OPERAND_COUNT`.
+- Nesting beyond `MAX_FILTER_NESTING_DEPTH`.
+
+Comparison operands (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`) accept any value: a type mismatch against the stored value is a non-match, not an error (§8.2). Operand-shape rules are enforced by assertions shared with the evaluator, so validation and evaluation raise identical errors.
 
 ### 9.8 Operator Application Order
 
@@ -566,13 +642,15 @@ For `$inc` specifically:
 - The increment operand must be a finite number (rejects `Infinity`, `-Infinity`, `NaN`).
 - The computed result (`existing + increment`) must also be finite; otherwise `ValidationError` is thrown. This prevents silent production of `NaN` or `Infinity` from overflow-like scenarios (e.g., `Number.MAX_VALUE + Number.MAX_VALUE`).
 
-**Document-level validation:** In addition to per-value validation above, `update()` validates the **complete resulting document** against the database's `payloadLimits` configuration (see Spec 01 §1.2) after all operators have been applied. This ensures that an update cannot produce a document exceeding `maxTotalBytes`, `maxDepth`, `maxStringBytes`, `maxKeyBytes`, `maxKeysPerObject`, or `maxTotalKeys` — the same limits enforced on `insert`. When `skipPayloadValidation` is `true`, only security checks (reserved keys, circular references) are applied.
+**Document-level validation:** In addition to per-value validation above, `update()` validates the **complete resulting document** against the database's `payloadLimits` configuration (see Spec 01 §1.2) after all operators have been applied. This ensures that an update cannot produce a document exceeding `maxTotalBytes`, `maxDepth`, `maxStringBytes`, `maxKeyBytes`, `maxKeysPerObject`, or `maxTotalKeys` — the same limits enforced on `insert`. When `skipPayloadValidation` is `true`, only security checks are applied (reserved keys, circular references, the `maxDepth` cap, plain-object values, and the non-storable leaf types `bigint` / `function` / `symbol` / `undefined`).
 
 ## 11. Result Set Size Limit
 
 ### `maxMatchedDocuments` Guard
 
 `find().toArray()`, `update()`, and `remove()` all buffer matched documents in memory before returning. Without a cap this can OOM the host process on large collections.
+
+**Scope — the cap bounds the matched set, not the scan ([ADR-028](../adr/028-candidate-set-materialization.md)):** a scan first asks the datastore for its candidate records, and the storage engine's read API returns arrays (`getAll()`, `getRange()`, `getMany()`). The candidate array is therefore fully materialized before frostpillar-db can evaluate the filter against a single record or honour a single `.limit(n)` — so `.limit(10)` on a 10-million-document collection still allocates ten million records and keeps ten. `maxMatchedDocuments` and `.limit(n)` bound how many documents are _retained_. `_id` equality and `$in` narrow candidates through the index before any array is built; a bounded range does so only under the default key definition. A filter with no applicable `_id` candidate path cannot. Lifting this requires a streaming read API in frostpillar-storage-engine, which the current version does not expose.
 
 **Configuration:**
 
@@ -589,3 +667,29 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 - If the matched count exceeds `maxMatchedDocuments`, a `ValidationError` is thrown immediately with a message directing the caller to use `limit()`.
 - For `find()` queries: when a `limit(n)` is specified without a `sort`, the effective cap is `max(n, maxMatchedDocuments)`. Because an explicit limit already bounds how many documents are buffered, a limit larger than the cap returns normally instead of throwing. The scanner still stops collecting after `n` documents. The strict `maxMatchedDocuments` cap applies to unbounded scans and to queries with a `sort` (a sort must collect all matching documents before ordering, so the limit hint is not applied at scan time).
 - `count()` is **not** affected by this cap because it does not buffer documents (it uses `Datastore.count()` or iterates without materialising the result set).
+
+## 12. Input Isolation
+
+Insert documents, update operations/options, and filters are **copied into snapshots owned by the operation at their public entry points**. Each covered property is read once while its snapshot is built; validation, evaluation, storage, and change events use the owned values. `DatabaseConfig` follows the related shallow-snapshot rule in Spec 01 §1.1.
+
+**What is snapshotted:**
+
+| Input                                     | Snapshot                                                                    |
+| ----------------------------------------- | --------------------------------------------------------------------------- |
+| `insert()` / `insertMany()` / upsert      | The whole document, including all nested objects and arrays                  |
+| `update()` with `$set`                    | Each assigned value                                                          |
+| `update()` with `$push` / `$addToSet`     | Each value appended to the target array                                      |
+| `update()` operations and `options.upsert` | The complete normalized operation set and the upsert decision, before the first `await`; `$pull` comparison values are detached |
+| `find()` / `findOne()` / `count()` / `update()` / `remove()` | The filter, at the entry point, before any other stage sees it |
+
+Filter comparison values are detached according to their evaluation semantics: arrays recursively; plain objects, class instances, and other objects by their own enumerable shape; `Date` by timestamp; and `RegExp` by one captured `source`/`flags` pair plus recursively copied enumerable own properties. Object prototypes and caller identity are not comparison semantics. The root plain-object check and materialization are one boundary operation, so a `Proxy` cannot pass one root classification and supply a different representation later.
+
+**Reading each input once is part of the contract, not an implementation detail.** An accessor property (`{ get score() {…} }`) or a `Proxy` answers every read independently, so validating the caller's object and then re-reading it — to clone it, to evaluate it against each document, or to delete by it after an `await` — let the second read supply a value the first never saw. See [ADR-030](../adr/030-read-once-input-snapshots.md).
+
+Cycles and filter nesting deeper than `maxDepth` throw `ValidationError`.
+
+**Why this is required:** frostpillar-db always constructs the underlying `Datastore` with `skipPayloadValidation: true` (see [Spec 01 §1.1](./01-database-and-collection.md)), which also disables the storage engine's defensive copy of the payload. The object handed to the datastore therefore _becomes_ the stored record. Without isolation at the collection level, a caller mutating an inserted object after the fact would silently rewrite stored data, and injecting a cycle into it would make later reads throw `RangeError` from stack overflow instead of a clean error. See [ADR-025](../adr/025-write-path-input-isolation.md).
+
+**Order:** the copy is taken **before** validation, in the same pass — the validator's input _is_ the snapshot, so the checked graph and the stored graph are the same one and no second read can diverge from it. The copy walk is itself bounded by `maxDepth` and rejects cycles, on every path including `skipPayloadValidation` mode, so it cannot overflow the stack.
+
+**Reads are copied too:** documents returned by `find()`, `findOne()`, and `watch()` events are deep copies of the stored records, not references to them (a `watch()` event's document is one copy shared by that event's listeners). Mutating what a read returns cannot alter stored data.

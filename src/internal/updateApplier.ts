@@ -10,7 +10,10 @@ import {
 import { DEFAULT_MAX_DEPTH } from './limits.js';
 import { cloneDocument, hasOwn } from './objectUtils.js';
 import { applyPush, applyPull, applyAddToSet } from './updateArrayOperators.js';
-import { normalizeUpdateOperations } from './updateValidator.js';
+import {
+  normalizeUpdateOperations,
+  type NormalizedOperations,
+} from './updateValidator.js';
 
 export interface ApplyUpdateResult {
   document: FrostpillarStoredDocument;
@@ -30,7 +33,10 @@ const applySet = (
     if (resolved !== PATH_NOT_FOUND && deepEqual(resolved, value)) {
       continue;
     }
-    setValueByPath(target, path, value, pathCache);
+    // Copy per document, not per update() call: one operand may be written into
+    // several matched documents, and the stored records must not alias each
+    // other or the caller's object (ADR-025).
+    setValueByPath(target, path, cloneDocument(value), pathCache);
     changed = true;
   }
   return changed;
@@ -122,18 +128,11 @@ const applyRename = (
   return changed;
 };
 
-export const applyUpdateOperations = (
+export const applyNormalizedUpdateOperations = (
   document: FrostpillarStoredDocument,
-  operations: UpdateOperations,
+  normalized: NormalizedOperations,
   pathCache: Map<string, string[]>,
-  protectCreatedAt = false,
-  maxDepth: number = DEFAULT_MAX_DEPTH,
 ): ApplyUpdateResult => {
-  const normalized = normalizeUpdateOperations(
-    operations,
-    protectCreatedAt,
-    maxDepth,
-  );
   const operationCount =
     Object.keys(normalized.set).length +
     Object.keys(normalized.unset).length +
@@ -170,4 +169,19 @@ export const applyUpdateOperations = (
 
   const updatedDocument = next as FrostpillarStoredDocument;
   return { document: updatedDocument, changed: dirty };
+};
+
+export const applyUpdateOperations = (
+  document: FrostpillarStoredDocument,
+  operations: UpdateOperations,
+  pathCache: Map<string, string[]>,
+  protectCreatedAt = false,
+  maxDepth: number = DEFAULT_MAX_DEPTH,
+): ApplyUpdateResult => {
+  const normalized = normalizeUpdateOperations(
+    operations,
+    protectCreatedAt,
+    maxDepth,
+  );
+  return applyNormalizedUpdateOperations(document, normalized, pathCache);
 };

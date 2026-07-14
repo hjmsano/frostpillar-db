@@ -14,7 +14,7 @@ To enable strict SDD/TDD delivery from an empty repository, this spec is impleme
 ### Milestone 1
 
 - `Database` foundation:
-  - Constructor stores the base config for per-collection `Datastore` creation.
+  - Constructor shallow-snapshots the base config for per-collection `Datastore` creation.
   - `collection(name, options?)` lazily creates a dedicated `Datastore` per collection with the collection's own `duplicateKeys` policy.
   - `commit()` and `close()` iterate all per-collection `Datastore` instances.
   - `on('error', listener)` registers on all current and future `Datastore` instances.
@@ -39,18 +39,21 @@ new Database(config?: DatabaseConfig)
 
 `DatabaseConfig` extends the storage engine's `DatastoreConfig` (excluding `duplicateKeys`), passing through all options (driver, autoCommit, capacity, etc.) as the base configuration for per-collection `Datastore` instances.
 
-| Field                   | Type                    | Description                                                                                                                                                                                                        |
-| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `driver`                | `DatastoreDriver`       | Optional. Storage driver (file, localStorage, IndexedDB, etc.)                                                                                                                                                     |
-| `autoCommit`            | `AutoCommitConfig`      | Optional. Auto-commit configuration                                                                                                                                                                                |
-| `capacity`              | `CapacityConfig`        | Optional. Capacity control                                                                                                                                                                                         |
-| `index`                 | `IndexConfig`           | Optional. B+ tree index configuration (see §1.5)                                                                                                                                                                   |
-| `payloadLimits`         | `PayloadLimitsConfig`   | Optional. Per-document validation limits (see §1.2)                                                                                                                                                                |
-| `skipPayloadValidation` | `boolean`               | Optional. Skip payload validation entirely (for trusted input)                                                                                                                                                     |
-| `maxErrorListeners`     | `number \| 'unlimited'` | Optional. Threshold for error-listener count warning (default: `32`). `'unlimited'` disables the warning.                                                                                                          |
-| `maxMatchedDocuments`   | `number`                | Optional. Maximum documents buffered per scan (`find().toArray()`, `update`, `remove`) before `ValidationError` is thrown (default: `100000`). See [Spec 02 §11](./02-crud-and-query.md#11-result-set-size-limit). |
+| Field                   | Type                                       | Description                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `driver`                | `DatastoreDriver \| DatabaseDriverFactory` | Optional. Storage driver, or a collection-aware factory `(collectionName: string) => DatastoreDriver` (see §1.6)                                                                                                   |
+| `autoCommit`            | `AutoCommitConfig`                         | Optional. Auto-commit configuration                                                                                                                                                                                |
+| `capacity`              | `CapacityConfig`                           | Optional. Capacity control                                                                                                                                                                                         |
+| `index`                 | `IndexConfig`                              | Optional. B+ tree index configuration (see §1.5)                                                                                                                                                                   |
+| `key`                   | `DatastoreKeyDefinition`                   | Optional. Database-wide custom key definition; a collection-level `key` overrides it                                                                                                                              |
+| `payloadLimits`         | `PayloadLimitsConfig`                      | Optional. Per-document validation limits (see §1.2)                                                                                                                                                                |
+| `skipPayloadValidation` | `boolean`                                  | Optional. Skip payload size accounting; type, shape, cycle, reserved-key, and depth checks still run                                                                                                               |
+| `maxErrorListeners`     | `number \| 'unlimited'`                    | Optional. Threshold for error-listener count warning (default: `32`). `'unlimited'` disables the warning.                                                                                                          |
+| `maxMatchedDocuments`   | `number`                                   | Optional. Maximum documents buffered per scan (`find().toArray()`, `update`, `remove`) before `ValidationError` is thrown (default: `100000`). See [Spec 02 §11](./02-crud-and-query.md#11-result-set-size-limit). |
 
-The `Database` constructor does not create any `Datastore` instance upfront. Instead, a dedicated `Datastore` is created lazily for each collection when `collection()` is first called, configured with the collection's own `duplicateKeys` policy (see §2.5). This enables per-collection autoscaling, independent rebalancing, and native duplicate-key enforcement by the storage engine. See [ADR-012](../adr/012-per-collection-datastore-isolation.md).
+The constructor reads each top-level own enumerable configuration field once into a **shallow snapshot**. An accessor or `Proxy` trap therefore supplies one authoritative value at construction, and later mutation or redefinition of a top-level property on the caller's config object does not alter this `Database`. Nested configuration objects and callback functions are retained by reference; this is not a recursive clone.
+
+The `Database` constructor does not create any `Datastore` instance upfront. Instead, a dedicated `Datastore` is created lazily for each collection when `collection()` is first called, configured from the captured base config and the collection's own options. For `key`, collection creation resolves one effective value — the collection override when present, otherwise the captured database-level key — and uses that exact value both for the datastore and for custom-key `_id` handling. See [ADR-012](../adr/012-per-collection-datastore-isolation.md), [ADR-027](../adr/027-custom-key-id-identity.md), and [ADR-030](../adr/030-read-once-input-snapshots.md).
 
 #### Payload Validation Strategy
 
@@ -60,7 +63,9 @@ frostpillar-db **always** sets `skipPayloadValidation: true` on the underlying d
 - `update()` validates the resulting document after operators are applied, preventing updates from producing documents that would be rejected on insert.
 - The collection-level validator supports all JSON-compatible types including arrays, avoiding inconsistencies with the datastore-level validator.
 
-When the user explicitly sets `skipPayloadValidation: true`, the full structural validator is skipped, but a lightweight security-only validator still runs. The security validator checks for reserved keys, circular references, and enforces a nesting-depth cap (default `DEFAULT_MAX_DEPTH` = 64, or the configured `payloadLimits.maxDepth`) to prevent stack-overflow DoS. Documents exceeding the depth cap are rejected with `ValidationError` even in skip mode.
+When the user explicitly sets `skipPayloadValidation: true`, the full structural validator is skipped, but a lightweight validation pass still runs. It checks for reserved keys, circular references, non-plain object values, and the non-storable leaf types (`bigint`, `function`, `symbol`, `undefined`), and enforces a nesting-depth cap (default `DEFAULT_MAX_DEPTH` = 64, or the configured `payloadLimits.maxDepth`). Documents violating any of these are rejected with `ValidationError` even in skip mode. Functions cannot be detached as document values, while symbols are primitives but are not supported document values. Skip mode drops the *size* checks (bytes, key counts, string/key lengths), not these type and structural checks (see [ADR-030](../adr/030-read-once-input-snapshots.md)).
+
+The security validator also rejects a **non-plain object** anywhere in the payload (a class instance, a `Date`/`Map`/`Set`, an `Object.create(proto)` object) with `ValidationError`, exactly as the full validator does. It does not merely decline to descend into one: a value it will not traverse is a value whose reserved keys and cycles it cannot see, and the write paths deep-clone the payload afterwards — a self-referential class instance was accepted here and then overflowed the stack inside the clone. Size limits (bytes, key counts) remain unenforced in skip mode; the type, cycle, depth, and reserved-key guards do not.
 
 ### 1.2 Payload Limits
 
@@ -103,11 +108,13 @@ const db = new Database({
 });
 ```
 
-**Scope:** Payload limits are database-wide and apply to all collections. They are enforced at the Collection level on every `insert`, `insertMany`, and `update` operation. For `update`, the resulting document is validated after operators are applied but before it is persisted. When `skipPayloadValidation` is `true`, size limits (bytes, key counts, etc.) are not enforced, but the `maxDepth` cap is still enforced by the security validator to prevent stack-overflow DoS.
+**Scope:** Payload limits are database-wide and apply to all collections. They are enforced at the Collection level on every `insert`, `insertMany`, and `update` operation. For `update`, the resulting document is validated after operators are applied but before it is persisted. When `skipPayloadValidation` is `true`, size limits (bytes, key counts, etc.) are not enforced, but the `maxDepth` cap is still enforced by the security validator to prevent stack-overflow DoS. `maxDepth` also bounds the copy taken of every filter (see [Spec 02 §12](./02-crud-and-query.md#12-input-isolation)).
+
+**Limits are evaluated against the stored document, including generated fields:** the write path adds `_id` when the caller omits it, and `_createdAt` on a TTL collection. Those fields count toward `maxKeysPerObject`, `maxTotalKeys`, and `maxTotalBytes` on insert, even though they are absent from the caller's object — a generated `_id` is charged as a 36-character UUID and `_createdAt` as a millisecond epoch. Otherwise a document could pass insert at exactly `maxKeysPerObject` keys and then fail every subsequent `update` under the same limit, because `update` validates the stored document, which carries the generated fields. When the caller supplies `_id` (or `_createdAt`), it is already part of the object and is counted once, not twice.
 
 **Depth applies to both objects and arrays:** `maxDepth` counts each container (plain object or array) as one nesting level. For example, `{ a: [1] }` puts the array at depth 2 (same as `{ a: { b: 1 } }` puts the nested object). This consistent counting prevents deeply nested array structures from bypassing the depth cap.
 
-**`cloneDocument` safety note:** The internal `cloneDocument` helper is recursive but is only ever called on payloads that have already passed validation. Because validation enforces `maxDepth` on all code paths (including `skipPayloadValidation` mode), stored documents cannot exceed `maxDepth`, keeping clone and deep-equal operations safe without a separate depth counter in the hot path.
+**Copy safety note:** Caller payloads are materialized into an owned graph before full validation, in a copy pass that itself enforces cycles and `maxDepth`. Later uses of the recursive `cloneDocument` helper operate only on validated, bounded payloads. See [Spec 02 §12](./02-crud-and-query.md#12-input-isolation), [ADR-025](../adr/025-write-path-input-isolation.md), and [ADR-030](../adr/030-read-once-input-snapshots.md).
 
 #### Supported Value Types
 
@@ -124,6 +131,8 @@ The payload validator accepts the following JSON-compatible value types for docu
 
 `bigint`, class instances, functions, `undefined`, `Symbol`, and circular references are rejected with `ValidationError`. Arrays are supported as field values and may be nested — each element is validated using the same rules as top-level field values.
 
+**The document itself must also be a plain object** (prototype `Object.prototype` or `null`). Passing a class instance such as `new Date()` or `new Map()` — or an object created with `Object.create(proto)` whose fields live on the prototype — throws `ValidationError`. Only own enumerable keys are ever persisted, so accepting such a value would store a document holding nothing but a generated `_id`. This check runs on both validation paths, so it also applies when `skipPayloadValidation` is `true`.
+
 #### Reserved Keys
 
 To defend against prototype-pollution, the payload validator rejects the keys `__proto__`, `constructor`, `prototype`, `__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, and `__lookupSetter__` at any nesting level. Attempting to insert a document containing any of these keys throws `ValidationError`. The restriction is centralised in `src/internal/objectUtils.ts` and also applies to filter keys and dot-notation path segments (see Spec 02 §8 Reserved Keys).
@@ -136,14 +145,14 @@ Returns a `Collection` instance for the given name. If the collection does not e
 
 **`CollectionOptions`:**
 
-| Field                | Type                               | Default     | Description                                                                                                                                                                          |
-| -------------------- | ---------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `duplicateKeys`      | `'allow' \| 'replace' \| 'reject'` | `'reject'`  | Duplicate `_id` handling policy                                                                                                                                                      |
-| `ttl`                | `number`                           | `undefined` | Time-to-live in seconds. Documents expire after this duration from creation. See [Section 2.7](#27-ttl-time-to-live).                                                                |
-| `capacity`           | `CapacityConfig`                   | `undefined` | Per-collection capacity override. See [Section 2.8](#28-capacity).                                                                                                                   |
-| `autoCommit`         | `AutoCommitConfig`                 | `undefined` | Per-collection auto-commit override. See [Section 2.9](#29-auto-commit).                                                                                                             |
-| `index`              | `IndexConfig`                      | `undefined` | Per-collection B+ tree index override. See [Section 2.10](#210-index-configuration).                                                                                                 |
-| `key`                | `DatastoreKeyDefinition`           | `undefined` | Custom key type with user-defined normalize, compare, serialize, and deserialize functions. See [Section 2.11](#211-custom-key-types).                                               |
+| Field                | Type                               | Default     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------- | ---------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `duplicateKeys`      | `'allow' \| 'replace' \| 'reject'` | `'reject'`  | Duplicate `_id` handling policy                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `ttl`                | `number`                           | `undefined` | Time-to-live in seconds. Documents expire after this duration from creation. See [Section 2.7](#27-ttl-time-to-live).                                                                                                                                                                                                                                                                                                                              |
+| `capacity`           | `CapacityConfig`                   | `undefined` | Per-collection capacity override. See [Section 2.8](#28-capacity).                                                                                                                                                                                                                                                                                                                                                                                 |
+| `autoCommit`         | `AutoCommitConfig`                 | `undefined` | Per-collection auto-commit override. See [Section 2.9](#29-auto-commit).                                                                                                                                                                                                                                                                                                                                                                           |
+| `index`              | `IndexConfig`                      | `undefined` | Per-collection B+ tree index override. See [Section 2.10](#210-index-configuration).                                                                                                                                                                                                                                                                                                                                                               |
+| `key`                | `DatastoreKeyDefinition`           | `undefined` | Custom key type with user-defined normalize, compare, serialize, and deserialize functions. See [Section 2.11](#211-custom-key-types).                                                                                                                                                                                                                                                                                                             |
 | `immutableCreatedAt` | `boolean`                          | `false`     | Rejects any update targeting `_createdAt`. **Automatically active whenever `ttl` is set**, regardless of this flag's value; set `true` explicitly to get the same update-time protection on a collection **without** `ttl`. Insert-time server-timestamp assignment (ignoring a caller-supplied `_createdAt`) only happens when `ttl` is set — this flag alone does not force it on a non-TTL collection. See [Section 2.7](#27-ttl-time-to-live). |
 
 Once a collection is created, the resolved options (after defaults are filled in) are persisted for that collection name within the `Database` instance. **Every subsequent call to `db.collection(name, options?)` must resolve to options that match the stored options exactly**, or `ConfigurationError` is thrown. Bare re-access `db.collection(name)` resolves to the documented defaults (`{ duplicateKeys: 'reject' }`, no `ttl`, etc.) and therefore only succeeds when the stored options already equal those defaults. See [ADR-014](../adr/014-strict-collection-option-reaccess.md) for rationale.
@@ -186,7 +195,9 @@ Iterates all per-collection `Datastore` instances **sequentially** and calls `co
 
 #### `db.close(): Promise<void>`
 
-Iterates all per-collection `Datastore` instances **sequentially** and calls `close()` on each. Releases resources and locks. After calling `close()`, all subsequent operations throw `ClosedDatabaseError`. If any individual `close()` throws, the error propagates immediately and remaining datastores are **not** closed.
+Iterates all per-collection `Datastore` instances **sequentially** and calls `close()` on each. Releases resources and locks. After calling `close()`, all subsequent operations throw `ClosedDatabaseError`.
+
+`close()` is **best-effort**: a failing `close()` does not abort the pass. Every remaining datastore is still closed, all listener subscriptions are still released, and the internal registries are still cleared; only then is a failure re-thrown. This matters because the database is marked closed before the pass begins, so a datastore skipped by an early abort would be unreachable _and_ unclosed — its file lock held with no way to release it. A single failure is re-thrown as-is; multiple failures are re-thrown as an `AggregateError` whose `errors` array holds them in collection order.
 
 #### `db.on(event: 'error', listener): () => void`
 
@@ -250,6 +261,68 @@ const db = new Database({
 
 - Setting `maxLeafEntries` or `maxBranchChildren` while `autoScale` is `true` throws `ConfigurationError`.
 - Values must be safe integers between 3 and 16,384 (inclusive).
+
+### 1.6 Durable Drivers and Collection Namespacing
+
+Each collection is backed by its own `Datastore` ([ADR-012](../adr/012-per-collection-datastore-isolation.md)), so each durable collection needs its own physical namespace (file path, key prefix, IndexedDB database, OPFS directory, etc.). A single `DatastoreDriver` instance is bound to exactly one physical namespace and therefore cannot back more than one collection.
+
+`DatabaseConfig.driver` accepts either form:
+
+```ts
+type DatabaseDriverFactory = (collectionName: string) => DatastoreDriver;
+
+interface DatabaseConfig {
+  driver?: DatastoreDriver | DatabaseDriverFactory;
+  // ...
+}
+```
+
+- **`DatabaseDriverFactory` (recommended for durable storage):** called once per collection when its `Datastore` is created lazily by `collection()`. The factory derives a per-collection namespace from the collection name, which **must be encoded with `collectionNamespace()`** (§1.7):
+
+  ```ts
+  import { collectionNamespace } from '@frostpillar/frostpillar-db';
+
+  const db = new Database({
+    driver: (name) =>
+      fileDriver({
+        target: {
+          kind: 'directory',
+          directory: './data',
+          fileName: collectionNamespace(name),
+        },
+      }),
+  });
+  ```
+
+  Collection names are validated by `collection()` before the factory is invoked (letters, digits, `_`, `.`, `-`; no leading `_`; no `..`), so they are safe to _place_ in file names and storage keys — but a raw name is **not** safe to use as a namespace fragment, because a dot lets one collection's name sit inside another's derived key space. See §1.7.
+
+### 1.7 Namespace Derivation (`collectionNamespace`)
+
+```ts
+collectionNamespace(name: string): string;
+```
+
+Encodes a collection name into a namespace fragment that no other collection's fragment can collide with. Every character outside `[A-Za-z0-9_-]` is percent-escaped (`%XX`, uppercase hex), so for a valid collection name only `.` is rewritten: `orders.2026` → `orders%2E2026`. The name is validated first; an invalid one throws `ValidationError`.
+
+Two properties make the result safe as a namespace fragment:
+
+- **Injective.** `%` cannot occur in a valid collection name, so it is available as an escape character and distinct names always encode to distinct fragments.
+- **Delimiter-free.** The encoded fragment contains no `.`, the delimiter every driver uses to build its own key space, so no collection's fragment can be a _delimited prefix_ of another's.
+
+The second property is the one that matters. The file backend derives its data files as `<fileName>.fpdb.g.<generation>` and, on open, **deletes every file in the directory beginning with `<fileName>.fpdb.g.`** other than its own active generation. With raw names, the collections `foo` and `foo.fpdb.g.0` — both valid — produce base names `foo.fpdb` and `foo.fpdb.g.0.fpdb`; the second collection's data file `foo.fpdb.g.0.fpdb.g.0` begins with `foo.fpdb.g.`, so opening `foo` **deletes it**, and `foo.fpdb.g.0` reopens empty. Encoding the fragment removes the dot and with it the collision: `foo` and `foo%2Efpdb%2Eg%2E0` share no delimited prefix.
+
+The same helper should be used for every namespace fragment a factory derives (`fileName`, `databaseKey`, `databaseName`, `directoryName`, `keyPrefix`), so the choice does not have to be re-audited per driver.
+
+**IndexedDB — a distinct `databaseName` is required.** The snapshot of an IndexedDB-backed datastore is stored at a fixed location (`_meta` object store, key `config`) that is **per database, not per object store**: the storage engine's load and commit paths ignore `objectStoreName`. A factory that varies only `objectStoreName` within one `databaseName` therefore gives every collection the same snapshot slot, and each commit overwrites the previous collection's data — the exact last-writer-wins loss the factory exists to prevent. Vary `databaseName` per collection:
+
+```ts
+driver: (name) =>
+  indexedDBDriver({ databaseName: `my-app-${collectionNamespace(name)}` });
+```
+
+- **Plain `DatastoreDriver`:** supported for single-collection databases. Creating a **second** collection while another driver-backed collection exists throws `ConfigurationError`, because sharing one driver instance across collections would target the same lock/file (`DatabaseLockedError` on the file driver) or silently overwrite snapshots (last-writer-wins data loss on browser drivers). After `dropCollection()` closes the only driver-backed collection, a new collection may reuse the plain driver.
+
+Databases without a `driver` (in-memory) are unaffected: any number of collections may coexist.
 
 ## 2. Collection
 
@@ -407,6 +480,7 @@ Registers a listener that is called synchronously after each successful mutation
 - Calling the returned unsubscribe function removes only that listener.
 - `watch()` does **not** accept a filter parameter. All changes are emitted. Consumers can filter in their listener callback.
 - **Snapshot semantics:** The listener list is copied before iteration, so calling `unsubscribe()` or registering a new `watch()` from within a listener callback takes effect on the _next_ emit, not the current one.
+- `watch()` throws `ClosedDatabaseError` on a dropped collection or a closed database, like every other collection method. A listener registered on such a collection could never fire, because the collection instance is detached from the database's registry and no mutation can reach it.
 
 ### 2.7 TTL (Time-To-Live)
 
@@ -543,6 +617,19 @@ const items = db.collection('items', { key: numericKey });
 ```
 
 **Conflict detection:** Since `DatastoreKeyDefinition` contains functions, structural comparison is used: each of the four function properties (`normalize`, `compare`, `serialize`, `deserialize`) is compared by reference equality (`===`). Two key definition objects that reference the same four functions are considered equal, even if the outer objects are different references. Two collections created with different function references (even if functionally equivalent) are considered to have different options and will throw `ConfigurationError`.
+
+**Document identity is unaffected by the key definition.** `_id` stays the string stored on the document, and every operation that takes an `_id` — `find`, `findOne`, `exists`, `remove`, `update` — matches it by exact string equality. A `normalize` function may be non-injective: with `normalize: (v) => Number(v)`, the `_id`s `"01"` and `"1"` collapse onto the same storage key. The key definition then governs only storage-level behavior, never query results:
+
+| Surface                        | Behavior under a non-injective `normalize`                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `find` / `findOne` / `exists`  | Match the stored `_id` string. With only `_id: "01"` stored, `_id: "1"` matches nothing.                                                                                 |
+| `remove`                       | Deletes only the documents whose stored `_id` matches; `watch()` reports the stored `_id`.                                                                               |
+| `ids()`                        | Returns the stored `_id` strings (`["01"]`), never the normalized keys.                                                                                                  |
+| `insert` under `duplicateKeys` | Applies at the **key** level: `"01"` and `"1"` share a key, so the second insert is rejected (`'reject'`) or replaces the first (`'replace'`), as for any key collision. |
+
+Colliding `_id`s are therefore best avoided: keep `normalize` injective over the `_id` strings the collection actually stores. See [ADR-027](../adr/027-custom-key-id-identity.md) for the rationale and the fast-path implications.
+
+**A `key` on the `DatabaseConfig` behaves identically.** Every collection's datastore inherits the database-level `key`, so a collection that declares no `key` of its own is still subject to its `normalize` — and gets the same `_id`-identity treatment as one configured with `key` directly. A collection option, where present, overrides the database-level definition.
 
 ## 3. Error Types
 

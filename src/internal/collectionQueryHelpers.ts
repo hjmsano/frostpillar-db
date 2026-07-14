@@ -5,7 +5,8 @@ import type {
 
 import { ValidationError } from '../errors.js';
 import { cloneDocument, isEmptyFilter } from './objectUtils.js';
-import { matchesFilter, validateFilter } from './filterEvaluator.js';
+import { matchesFilter } from './filterEvaluator.js';
+import { validateFilter } from './filterValidator.js';
 import {
   extractEqualityFields,
   extractIdEquality,
@@ -18,7 +19,11 @@ import {
   toStoredDocument,
 } from './collectionUtils.js';
 import { DEFAULT_MAX_DEPTH } from './limits.js';
-import { applyUpdateOperations } from './updateApplier.js';
+import { applyNormalizedUpdateOperations } from './updateApplier.js';
+import {
+  normalizeUpdateOperations,
+  type NormalizedOperations,
+} from './updateValidator.js';
 import type { DatabaseCaches } from './databaseCaches.js';
 import type { ResultChainContext } from '../resultChain.js';
 import type {
@@ -36,6 +41,7 @@ export interface QueryContext {
   readonly maxMatchedDocuments: number;
   readonly ttl: number | undefined;
   readonly duplicateKeys: CollectionDuplicateKeyPolicy;
+  readonly hasCustomKey: boolean;
 }
 
 export interface ScanResult<TDocument extends FrostpillarDocument> {
@@ -63,7 +69,14 @@ export const getRecordsByFilter = async (
   }
   const idKeys = extractIdInclusion(filter);
   if (idKeys !== null) return ctx.datastore.getMany(idKeys);
-  const range = extractIdRange(filter);
+  // Equality and `$in` lookups stay safe under a custom key: each queried `_id`
+  // normalizes to the key its own record was stored under, so the index returns
+  // a superset that the caller then filters by `_id`. A range lookup does not:
+  // it walks the index in the key definition's order, which need not agree with
+  // the string order the filter is evaluated in (`"10"` sits inside the string
+  // range `"1".."3"` but outside the numeric one), so it can drop matches.
+  // Fall back to a full scan (ADR-027).
+  const range = ctx.hasCustomKey ? null : extractIdRange(filter);
   if (range !== null) {
     if (range.start > range.end) return [];
     return ctx.datastore.getRange(range.start, range.end);
@@ -210,6 +223,26 @@ export const createChainContext = <TDocument extends FrostpillarDocument>(
   };
 };
 
+export const buildUpsertDocumentFromNormalized = <
+  TDocument extends FrostpillarDocument,
+>(
+  filter: Filter,
+  operations: NormalizedOperations,
+  pathCache: Map<string, string[]>,
+): InsertDocument<TDocument> => {
+  const baseDoc = extractEqualityFields(filter, pathCache);
+  if (typeof baseDoc._id !== 'string' || baseDoc._id.length === 0) {
+    baseDoc._id = crypto.randomUUID();
+  }
+  const storedBase = baseDoc as FrostpillarStoredDocument<TDocument>;
+  const result = applyNormalizedUpdateOperations(
+    storedBase,
+    operations,
+    pathCache,
+  );
+  return result.document as InsertDocument<TDocument>;
+};
+
 export const buildUpsertDocument = <TDocument extends FrostpillarDocument>(
   filter: Filter,
   operations: UpdateOperations,
@@ -217,17 +250,14 @@ export const buildUpsertDocument = <TDocument extends FrostpillarDocument>(
   protectCreatedAt = false,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): InsertDocument<TDocument> => {
-  const baseDoc = extractEqualityFields(filter, pathCache);
-  if (typeof baseDoc._id !== 'string' || baseDoc._id.length === 0) {
-    baseDoc._id = crypto.randomUUID();
-  }
-  const storedBase = baseDoc as FrostpillarStoredDocument<TDocument>;
-  const result = applyUpdateOperations(
-    storedBase,
+  const normalized = normalizeUpdateOperations(
     operations,
-    pathCache,
     protectCreatedAt,
     maxDepth,
   );
-  return result.document as InsertDocument<TDocument>;
+  return buildUpsertDocumentFromNormalized<TDocument>(
+    filter,
+    normalized,
+    pathCache,
+  );
 };

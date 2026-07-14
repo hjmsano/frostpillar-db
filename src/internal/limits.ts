@@ -14,6 +14,30 @@ export const MAX_REGEX_PATTERN_LENGTH = 1024;
 export const MAX_REGEX_QUANTIFIERS = 20;
 
 /**
+ * Maximum number of *variable-width* quantifiers allowed in a $regex pattern: a
+ * quantifier whose minimum repetition count differs from its maximum, so the
+ * width its atom consumes is not fixed — `?`, `*`, `+`, `{n,}`, and any `{n,m}`
+ * with `m > n`. A fixed-width `{n}` / `{n,n}` is not counted: it consumes
+ * exactly n repetitions, offering the engine no choice to backtrack over.
+ *
+ * Each variable-width quantifier is an independent choice point, so k of them
+ * give a backtracking engine an exponential number of ways to distribute a
+ * *failing* match. None of the other screens see this shape — no atom is
+ * repeated, no group is nested or alternated — so `^.?.?...aaa...$` with 20 `.?`
+ * atoms sat inside MAX_REGEX_QUANTIFIERS and cost ~1.5 ms per failing
+ * evaluation (~15 s over a 10,000-document zero-match scan, which
+ * `maxMatchedDocuments` never cuts short because nothing matches).
+ *
+ * The cap originally counted only the *skippable* quantifiers (minimum of
+ * zero). That left the identical shape reachable with a minimum of one: a chain
+ * of `{1,2}` atoms takes one-or-two characters each — still 2^k distributions of
+ * a failing match, measured at ~5.2 ms per warmed non-match — and a chain of
+ * `+`/`{1,}` atoms is worse still, since each is unbounded. Counting every
+ * variable-width quantifier bounds all of them at 8.
+ */
+export const MAX_REGEX_VARIABLE_QUANTIFIERS = 8;
+
+/**
  * Maximum number of alternation groups `(a|b)` allowed in a $regex pattern
  * (backstop against unrolled/manually-repeated ambiguous alternation, which
  * carries no quantifier token and so evades MAX_REGEX_QUANTIFIERS and the
@@ -35,6 +59,16 @@ export const MAX_GROUP_COUNT = 100_000;
 
 /** Maximum number of documents in a single groupBy group. */
 export const MAX_GROUP_DOCUMENTS = 100_000;
+
+/**
+ * Maximum number of accumulators in a single groupBy operation.
+ *
+ * Every accumulator rescans each group's documents, so the work of one call is
+ * O(groups x group size x accumulators). Without a cap, an accumulator map with
+ * thousands of entries turns a scan already bounded by `maxMatchedDocuments`
+ * into an unbounded one.
+ */
+export const MAX_GROUP_ACCUMULATORS = 32;
 
 /** Maximum number of distinct values returned by distinct(). */
 export const MAX_DISTINCT_COUNT = 100_000;

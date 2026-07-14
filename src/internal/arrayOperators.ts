@@ -4,7 +4,11 @@ import { PATH_NOT_FOUND, type PathValue } from './documentPath.js';
 import { allPrimitive } from './filterOperatorEvaluators.js';
 import { MAX_OPERAND_ARRAY_SIZE } from './limits.js';
 
-export const evaluateAll = (resolved: PathValue, operand: unknown): boolean => {
+/**
+ * Asserts the `$all` operand shape and returns it narrowed. Shared with the
+ * structural filter validator so both paths raise the identical error.
+ */
+export const assertAllOperand = (operand: unknown): unknown[] => {
   if (!Array.isArray(operand)) {
     throw new ValidationError('$all expects an array.');
   }
@@ -13,8 +17,25 @@ export const evaluateAll = (resolved: PathValue, operand: unknown): boolean => {
       `$all operand exceeds maximum of ${String(MAX_OPERAND_ARRAY_SIZE)} elements.`,
     );
   }
+  return operand as unknown[];
+};
 
-  if (operand.length === 0) {
+/** Asserts the `$size` operand shape and returns it narrowed. */
+export const assertSizeOperand = (operand: unknown): number => {
+  if (
+    typeof operand !== 'number' ||
+    !Number.isInteger(operand) ||
+    operand < 0
+  ) {
+    throw new ValidationError('$size expects a non-negative integer.');
+  }
+  return operand;
+};
+
+export const evaluateAll = (resolved: PathValue, operand: unknown): boolean => {
+  const required = assertAllOperand(operand);
+
+  if (required.length === 0) {
     return false;
   }
 
@@ -24,16 +45,16 @@ export const evaluateAll = (resolved: PathValue, operand: unknown): boolean => {
 
   const fieldArray = resolved as unknown[];
 
-  if (allPrimitive(operand) && allPrimitive(fieldArray)) {
+  if (allPrimitive(required) && allPrimitive(fieldArray)) {
     const fieldSet = new Set(fieldArray);
-    for (const required of operand) {
-      if (!fieldSet.has(required)) return false;
+    for (const item of required) {
+      if (!fieldSet.has(item)) return false;
     }
     return true;
   }
 
-  return operand.every((required: unknown) =>
-    fieldArray.some((element: unknown) => deepEqual(element, required)),
+  return required.every((item: unknown) =>
+    fieldArray.some((element: unknown) => deepEqual(element, item)),
   );
 };
 
@@ -41,17 +62,11 @@ export const evaluateSize = (
   resolved: PathValue,
   operand: unknown,
 ): boolean => {
-  if (
-    typeof operand !== 'number' ||
-    !Number.isInteger(operand) ||
-    operand < 0
-  ) {
-    throw new ValidationError('$size expects a non-negative integer.');
-  }
+  const size = assertSizeOperand(operand);
 
   if (resolved === PATH_NOT_FOUND || !Array.isArray(resolved)) {
     return false;
   }
 
-  return (resolved as unknown[]).length === operand;
+  return (resolved as unknown[]).length === size;
 };

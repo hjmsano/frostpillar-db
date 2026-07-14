@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { Datastore } from '@frostpillar/frostpillar-storage-engine';
+
 import { Database } from '../../src/index.js';
 
 interface UserDocument {
@@ -72,6 +74,71 @@ void test('$in and $nin match scalar document field values against a list of can
       .toArray();
     assert.equal(featuredOrSale.length, 3);
   } finally {
+    await database.close();
+  }
+});
+
+// eslint-disable-next-line max-lines-per-function -- Covers every candidate-only query path in one regression test.
+void test('conjunctive _id filters use indexed candidates and keep every predicate', async () => {
+  const database = new Database({});
+  const users = database.collection<UserDocument>('conjunctive-id');
+  await users.insertMany([
+    { _id: 'active', name: 'Active', status: 'active' },
+    { _id: 'inactive', name: 'Inactive', status: 'inactive' },
+  ]);
+
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- Restore the exact implementation after observing candidate retrieval.
+  const originalGetAll = Datastore.prototype.getAll;
+  let getAllCalls = 0;
+  Datastore.prototype.getAll = function (this: Datastore) {
+    getAllCalls += 1;
+    return originalGetAll.call(this);
+  };
+
+  try {
+    assert.deepEqual(
+      (await users.find({ _id: 'active', status: 'active' }).toArray()).map(
+        (document) => document._id,
+      ),
+      ['active'],
+    );
+    assert.equal(getAllCalls, 0);
+
+    assert.equal(
+      await users.findOne({ _id: 'active', status: 'inactive' }),
+      null,
+    );
+    assert.equal(getAllCalls, 0);
+
+    assert.deepEqual(
+      (
+        await users
+          .find({ _id: { $in: ['active', 'inactive'] }, status: 'active' })
+          .toArray()
+      ).map((document) => document._id),
+      ['active'],
+    );
+    assert.equal(getAllCalls, 0);
+
+    assert.deepEqual(
+      await users.update(
+        { _id: 'active', status: 'inactive' },
+        { $set: { name: 'Wrong' } },
+      ),
+      { modifiedCount: 0, upsertedId: null },
+    );
+    assert.equal(await users.remove({ _id: 'active', status: 'inactive' }), 0);
+    assert.equal(
+      await users.remove({
+        _id: { $in: ['active', 'inactive'] },
+        status: 'inactive',
+      }),
+      1,
+    );
+    assert.equal(getAllCalls, 0);
+    assert.deepEqual(await users.ids(), ['active']);
+  } finally {
+    Datastore.prototype.getAll = originalGetAll;
     await database.close();
   }
 });

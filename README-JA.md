@@ -220,6 +220,8 @@ import { Database } from '@frostpillar/frostpillar-db';
 const db = new Database({});
 ```
 
+`Database` は構築時に、設定オブジェクトのトップレベルの列挙可能な own プロパティをシャロースナップショットします。アクセサ付きフィールドは 1 回だけ読み取られ、その後に呼び出し側がトップレベルの設定を変更してもデータベースには影響しません。ネストした設定オブジェクトとコールバック関数は参照を共有します。
+
 **ブラウザ:**
 
 ```js
@@ -236,7 +238,9 @@ await db.commit(); // 永続ストレージへの明示的なフラッシュ
 await db.close(); // リソースとロックの解放
 ```
 
-> **逐次処理:** `commit()` および `close()` はコレクションを逐次的に処理します。個々のコレクションの操作でエラーが発生した場合、そのエラーが即座に伝播し、残りのコレクションはスキップされます。ベストエフォートのセマンティクスが必要な場合は、コレクション単位で try/catch を使用してください。
+> **逐次処理:** `commit()` および `close()` はコレクションを逐次的に処理します。`commit()` で個々のコレクションがエラーを投げた場合、そのエラーが即座に伝播し、残りのコレクションはスキップされます。コミットでベストエフォートのセマンティクスが必要な場合は、コレクション単位で try/catch を使用してください。
+>
+> `close()` はそれ自体がベストエフォートです。あるコレクションの失敗で処理を中断せず、残りのデータストアもすべてクローズし、内部状態をすべて解放してからエラーを再スローします（単一の失敗はそのまま、複数の失敗は `AggregateError` として）。中断した場合、スキップされたデータストアは（データベースはすでにクローズ済みのため）到達不能なままファイルロックを保持し続けることになります。
 
 #### エラー監視
 
@@ -370,6 +374,8 @@ const numericKey: DatastoreKeyDefinition<number> = {
 const items = db.collection('items', { key: numericKey });
 ```
 
+キー定義が制御するのはストレージ上の配置と順序だけです。`_id` はドキュメントに格納された文字列のままであり、クエリは文字列としての完全一致で判定します。`normalize` は、格納する `_id` 文字列に対して単射になるように定義してください。`normalize: Number` の場合、`"01"` と `"1"` は同一のストレージキーに写るため、両者は共存できません。 `Database` の設定に指定した `key` は、それを上書きしないすべてのコレクションに同じ意味で適用されます。
+
 コレクション単位のオプションはデータベース全体の設定よりも優先されます。同じコレクションを異なる値で再アクセスすると `ConfigurationError` がスローされます。詳細は [Spec 01](docs/specs/01-database-and-collection.md) §2.8–§2.11 を参照してください。
 
 #### コレクションの内部情報
@@ -406,7 +412,9 @@ const ids = await users.insertMany([
 
 > **注意:** カスタム `_id` は制御文字を含まない 1,024 文字以下の空でない文字列でなければなりません。違反した場合、`insert` は `ValidationError` をスローします。同じ制約はフィルタで使用する `_id` 値にも適用されます。
 
-> **注意:** `insertMany` はトランザクションをサポートしていません。バッチ処理中にエラーが発生した場合（例: `'reject'` コレクションでの `_id` 重複）、エラー発生前に挿入済みのドキュメントはロールバックされません。呼び出し元にはスローされたエラーが返され、部分的な結果は返されません。
+> **注意:** `insertMany` はトランザクションをサポートしていません。バッチ処理中にエラーが発生した場合（例: ストレージ容量の枯渇）、エラー発生前に挿入済みのドキュメントはロールバックされません。呼び出し元にはスローされたエラーが返され、部分的な結果は返されません。
+>
+> ただし `_id` の重複は例外です。`'reject'` コレクションでは、バッチ内および保存済みドキュメントとの重複を**書き込み前に**チェックするため、`DuplicateIdError` が発生してもコレクションは変更されません。他の理由でバッチが途中で失敗した場合も、ストレージに到達したレコードについては `'insert'` イベントが発行されるため、`watch()` が保存済みドキュメントを見落とすことはありません（`'reject'` コレクションの場合。[Spec 02 §1](docs/specs/02-crud-and-query.md) 参照）。
 
 #### 検索
 
@@ -469,6 +477,35 @@ const active = await users.count({ status: 'active' });
 
 > **注意:** `duplicateKeys: 'allow'` のコレクションでは、`count()` は重複キーを含む**総レコード数**を返します。ユニークな `_id` の数ではありません。
 
+#### 書き込み時のドキュメント所有権
+
+`insert()` / `insertMany()` に渡したドキュメント、および `$set` / `$push` / `$addToSet` で書き込む値は、ストレージへ**ディープコピー**されます。書き込み完了後に元のオブジェクトを変更しても、保存済みレコードは変化しません:
+
+```ts
+const input = { name: 'Alice', tags: ['a'] };
+const id = await users.insert(input);
+
+input.tags.push('b'); // 保存済みドキュメントには影響しない
+const stored = await users.findOne({ _id: id }); // tags: ['a']
+```
+
+読み取りもコピーされます。`find()` / `findOne()` および `watch()` イベントが**返す**ドキュメントは保存済みレコードへの参照ではなくディープコピーであり、結果を変更しても保存済みデータには影響しません（`watch()` イベントのドキュメントは、そのイベントのリスナー間で共有される 1 つのコピーです。同一イベントのリスナー同士は互いの変更を見ます）。
+
+挿入ペイロード、フィルタ、更新演算とオプションは、公開エントリーポイントでスナップショットされます。対象プロパティは 1 回だけ読み取られるため、getter や `Proxy` が検証時とその後の評価時に異なる値を見せることはできません。`update()` は最初の `await` より前に `options.upsert` と正規化済みの 1 つの演算セットを確定し、マッチした全ドキュメントと upsert で同じセットを使用します。`$pull` の比較値も切り離されます。
+
+フィルタ配列は再帰的にコピーされます。クラスインスタンスを含むオブジェクト比較値は own の列挙可能プロパティの形、`Date` はタイムスタンプ、`RegExp` は 1 回読み取った `source` / `flags` の組と再帰的にコピーした own の列挙可能プロパティとして切り離されます。フィルタのルートはプレーンなレコードとして materialize される必要があります。オブジェクト同一性とプロトタイプはクエリの意味に含まれません。
+
+```ts
+// getter はスナップショット作成時に 1 回だけ読み取られ、保存されるのは検証済みの値です。
+await users.insert({
+  get score() {
+    return callCount++ === 0 ? 1 : 10n; // この 10n が保存されることはありません
+  },
+});
+```
+
+詳細は [ADR-030](docs/adr/030-read-once-input-snapshots.md) を参照してください。
+
 ### ID クエリ
 
 ドキュメントの存在確認や ID 一覧取得だけが目的の場合、`find()` / `findOne()` よりも軽量な `exists()` / `ids()` を使用できます:
@@ -483,8 +520,8 @@ if (await users.exists('user-001')) {
 const allIds = await users.ids();
 ```
 
-- `exists(id)` はファストパスとして `Datastore.has(key)` を使用し、TTL コレクションでは有効期限切れのドキュメントに対して `false` を返します。
-- `ids()` はファストパスとして `Datastore.keys()` を使用します。TTL コレクションでは有効期限切れのドキュメントを除外し、`find()` や `count()` と整合する結果を返します。
+- `exists(id)` が `Datastore.has(key)` のファストパスを使用するのは、デフォルトキーかつ TTL なしのコレクションだけです。カスタム `key` では正規化キーに対応する候補を読み込み、保存済み `_id` が完全一致する場合だけ `true` を返します。TTL コレクションでは有効期限切れの候補も除外します。
+- `ids()` が `Datastore.keys()` を使用するのは、デフォルトキーかつ TTL なしで、重複ポリシーが `'allow'` ではない場合だけです。TTL、カスタム `key`、`duplicateKeys: 'allow'` のいずれかがある場合はドキュメントを読み込み、必要に応じて期限切れを除外して、保存済み `_id` を返します。複数のドキュメントが同じストレージキーを共有しても `ids().length === count()` が成り立ちます。
 
 ### クエリフィルタ
 
@@ -513,7 +550,7 @@ const allIds = await users.ids();
 { role: { $nin: ['guest'] } }
 ```
 
-> **深い等値比較の注意:** `$in`、`$nin`、`$eq`、`$ne`、`$all`、`$pull`、`$addToSet` は内部の深い等値比較実装を使用します。サポートされる型はプリミティブ、`Date`、プレーン配列、プレーンオブジェクトです。`Map`、`Set`、`RegExp`、型付き配列（`Uint8Array` など）はフィルタや演算子のオペランドとして使用できません。
+> **深い等値比較の注意:** `$in`、`$nin`、`$eq`、`$ne`、`$all`、`$pull`、`$addToSet` はプリミティブを直接、`Date` をタイムスタンプ、配列を再帰的に、その他のオブジェクトを own の列挙可能プロパティの形で比較します。プロトタイプと、`Map` / `Set` のエントリや `RegExp` のパターンなどの内部スロットは比較しませんが、それらのオブジェクトに追加された own の列挙可能プロパティは比較します。パターンマッチには `$regex` を使用してください。
 
 #### 論理
 
@@ -567,10 +604,10 @@ const allIds = await users.ids();
 
 ### パフォーマンスノート
 
-- **`_id` 完全一致のファストパス** — `findOne({ _id })` および内部の `_id` 検索は `Datastore.getFirst(key)` を直接呼び出し、フルスキャンパイプラインをスキップします。
-- **`_id` 範囲スキャン** — フィルタが `_id` フィールドに対して `$gt`/`$gte` と `$lt`/`$lte` を両方（同じ型で）指定している場合、クエリエンジンは `Datastore.getRange(start, end)` に委譲し、B+Tree リーフレベルの範囲スキャンを実行します。`_id` 以外の条件は絞り込まれた範囲に対してインメモリで評価されます。型が異なる境界値（例：`string` の下限 + `number` の上限）は `ValidationError` をスローします。
-- **`_id` の `$in` ファストパス** — `find({ _id: { $in: [...] } })`、`update`、および `remove` で `_id` に `$in` フィルタを使用すると、`Datastore.getMany(keys)` によるバッチ検索が行われ、フルスキャンが回避されます。`remove` の削除パスでも `Datastore.deleteMany(keys)` により同様の最適化が適用されます。
-- **`exists()` / `ids()` のファストパス** — TTL が設定されていないコレクションではペイロードのロードをスキップします（[ID クエリ](#id-クエリ)を参照）。
+- **`_id` 完全一致のファストパス** — デフォルトキーでは、`findOne({ _id })` は `Datastore.getFirst(key)` の結果を確定結果として扱えます。カスタム `key` でもインデックスで候補を絞りますが、マッチを確定する前に保存済み `_id` の完全一致を確認します。
+- **`_id` 範囲スキャン** — デフォルトキーでは、`_id` に `$gt`/`$gte` と `$lt`/`$lte` を両方（同じ型で）指定すると `Datastore.getRange(start, end)` に委譲します。カスタムキーの正規化順序は `_id` 文字列の順序と異なる場合があるため、カスタムキーの範囲検索はフルスキャンを使用します。型が異なる境界値は `ValidationError` をスローします。
+- **`_id` の `$in` ファストパス** — `find` と `update` は `Datastore.getMany(keys)` で候補を一括取得した後、フィルタを完全に評価します。`remove` が `deleteMany(keys)` を使うのは、デフォルトキーかつ TTL なしなどの適用条件を満たす場合だけです。カスタムキーでは保存済み `_id` を確認し、レコード ID 単位で削除します。
+- **`exists()` / `ids()` のファストパス** — ストレージキーがドキュメント ID であることを保証できる場合だけ、ペイロードのロードをスキップします。カスタムキーのコレクションではペイロードから ID を確認します（[ID クエリ](#id-クエリ)を参照）。
 
 ### ResultChain
 
@@ -628,8 +665,12 @@ const max = await users.find({ dept: 'eng' }).max('salary');
 #### パーセンタイルと中央値
 
 ```ts
-const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
+const p95 = await requests
+  .find({ route: '/api' })
+  .percentile('latencyMs', 0.95);
+const medianLatency = await requests
+  .find({ route: '/api' })
+  .median('latencyMs');
 ```
 
 `p` は `[0, 1]` の範囲の割合です（`0.95` が 95 パーセンタイル）。0–100 のパーセントスケールではありません。パーセンタイルは最も近いランク間の線形補間（`PERCENTILE_CONT` — SQL、numpy、pandas と同じ定義）で計算されます: `percentile(f, 0)` は `min(f)` と等しく、`percentile(f, 1)` は `max(f)` と等しく、要素数が偶数の場合の中央値は中央 2 値の平均です。
@@ -640,9 +681,13 @@ const medianLatency = await requests.find({ route: '/api' }).median('latencyMs')
 
 ```ts
 const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
-const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const jitterSamp = await requests
+  .find({ route: '/api' })
+  .stdDevSamp('latencyMs');
 const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
-const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+const varSamp = await requests
+  .find({ route: '/api' })
+  .varianceSamp('latencyMs');
 ```
 
 `stdDevPop`/`variancePop` は `n` で除算します（対象データが母集団そのものである場合に使用）。`stdDevSamp`/`varianceSamp` は `n - 1` で除算します（ベッセルの補正 — 標本から母集団の分散を推定する不偏推定量）。いずれもウェルフォードのアルゴリズムで1回のスキャンで計算され、素朴な `Σx² − (Σx)²/n` の公式と異なり、大きな値で分散が小さいデータでも数値的に安定しています。
@@ -658,10 +703,14 @@ const departments = await users.find().distinct('dept');
 
 返される値は、集計の入力順序（ADR-020）における初出順に従います: ストレージ順、またはチェーン上で `distinct()` より前に `.sort()` が指定されていればその順序になります。
 
+オブジェクト/配列の値は防御的にディープコピーされます（[ADR-026](docs/adr/026-aggregation-result-isolation.md)）。したがって返された値を変更しても保存済みデータには影響しません。`groupBy()` の `_key` も同様です。
+
 #### Count Distinct
 
 ```ts
-const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+const uniqueCities = await users
+  .find({ status: 'active' })
+  .countDistinct('address.city');
 // 2
 ```
 
@@ -722,9 +771,12 @@ const result = await requests.find({}).groupBy('route', {
 `$first: 'fieldPath'` / `$last: 'fieldPath'`（[ADR-021](docs/adr/021-first-last-accumulators.md)）は、集計の入力順序（ADR-020）——チェーン上で `.sort()` が指定されていればその順序、なければストレージ順——において、グループの先頭（または末尾）のドキュメントにおける `fieldPath` の値を返します。これは**「位置を選んでから読む」**方式です: 先頭/末尾のドキュメントを先に選択し、そのドキュメントからフィールドを読み取ります——「フィールドを持つ最初/最後のドキュメント」ではありません。選択されたドキュメントがそのフィールドを持たない場合、結果は `null` になります。他のアキュムレータと異なり、`$first`/`$last` は**任意の型**（文字列、数値、真偽値、`null`、オブジェクト、配列）の値を返します。オブジェクト/配列の値は返却前に防御的にクローンされます。典型的な用途は「グループごとの最新値」です:
 
 ```ts
-const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
-  latestStatus: { $first: 'status' },
-});
+const result = await events
+  .find({})
+  .sort({ updatedAt: -1 })
+  .groupBy('userId', {
+    latestStatus: { $first: 'status' },
+  });
 // [{ _key: 'u1', latestStatus: 'shipped' }, ...]
 ```
 
@@ -746,8 +798,8 @@ const result = await users.find().groupBy('dept', {
 
 ```ts
 const result = await posts.find().groupBy('author', {
-  allTags: { $push: 'tag' },       // すべてのタグを順序どおり(重複含む)
-  cities: { $addToSet: 'city' },   // 一意な都市の集合
+  allTags: { $push: 'tag' }, // すべてのタグを順序どおり(重複含む)
+  cities: { $addToSet: 'city' }, // 一意な都市の集合
 });
 // [{ _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] }]
 ```
@@ -832,6 +884,8 @@ await sessions.insert({ userId: 'u1', token: 'abc123' });
 
 > **注意:** `update()` は `_createdAt` をリセットしません。さらに、TTL が設定されたコレクションでは `_createdAt` を一切変更できません。`_createdAt` を対象とする演算子（`$set`、`$unset`、`$inc`、`$push`、`$pull`、`$addToSet`、`$rename`）はすべて `ValidationError` をスローします。TTL の有効期限は作成時刻のみに基づき、その場で延長することはできません。有効期限をリセットするには、ドキュメントを削除して再挿入してください。
 
+TTL コレクションで期限切れレコードと同じストレージキーに書き込む場合、そのレコードは存在しないものとして扱われます。`insert()` と upsert は重複キーを確認する前に期限切れの競合レコードを削除します。`insertMany()` でも、保存済みの競合レコードがすべて期限切れの場合に同じクリーンアップを行います。これは競合したキーだけを対象とするクリーンアップであり、コレクション全体の purge ではありません。`'reject'` コレクションでは、有効期限が切れていない競合に対して引き続き `DuplicateIdError` がスローされます。
+
 #### `immutableCreatedAt` オプション
 
 TTL コレクションは上記の通り自動的に `_createdAt` を保護するため、`immutableCreatedAt` を設定する必要はありません。`ttl` を**使用しない**コレクションで、この保護のうち更新時の部分を得たい場合に `immutableCreatedAt: true` を設定します:
@@ -874,14 +928,23 @@ for await (const user of users
 
 frostpillar-db はすべての永続化を frostpillar-storage-engine に委譲します。`Database` コンストラクタにドライバーを渡してください。
 
+各コレクションは専用のデータストアで管理されるため、永続化するコレクションごとに独立した物理名前空間（ファイルパス、キープレフィックス、IndexedDB データベースなど）が必要です。コレクション名を受け取ってドライバーを返す**ドライバーファクトリ**を渡すことで、コレクションごとに分離された名前空間を割り当てられます。名前空間の断片は生のコレクション名からではなく、必ず **`collectionNamespace(name)`** で導出してください（下の警告を参照）。
+
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from '@frostpillar/frostpillar-db';
+import { Database, collectionNamespace } from '@frostpillar/frostpillar-db';
 import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
-  driver: fileDriver({ filePath: './data/myapp.fpdb' }),
+  driver: (name) =>
+    fileDriver({
+      target: {
+        kind: 'directory',
+        directory: './data',
+        fileName: collectionNamespace(name),
+      },
+    }),
   autoCommit: { frequency: '5s', maxPendingBytes: 1024 * 1024 },
 });
 ```
@@ -889,17 +952,26 @@ const db = new Database({
 **ブラウザ:**
 
 ```js
-const { Database, indexedDBDriver } = window.FrostpillarDB;
+const { Database, collectionNamespace, indexedDBDriver } = window.FrostpillarDB;
 
 const db = new Database({
-  driver: indexedDBDriver({
-    databaseName: 'my-app',
-    objectStoreName: 'records',
-    version: 1,
-  }),
+  driver: (name) =>
+    indexedDBDriver({
+      // スナップショットは*データベース*単位で保存されます。オブジェクトストアでは
+      // 分離できないため、コレクションごとに databaseName を分けてください。
+      databaseName: `my-app-${collectionNamespace(name)}`,
+      objectStoreName: 'records',
+      version: 1,
+    }),
   autoCommit: { frequency: '5s' },
 });
 ```
+
+> **警告 — 名前空間の断片は `collectionNamespace()` で導出してください（[ADR-029](docs/adr/029-driver-namespace-derivation.md)）。** コレクション名には `.` を含められますが、これは各ドライバーがキー空間を組み立てる際の区切り文字でもあります。ファイルバックエンドは `<fileName>.fpdb.g.<generation>` というデータファイルを書き込み、オープン時に `<fileName>.fpdb.g.` で始まるファイル（自身のアクティブな世代を除く）をすべて削除します。そのため生の名前を使うと、いずれも正当な名前である `foo` と `foo.fpdb.g.0` が衝突し、`foo` を開いた時点でもう一方のデータファイルが**削除**され、そのコレクションは空の状態で復帰します。`collectionNamespace()` はドットをパーセントエスケープし（`orders.2026` → `orders%2E2026`）、他のコレクションの断片がプレフィックスになり得ない断片を生成します。ファクトリが導出するすべての断片（`fileName`、`databaseKey`、`databaseName`、`directoryName`、`keyPrefix`）に使用してください。
+
+> **警告 — IndexedDB を分離するのは `databaseName` であり、オブジェクトストアではありません。** frostpillar-storage-engine はデータストアのスナップショットを固定の場所（`_meta` オブジェクトストアのキー `config`）に保存しますが、これは*データベース*単位であり、スナップショットのロード・コミット時に `objectStoreName` は無視されます。1 つの `databaseName` の中で `objectStoreName` だけを変えるファクトリでは、すべてのコレクションが同一のスナップショット領域を共有し、コミットのたびに直前のコレクションのデータが上書きされます。上の例のように、必ずコレクションごとに `databaseName` を分けてください。
+
+単一のドライバーインスタンス（例: `driver: fileDriver({ filePath: './data/myapp.fpdb' })`）は、コレクションが **1 つだけ**のデータベースで引き続き使用できます。1 つのドライバーインスタンスは 1 つの物理名前空間に対応するため、この形式で 2 つ目のコレクションを作成すると `ConfigurationError` がスローされます。その場合はファクトリ形式に切り替えてください。
 
 利用可能なドライバーと設定オプションの詳細は [frostpillar-storage-engine のドキュメント](https://github.com/hjmsano/frostpillar-storage-engine) を参照してください。
 
@@ -938,6 +1010,8 @@ const db = new Database({
 
 > **注意:** `update` では、すべての演算子適用後の**結果ドキュメント**に対してペイロード制限が検証されます。結果がいずれかの制限を超える場合、更新は `ValidationError` で拒否され、元のドキュメントは変更されません。
 
+> **注意:** `insert` / `insertMany` では、**実際に保存される形**のドキュメントに対して制限が検証されます。frostpillar-db が生成するフィールド（`_id` を省略した場合の `_id`、TTL コレクションの `_createdAt`）も対象です。したがってキーが 256 個のドキュメントは、自前の `_id` を指定しない限り `maxKeysPerObject: 256` に収まりません。これにより、挿入されたドキュメントは同じ制限の下で更新可能な状態を保てます（`update` は生成フィールドを含む保存済みドキュメントを検証するため）。
+
 > **非対応の型:** `bigint`、クラスインスタンス、関数、`undefined`、`Symbol`、循環参照は JSON 互換ではないため、挿入時に `ValidationError` で拒否されます。
 
 #### `skipPayloadValidation`
@@ -950,7 +1024,9 @@ const db = new Database({
 });
 ```
 
-このオプションは、挿入されるデータを完全に制御できる場合にのみ使用してください。バリデーションをスキップすると、不正・循環・過大なドキュメントがそのままストレージに到達します。
+このオプションは、挿入されるデータを完全に制御できる場合にのみ使用してください。バリデーションをスキップすると、過大なドキュメントがそのままストレージに到達します。
+
+スキップモードでも、軽量な検証はすべての書き込みで実行されます。予約キー、循環参照、`maxDepth` を超える深いネスト、プレーンでないオブジェクト値（クラスインスタンス、`Date`、`Map`、`Set`、`Object.create(proto)`）、および保存不可能なリーフ型（`bigint`、`function`、`symbol`、`undefined`）は `ValidationError` で拒否されます。関数はドキュメント値として切り離せず、Symbol はプリミティブですがサポート対象外のドキュメント値です。スキップモードが無効化するのはサイズ計算（バイト数、キー数、文字列・キー長の上限）です。
 
 #### `maxMatchedDocuments`
 
@@ -967,33 +1043,39 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 
 > **ヒント:** 最初の _n_ 件だけが必要な場合は、クエリに `.limit(n)` を追加してください。`sort` が指定されていなければスキャンが短絡され、上限に達することを回避できます。
 
+> **既知の制限 — この上限が制限するのはマッチしたドキュメント数であり、スキャンそのものではありません（[ADR-028](docs/adr/028-candidate-set-materialization.md)）:** スキャンはまずストレージエンジンに候補レコードを要求しますが、その読み取り API は配列を返します。したがってフィルタ評価や `.limit(n)` が効く前に候補配列がすべて確保されます。1,000 万件のコレクションに対する `.limit(10)` でも、1,000 万件のレコードを materialize してから 10 件を保持します。`_id` の等価条件と `$in` はインデックスで候補を絞ります。上下限のある `_id` 範囲をインデックスで絞るのはデフォルトキーの場合だけです。適用できる `_id` 候補パスがないフィルタでは、このコストが発生します。この制限の解消には frostpillar-storage-engine 側のストリーミング読み取り API が必要ですが、現行バージョンには存在しません。
+
 ### 運用上の制限
 
 ペイロード制限に加えて、frostpillar-db はフィルタ・更新演算子・集約出力に固定の運用上の制限を設けています。これらは構成不可で、病的な入力や暴走するリソース消費を防ぐためのものです。
 
-| 制限                        | 値      | 範囲                                                                        |
-| --------------------------- | ------- | --------------------------------------------------------------------------- |
-| フィールドパス最大深度      | 32      | 1 つのフィールドパスに含まれるドット区切りのセグメント数（例 `a.b.c` は 3） |
-| フィールドパス最大文字数    | 512     | ドット記法のフィールドパス文字列長                                          |
-| フィルタ最大ネスト深度      | 32      | `$and` / `$or` と、ネストされた `$not` 式のネスト階層                       |
-| 論理演算子オペランド最大数  | 1,000   | 1 つの `$and` / `$or` オペランド配列の要素数                                |
-| オペランド配列最大サイズ    | 10,000  | `$in` / `$nin` / `$all` のオペランド配列要素数                              |
-| `$regex` パターン最大長     | 1,024   | `$regex` 文字列パターンの文字数                                             |
-| `$regex` 量指定子最大数     | 20      | `$regex` パターン内の量指定子（`*`、`+`、`?`、`{n,m}`）の数                 |
-| `$regex` 選択グループ最大数 | 4       | `$regex` パターン内の選択グループ（`(a\|b)`）の数                           |
-| `$regex` テスト対象最大長   | 8,192   | `$regex` で評価されるフィールド値の文字数                                   |
-| ドキュメント配列最大長      | 100,000 | `$push` / `$addToSet` 適用後の 1 ドキュメント内配列の要素数                 |
-| `groupBy` グループ最大数    | 100,000 | 1 回の `groupBy()` が生成する一意グループキー数                             |
-| `groupBy` グループ内最大数  | 100,000 | 1 つの `groupBy()` グループに集約されるドキュメント数                       |
-| `distinct` 値最大数         | 100,000 | 1 回の `distinct()` が返す一意値の数                                        |
-| `countDistinct` 値最大数    | 100,000 | 1 回の `countDistinct()`、または 1 つの `$countDistinct` グループがカウントする一意値の数 |
-| `$addToSet` 値最大数        | 100,000 | 1 つの `$addToSet` グループが収集する一意値の数(`$countDistinct` と同じ上限)             |
+| 制限                            | 値      | 範囲                                                                                      |
+| ------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| フィールドパス最大深度          | 32      | 1 つのフィールドパスに含まれるドット区切りのセグメント数（例 `a.b.c` は 3）               |
+| フィールドパス最大文字数        | 512     | ドット記法のフィールドパス文字列長                                                        |
+| フィルタ最大ネスト深度          | 32      | `$and` / `$or` と、ネストされた `$not` 式のネスト階層                                     |
+| 論理演算子オペランド最大数      | 1,000   | 1 つの `$and` / `$or` オペランド配列の要素数                                              |
+| オペランド配列最大サイズ        | 10,000  | `$in` / `$nin` / `$all` のオペランド配列要素数                                            |
+| `$regex` パターン最大長         | 1,024   | `$regex` 文字列パターンの文字数                                                           |
+| `$regex` 量指定子最大数         | 20      | 基底の量指定子（`*`、`+`、`?`、`{n,m}`）の数。遅延サフィックスは別の 1 個として数えない |
+| `$regex` 可変幅量指定子最大数   | 8       | `$regex` パターン内の可変幅量指定子（`?`、`*`、`+`、`{n,}`、`m > n` の `{n,m}`）の数      |
+| `$regex` 選択グループ最大数     | 4       | `$regex` パターン内の選択グループ（`(a\|b)`）の数                                         |
+| `$regex` テスト対象最大長       | 8,192   | `$regex` で評価されるフィールド値の文字数                                                 |
+| ドキュメント配列最大長          | 100,000 | `$push` / `$addToSet` 適用後の 1 ドキュメント内配列の要素数                               |
+| `groupBy` アキュムレータ最大数  | 32      | 1 回の `groupBy()` に指定できるアキュムレータ数                                           |
+| `groupBy` グループ最大数        | 100,000 | 1 回の `groupBy()` が生成する一意グループキー数                                           |
+| `groupBy` グループ内最大数      | 100,000 | 1 つの `groupBy()` グループに集約されるドキュメント数                                     |
+| `distinct` 値最大数             | 100,000 | 1 回の `distinct()` が返す一意値の数                                                      |
+| `countDistinct` 値最大数        | 100,000 | 1 回の `countDistinct()`、または 1 つの `$countDistinct` グループがカウントする一意値の数 |
+| `$addToSet` 値最大数            | 100,000 | 1 つの `$addToSet` グループが収集する一意値の数(`$countDistinct` と同じ上限)              |
 
 `$regex` パターンはさらに、破滅的バックトラッキングにつながる形状が事前スクリーニングされ、コンパイル前に `ValidationError` で拒否されます。上記制限を超えた場合は実行時に `ValidationError` がスローされます。このスクリーニングは 3 つの仕組みで構成されます:
 
 - 構造的なネスト量指定子の汎用チェック: _繰り返される_ グループ(`+`、`*`、または最大回数が 2 以上・無制限の `{n,m}` で修飾されたもの)のうち、その内容自体にも別の量指定子を含むもの(ネストの深さを問わず、両側の量指定子記法の組み合わせも問わない)を拒否します(例: `(a+)+`、`([a-z]+)+`、`(a{1,2})+`、および `(a{1,10}){1,10}` のような組み合わせ。列挙型のパターンリストであればこれらを個別に特殊対応する必要があります)。外側の量指定子が `?` または最大 1 回以下の範囲指定(例: `(\d+)?`、`(a+){0,1}`)であるグループは高々 1 回しかマッチせず指数的バックトラッキングを起こしえないため、こうしたパターンは許可されます。
 - 構造的な量指定子付き選択グループのチェック: _繰り返し_ 量指定子(`+`、`*`、無制限の `{n,}`、または最大回数が 2 以上の `{n}`/`{n,m}`)が、**任意のネスト深度に** エスケープされていない `|` を含むグループに適用されているパターンを拒否します(例: `(a|a)+`、`(a|ab)*`、`(aa|a){2,}`、`(?:aa|a){2,50}`、および `((a|aa))+` や `(?:(?:a|ab))+` のような入れ子形。冗長なグループが囲んでも外側の繰り返しから選択は隠せません)。このスクリーニングは保守的で曖昧性解析を行わないため、内部のどこかに `|` を持つ繰り返しグループ(例: `(x(a|b)y)+`)も拒否します。繰り返しでない量指定子(`?`、`{0,1}`、`{1}`)や量指定子なしの選択グループは許可されます。
 - 上記に該当しないその他の破滅的な形状に対する個別実装の検出器: 重なるワイルドカード、隣接する量指定子、量指定子を伴う後方参照。
+
+両方の量指定子上限は基底の量指定子を数えます。遅延サフィックス（`*?`、`+?`、`??`、`{n,m}?`）は貪欲性を変える修飾子であり、2 個目として数えません。可変幅量指定子数の上限は、エンジンが消費幅を選択できるアトムの連鎖（例: `^.?.?….?aaa…a$`）への対策です。`?`、`*`、`+`、`{n,}`、および `m > n` の `{n,m}` を数え、固定幅の `{n}` / `{n,n}` は数えません。文字クラス内の量指定子に見える文字は数えず、`v` フラグではネストした Unicode set クラスの内容もすべて対象外です。`+` を数えることは意図的な互換性の引き締めであり、基底の可変幅量指定子が 8 個を超えるパターンは以前のリリースで受理されていても拒否されます。
 
 選択グループ数の上限は、量指定子を一切使わずに曖昧な選択グループを手動で繰り返す攻撃(例: `(a|aa)` を量指定子なしで何度も連結する)への対策です。この形は量指定子トークンを持たないため、上記の量指定子ベースのチェックをすり抜けます。他のパターンヒューリスティックと同様、これらはいずれも既知の破滅的バックトラッキング形状に対する多層防御のスクリーニングであり、あらゆる `$regex` パターンが線形時間で実行されることを形式的に証明するものではありません — リスクを大幅に狭めますが、このカテゴリのリスクを完全には排除しません。
 
@@ -1092,6 +1174,12 @@ try {
 | `close()`                    | `Promise<void>`     | リソースの解放                       |
 | `on('error', listener)`      | `() => void`        | 非同期エラーの監視                   |
 
+### ヘルパー
+
+| 関数                        | 戻り値   | 説明                                                                                                                                         |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionNamespace(name)` | `string` | コレクション名を、衝突しないドライバーファクトリ用の名前空間断片へエンコードします（[ADR-029](docs/adr/029-driver-namespace-derivation.md)） |
+
 ### Collection
 
 | メソッド                        | 戻り値                      | 説明                                                   |
@@ -1110,27 +1198,27 @@ try {
 
 ### ResultChain
 
-| メソッド                        | 戻り値                        | 説明                                                                   |
-| ------------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
-| `.sort(spec)`                   | `ResultChain`                 | ソート順の設定（`SortSpec` オブジェクトまたは `SortSpecEntries` 配列） |
-| `.limit(n)`                     | `ResultChain`                 | 結果数の制限                                                           |
-| `.skip(n)`                      | `ResultChain`                 | 結果のスキップ                                                         |
-| `.project(spec)`                | `ResultChain`                 | フィールド選択                                                         |
-| `.toArray()`                    | `Promise<Document[]>`         | クエリ実行、ドキュメント返却                                           |
-| `.cursor()`                     | `AsyncGenerator<Document>`    | 結果セットの非同期イテレータ                                           |
-| `.count()`                      | `Promise<number>`             | マッチするドキュメント数                                               |
-| `.sum(field)`                   | `Promise<number>`             | 数値フィールドの合計                                                   |
-| `.avg(field)`                   | `Promise<number \| null>`     | 数値フィールドの平均                                                   |
-| `.min(field)`                   | `Promise<number \| null>`     | 数値の最小値                                                           |
-| `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                           |
-| `.percentile(field, p)`         | `Promise<number \| null>`     | `p` パーセンタイル（`p` は `[0, 1]` の割合）                            |
-| `.median(field)`                | `Promise<number \| null>`     | 中央値（`percentile(field, 0.5)` と等価）                              |
-| `.stdDevPop(field)`             | `Promise<number \| null>`     | 母標準偏差（`n=0`→`null`、`n=1`→`0`）                                  |
-| `.stdDevSamp(field)`            | `Promise<number \| null>`     | 標本標準偏差（`n<2`→`null`）                                           |
-| `.variancePop(field)`           | `Promise<number \| null>`     | 母分散（`n=0`→`null`、`n=1`→`0`）                                      |
-| `.varianceSamp(field)`          | `Promise<number \| null>`     | 標本分散（`n<2`→`null`）                                               |
-| `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                 |
-| `.countDistinct(field)`         | `Promise<number>`             | フィールドのユニーク値の数（`=== distinct(field).length`。空の場合は `0`） |
+| メソッド                        | 戻り値                        | 説明                                                                                               |
+| ------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `.sort(spec)`                   | `ResultChain`                 | ソート順の設定（`SortSpec` オブジェクトまたは `SortSpecEntries` 配列）                             |
+| `.limit(n)`                     | `ResultChain`                 | 結果数の制限                                                                                       |
+| `.skip(n)`                      | `ResultChain`                 | 結果のスキップ                                                                                     |
+| `.project(spec)`                | `ResultChain`                 | フィールド選択                                                                                     |
+| `.toArray()`                    | `Promise<Document[]>`         | クエリ実行、ドキュメント返却                                                                       |
+| `.cursor()`                     | `AsyncGenerator<Document>`    | 結果セットの非同期イテレータ                                                                       |
+| `.count()`                      | `Promise<number>`             | マッチするドキュメント数                                                                           |
+| `.sum(field)`                   | `Promise<number>`             | 数値フィールドの合計                                                                               |
+| `.avg(field)`                   | `Promise<number \| null>`     | 数値フィールドの平均                                                                               |
+| `.min(field)`                   | `Promise<number \| null>`     | 数値の最小値                                                                                       |
+| `.max(field)`                   | `Promise<number \| null>`     | 数値の最大値                                                                                       |
+| `.percentile(field, p)`         | `Promise<number \| null>`     | `p` パーセンタイル（`p` は `[0, 1]` の割合）                                                       |
+| `.median(field)`                | `Promise<number \| null>`     | 中央値（`percentile(field, 0.5)` と等価）                                                          |
+| `.stdDevPop(field)`             | `Promise<number \| null>`     | 母標準偏差（`n=0`→`null`、`n=1`→`0`）                                                              |
+| `.stdDevSamp(field)`            | `Promise<number \| null>`     | 標本標準偏差（`n<2`→`null`）                                                                       |
+| `.variancePop(field)`           | `Promise<number \| null>`     | 母分散（`n=0`→`null`、`n=1`→`0`）                                                                  |
+| `.varianceSamp(field)`          | `Promise<number \| null>`     | 標本分散（`n<2`→`null`）                                                                           |
+| `.distinct(field)`              | `Promise<unknown[]>`          | フィールドのユニーク値                                                                             |
+| `.countDistinct(field)`         | `Promise<number>`             | フィールドのユニーク値の数（`=== distinct(field).length`。空の場合は `0`）                         |
 | `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | フィールド（`string \| string[]`）でグループ化しアキュムレータを計算。配列形式は複合 `_key` を生成 |
 
 ---

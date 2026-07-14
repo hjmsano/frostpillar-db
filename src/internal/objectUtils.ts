@@ -4,11 +4,55 @@ export const isObjectRecord = (
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
+/**
+ * Narrower than `isObjectRecord`: the value must be an object literal, i.e. its
+ * prototype is `Object.prototype` or `null`. Class instances (`Date`, `Map`,
+ * `Set`, …) and objects created with `Object.create(proto)` are rejected.
+ *
+ * Required at every caller-input boundary (documents, filters, update values),
+ * because Frostpillar only ever reads *own* enumerable keys: an inherited-only
+ * object looks empty, so accepting one would silently degrade a targeted filter
+ * into a match-all, and a `Date` document into a bare generated `_id`.
+ */
+export const isPlainObject = (
+  value: unknown,
+): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
 export const hasOwn = (
   target: Record<string, unknown>,
   key: string,
 ): boolean => {
   return Object.prototype.hasOwnProperty.call(target, key);
+};
+
+/**
+ * Adds an own enumerable data property to an object built from caller input.
+ * A plain `target[key] = value` assignment with `key === '__proto__'` sets the
+ * object's prototype instead of adding a key, so the key would vanish from the
+ * copy — taking with it the reserved-key error a later validation pass owes the
+ * caller. `defineProperty` always creates the own property.
+ */
+export const defineOwnProperty = (
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void => {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    return;
+  }
+  target[key] = value;
 };
 
 /**
@@ -56,13 +100,14 @@ export const cloneDocument = <T>(value: T): T => {
 };
 
 /**
- * Defensively clones an accumulator's result value before it is placed into
- * a `groupBy` output entry (ADR-021). Group documents are references to
- * stored documents, so returning an object/array value verbatim would let a
- * caller mutate stored data through the result. A thin, semantically named
- * alias of `cloneDocument`: primitives (including `null`/`undefined`) pass
- * through unchanged, objects/arrays are deep-cloned. Introduced for
- * `$first`/`$last` (ADR-021); reused by `$push`/`$addToSet` (ADR-023).
+ * Defensively clones a value before it is placed into an aggregation result
+ * (ADR-021, ADR-026). Aggregation runs over the stored documents themselves,
+ * so returning a resolved object/array value verbatim would let a caller
+ * mutate stored data through the result. A thin, semantically named alias of
+ * `cloneDocument`: primitives (including `null`/`undefined`) pass through
+ * unchanged, objects/arrays are deep-cloned. Introduced for `$first`/`$last`
+ * (ADR-021); reused by `$push`/`$addToSet` (ADR-023) and, per ADR-026, by
+ * `distinct()`'s values and `groupBy()`'s `_key` values.
  */
 export const cloneAccumulatorValue = (value: unknown): unknown =>
   cloneDocument(value);

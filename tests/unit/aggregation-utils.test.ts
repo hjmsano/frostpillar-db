@@ -132,6 +132,37 @@ void test('computeDistinct dedupes object values by deep equality', () => {
   ]);
 });
 
+// ADR-026: distinct() scans stored documents, so an object/array value must be
+// cloned out of storage before it enters the result array.
+void test('computeDistinct clones object values so mutating a result cannot alter the source document', () => {
+  const source = doc('1', { value: { x: 1, nested: { deep: 1 } } });
+  const result = computeDistinct([source], 'value', pathCache);
+
+  const returned = result[0] as { x: number; nested: { deep: number } };
+  assert.notEqual(returned, (source as { value: unknown }).value);
+
+  returned.x = 99;
+  returned.nested.deep = 99;
+
+  assert.deepEqual((source as { value: unknown }).value, {
+    x: 1,
+    nested: { deep: 1 },
+  });
+});
+
+void test('computeDistinct clones array values so mutating a result cannot alter the source document', () => {
+  const source = doc('1', { value: ['a', ['b']] });
+  const result = computeDistinct([source], 'value', pathCache);
+
+  const returned = result[0] as [string, string[]];
+  assert.notEqual(returned, (source as { value: unknown }).value);
+
+  returned.push('injected');
+  returned[1].push('deep');
+
+  assert.deepEqual((source as { value: unknown }).value, ['a', ['b']]);
+});
+
 void test('computeDistinct throws when primitive values exceed MAX_DISTINCT_COUNT', () => {
   // MAX_DISTINCT_COUNT + 1 distinct primitive values must raise exactly one error.
   const docs = Array.from({ length: MAX_DISTINCT_COUNT + 1 }, (_, i) =>

@@ -6,6 +6,12 @@ import {
   setValueByPath,
 } from './documentPath.js';
 import { MAX_ARRAY_LENGTH } from './limits.js';
+import { cloneDocument } from './objectUtils.js';
+
+// $push and $addToSet place their operand into the stored document, so the
+// operand is deep-copied on the way in — per document, since one operand may be
+// written into several matched documents (ADR-025). $pull only compares its
+// operand, so it needs no copy.
 
 export const applyPush = (
   target: Record<string, unknown>,
@@ -15,7 +21,7 @@ export const applyPush = (
   for (const [path, value] of Object.entries(values)) {
     const resolved = getValueByPath(target, path, pathCache);
     if (resolved === PATH_NOT_FOUND) {
-      setValueByPath(target, path, [value], pathCache);
+      setValueByPath(target, path, [cloneDocument(value)], pathCache);
       continue;
     }
 
@@ -29,7 +35,7 @@ export const applyPush = (
       );
     }
 
-    resolved.push(value);
+    resolved.push(cloneDocument(value));
   }
   return Object.keys(values).length > 0;
 };
@@ -77,7 +83,7 @@ export const applyAddToSet = (
   for (const [path, value] of Object.entries(values)) {
     const resolved = getValueByPath(target, path, pathCache);
     if (resolved === PATH_NOT_FOUND) {
-      setValueByPath(target, path, [value], pathCache);
+      setValueByPath(target, path, [cloneDocument(value)], pathCache);
       changed = true;
       continue;
     }
@@ -95,7 +101,7 @@ export const applyAddToSet = (
           `$addToSet would exceed maximum array length of ${String(MAX_ARRAY_LENGTH)}.`,
         );
       }
-      resolved.push(value);
+      resolved.push(cloneDocument(value));
       changed = true;
     }
   }

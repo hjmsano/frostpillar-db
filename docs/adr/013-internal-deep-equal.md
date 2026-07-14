@@ -10,12 +10,14 @@ Four internal source files (`updateApplier.ts`, `filterEvaluator.ts`, `arrayOper
 
 ## Decision
 
-Introduce `src/internal/deepEqual.ts` — a pure TypeScript utility that implements deep equality for the value types that can appear in this project:
+Introduce `src/internal/deepEqual.ts` — a pure TypeScript utility that implements the project's structural equality contract:
 
 - Primitives (`===`), `null`, `undefined`
 - Arrays (element-by-element recursion)
-- Plain objects (own-key-by-key recursion)
 - `Date` objects (compared via `.getTime()`, to support filter operands)
+- All other objects (own-enumerable-key-by-key recursion)
+
+Object prototypes and internal slots do not participate. Thus class instances follow their own enumerable shape, while `Map`/`Set` entries and the pattern state of a `RegExp` are ignored by ordinary equality. Enumerable own properties added to those objects still participate. Pattern matching remains the separate responsibility of `$regex`.
 
 No external dependencies. No Node.js-specific APIs.
 
@@ -28,4 +30,4 @@ The `--alias:node:util=./scripts/browser-shims/node-util.js` flag is removed fro
 - Eliminates the Node.js `node:util` import from all distributed bundles.
 - ESM consumers (browsers, Deno, edge runtimes) work without polyfills.
 - The browser-shim file `scripts/browser-shims/node-util.js` is kept but no longer referenced by the build; it can be removed in a follow-up.
-- Runtime behaviour is unchanged for all values that can actually appear (JSON primitives, arrays, plain objects).
+- JSON values retain the same behavior, while comparison operands such as `Date` and class instances have explicit structural semantics shared by filters and update operators.

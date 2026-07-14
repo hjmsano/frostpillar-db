@@ -13,7 +13,7 @@ When executing a `find()` query with filter predicates, the system needs a strat
 
 ## Decision
 
-Adopt **scan-based query execution** (Option 1). All queries perform a full collection scan via the storage engine's `getAll()`, followed by in-memory filtering, sorting, and aggregation in JavaScript.
+Adopt **scan-based query execution** (Option 1) as the general path. Queries without an applicable `_id` candidate lookup perform a full collection scan via the storage engine's `getAll()`, followed by in-memory filtering, sorting, and aggregation in JavaScript.
 
 No secondary index support is provided in this package.
 
@@ -39,18 +39,28 @@ find(filter)
 
 > **Optimizations:** The following operations bypass the full scan when applicable:
 >
-> - `findOne({ _id: 'value' })` — uses `Datastore.getFirst(key)` for O(1) lookup.
-> - `update({ _id: 'value' }, ...)` — uses `Datastore.get(key)` for targeted fetch.
-> - `remove({ _id: 'value' })` — uses `Datastore.delete(key)` for direct deletion (non-TTL collections).
+> - `_id` equality and `$in` filters — including filters with additional
+>   top-level conjunctive predicates — use `Datastore.getFirst()` / `get()` /
+>   `getMany()` to obtain candidates before applying the complete filter to
+>   each document.
+> - `findOne({ _id: 'value' })` — only the exact one-key form under the default
+>   key definition uses `Datastore.getFirst(key)` as the complete result.
+>   Conjunctive forms use the same lookup as a candidate set and evaluate every
+>   predicate. With a custom key, the indexed result is always only a candidate
+>   set and the stored `_id` is checked exactly.
+> - Bounded `_id` ranges — use `Datastore.getRange()` only under the default key definition. A custom key may order normalized keys differently from `_id` strings, so ranges use `getAll()`.
+> - `remove({ _id: 'value' })` — uses `Datastore.delete(key)` directly only on non-TTL, default-key collections whose duplicate policy is not `'allow'`. Custom-key removals confirm each candidate's stored `_id` and call `deleteById()`.
 > - `insertMany(docs)` — uses `Datastore.putMany()` for batch insertion.
 > - `count()` without filter — uses `Datastore.count()` for O(1) result (non-TTL collections).
 > - `update(filter, ops)` — persists changes via `Datastore.replaceById()` (atomic, no TOCTOU).
-> - `remove(filter)` — batch-deletes matched records via `Datastore.deleteByIds()`.
+> - General `remove(filter)` — deletes each confirmed record via `Datastore.deleteById()` so event attribution stays exact.
 > - `purgeExpired()` — batch-deletes expired records via `Datastore.deleteByIds()`.
-> - `find({ _id: { $in: [...] } })` — uses `Datastore.getMany(keys)` for batch key lookup.
-> - `remove({ _id: { $in: [...] } })` — uses `Datastore.deleteMany(keys)` for batch key deletion (non-TTL collections).
-> - `exists(id)` — uses `Datastore.has(key)` for O(1) existence check.
-> - `ids()` — uses `Datastore.keys()` to return all IDs without loading payloads.
+> - `find({ _id: { $in: [...] } })` — uses `Datastore.getMany(keys)` for batch candidate lookup, followed by exact filter evaluation.
+> - `remove({ _id: { $in: [...] } })` — uses `Datastore.deleteMany(keys)` only for eligible default-key, non-TTL collections; otherwise it confirms and deletes individual records.
+> - `exists(id)` — uses `Datastore.has(key)` only for default-key, non-TTL collections. A custom key loads colliding candidates and compares their stored `_id` values.
+> - `ids()` — uses `Datastore.keys()` only without TTL, a custom key, or `duplicateKeys: 'allow'`; otherwise it reads `_id` from each document.
+
+Custom-key behavior is defined in [ADR-027](./027-custom-key-id-identity.md): equality and `$in` index lookups are candidate-set optimizations, never proof of document identity.
 
 ## Consequences
 

@@ -8,6 +8,7 @@ import {
 } from '../../src/internal/aggregationUtils.js';
 import {
   MAX_FIELD_PATH_DEPTH,
+  MAX_GROUP_ACCUMULATORS,
   MAX_GROUP_DOCUMENTS,
 } from '../../src/internal/limits.js';
 import type {
@@ -963,7 +964,7 @@ void test('computeGroupBy $first/$last is positional-then-read: missing field on
   assert.equal(lastResult[0].lastValue, null);
 });
 
-void test('computeGroupBy $first/$last on a single-document group returns that document\'s value for both', () => {
+void test("computeGroupBy $first/$last on a single-document group returns that document's value for both", () => {
   const docs = [flDoc('1', { category: 'a', value: 'only' })];
   const result = computeGroupBy(
     docs,
@@ -993,7 +994,11 @@ void test('computeGroupBy $first/$last support non-numeric value types: string, 
       { firstValue: { $first: 'value' } },
       pathCache,
     );
-    assert.deepEqual(result[0].firstValue, value, `Expected ${label} to round-trip`);
+    assert.deepEqual(
+      result[0].firstValue,
+      value,
+      `Expected ${label} to round-trip`,
+    );
   }
 });
 
@@ -1266,7 +1271,9 @@ void test('computeGroupBy rejects reserved/bad field path for $countDistinct acc
       computeGroupBy(
         [],
         'category',
-        { result: { $countDistinct: '__proto__.x' } } as unknown as GroupAccumulators,
+        {
+          result: { $countDistinct: '__proto__.x' },
+        } as unknown as GroupAccumulators,
         pathCache,
       ),
     ValidationError,
@@ -1650,7 +1657,9 @@ void test('computeGroupBy rejects reserved/bad field path for $addToSet accumula
       computeGroupBy(
         [],
         'category',
-        { result: { $addToSet: '__proto__.x' } } as unknown as GroupAccumulators,
+        {
+          result: { $addToSet: '__proto__.x' },
+        } as unknown as GroupAccumulators,
         pathCache,
       ),
     ValidationError,
@@ -1725,4 +1734,220 @@ void test('validateGroupByField returns a defensive copy for the array form', ()
   input[0] = 'mutated';
   input.length = 1;
   assert.deepEqual(validated, ['category', 'score']);
+});
+
+// ---------------------------------------------------------------------------
+// computeGroupBy — _key isolation (ADR-026)
+// ---------------------------------------------------------------------------
+
+void test('computeGroupBy clones an object _key so mutating it cannot alter the source document (string form)', () => {
+  const source = doc('1', { category: { name: 'eng', tags: ['a'] } });
+  const accumulators: GroupAccumulators = { count: { $count: true } };
+
+  const result = computeGroupBy([source], 'category', accumulators, pathCache);
+
+  const key = result[0]._key as { name: string; tags: string[] };
+  assert.notEqual(key, (source as { category?: unknown }).category);
+
+  key.name = 'mutated';
+  key.tags.push('injected');
+
+  assert.deepEqual((source as { category?: unknown }).category, {
+    name: 'eng',
+    tags: ['a'],
+  });
+});
+
+void test('computeGroupBy clones each composite _key dimension so mutating it cannot alter the source document (array form)', () => {
+  const source = doc('1', {
+    category: { name: 'eng' },
+    score: [1, [2]],
+  });
+  const accumulators: GroupAccumulators = { count: { $count: true } };
+
+  const result = computeGroupBy(
+    [source],
+    ['category', 'score'],
+    accumulators,
+    pathCache,
+  );
+
+  const key = result[0]._key as Record<string, unknown>;
+  const categoryKey = key.category as { name: string };
+  const scoreKey = key.score as [number, number[]];
+
+  assert.notEqual(categoryKey, (source as { category?: unknown }).category);
+  assert.notEqual(scoreKey, (source as { score?: unknown }).score);
+
+  categoryKey.name = 'mutated';
+  scoreKey.push(99);
+  scoreKey[1].push(99);
+
+  assert.deepEqual((source as { category?: unknown }).category, {
+    name: 'eng',
+  });
+  assert.deepEqual((source as { score?: unknown }).score, [1, [2]]);
+});
+
+void test('computeGroupBy still groups documents with deep-equal object keys of identical shape together', () => {
+  const accumulators: GroupAccumulators = { count: { $count: true } };
+  const docs = [
+    doc('1', { category: { name: 'eng' } }),
+    doc('2', { category: { name: 'eng' } }),
+    doc('3', { category: { name: 'sales' } }),
+  ];
+
+  const result = computeGroupBy(docs, 'category', accumulators, pathCache);
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(result[0]._key, { name: 'eng' });
+  assert.equal(result[0].count, 2);
+  assert.deepEqual(result[1]._key, { name: 'sales' });
+  assert.equal(result[1].count, 1);
+});
+
+// --- $count operand validation ---
+
+void test('computeGroupBy rejects a $count operand that is not true', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  for (const operand of [false, 0, 1, 'true', null, {}]) {
+    assert.throws(
+      () =>
+        computeGroupBy(
+          docs,
+          'category',
+          { total: { $count: operand } } as unknown as GroupAccumulators,
+          pathCache,
+        ),
+      ValidationError,
+    );
+  }
+});
+
+void test('computeGroupBy accepts $count: true', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  const result = computeGroupBy(
+    docs,
+    'category',
+    { total: { $count: true } },
+    pathCache,
+  );
+  assert.equal(result[0].total, 1);
+});
+
+// --- accumulator output-field name validation ---
+
+void test('computeGroupBy rejects "_key" as an accumulator output name', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  assert.throws(
+    () =>
+      computeGroupBy(docs, 'category', { _key: { $count: true } }, pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy rejects a reserved accumulator output name', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  const accumulators = JSON.parse(
+    '{"__proto__": {"$count": true}}',
+  ) as GroupAccumulators;
+  assert.throws(
+    () => computeGroupBy(docs, 'category', accumulators, pathCache),
+    ValidationError,
+  );
+  // `constructor` is contextually typed against Object.prototype's member, so
+  // the literal needs the cast that a runtime-built accumulator map implies.
+  const constructorAccumulators = {
+    constructor: { $count: true },
+  } as unknown as GroupAccumulators;
+  assert.throws(
+    () => computeGroupBy(docs, 'category', constructorAccumulators, pathCache),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy rejects a blank accumulator output name', () => {
+  const docs = [doc('1', { category: 'eng' })];
+  assert.throws(
+    () =>
+      computeGroupBy(docs, 'category', { '  ': { $count: true } }, pathCache),
+    ValidationError,
+  );
+});
+
+// --- accumulator budget and per-group memoization ---
+
+void test('computeGroupBy rejects more than MAX_GROUP_ACCUMULATORS accumulators', () => {
+  const accumulators: GroupAccumulators = {};
+  for (let i = 0; i <= MAX_GROUP_ACCUMULATORS; i += 1) {
+    accumulators[`a${String(i)}`] = { $sum: 'score' };
+  }
+  assert.throws(
+    () =>
+      computeGroupBy(
+        [doc('1', { category: 'a', score: 1 })],
+        'category',
+        accumulators,
+        pathCache,
+      ),
+    ValidationError,
+  );
+});
+
+void test('computeGroupBy accepts exactly MAX_GROUP_ACCUMULATORS accumulators', () => {
+  const accumulators: GroupAccumulators = {};
+  for (let i = 0; i < MAX_GROUP_ACCUMULATORS; i += 1) {
+    accumulators[`a${String(i)}`] = { $sum: 'score' };
+  }
+  const result = computeGroupBy(
+    [doc('1', { category: 'a', score: 2 })],
+    'category',
+    accumulators,
+    pathCache,
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].a0, 2);
+  assert.equal(result[0][`a${String(MAX_GROUP_ACCUMULATORS - 1)}`], 2);
+});
+
+void test('computeGroupBy shares one field scan across accumulators reading the same path', () => {
+  const docs = [
+    doc('1', { category: 'a', score: 10 }),
+    doc('2', { category: 'a', score: 20 }),
+    doc('3', { category: 'a', score: 30 }),
+    doc('4', { category: 'b', score: 5 }),
+  ];
+
+  const result = computeGroupBy(
+    docs,
+    'category',
+    {
+      total: { $sum: 'score' },
+      average: { $avg: 'score' },
+      p50: { $percentile: { field: 'score', p: 0.5 } },
+      p100: { $percentile: { field: 'score', p: 1 } },
+      middle: { $median: 'score' },
+      smallest: { $min: 'score' },
+    },
+    pathCache,
+  );
+
+  assert.deepEqual(result[0], {
+    _key: 'a',
+    total: 60,
+    average: 20,
+    p50: 20,
+    p100: 30,
+    middle: 20,
+    smallest: 10,
+  });
+  assert.deepEqual(result[1], {
+    _key: 'b',
+    total: 5,
+    average: 5,
+    p50: 5,
+    p100: 5,
+    middle: 5,
+    smallest: 5,
+  });
 });

@@ -355,8 +355,7 @@ void test('update() rejects a pathologically deep $set value with ValidationErro
   try {
     const id = await col.insert({ name: 'victim' });
     await assert.rejects(
-      () =>
-        col.update({ _id: id }, { $set: { payload: deepSkipArr(10000) } }),
+      () => col.update({ _id: id }, { $set: { payload: deepSkipArr(10000) } }),
       ValidationError,
     );
   } finally {
@@ -371,8 +370,7 @@ void test('update() rejects a pathologically deep $set value with ValidationErro
   try {
     const id = await col.insert({ name: 'victim' });
     await assert.rejects(
-      () =>
-        col.update({ _id: id }, { $set: { payload: deepSkipArr(10000) } }),
+      () => col.update({ _id: id }, { $set: { payload: deepSkipArr(10000) } }),
       ValidationError,
     );
   } finally {
@@ -404,6 +402,60 @@ void test('update() rejects a pathologically deep $addToSet value with Validatio
     await assert.rejects(
       () =>
         col.update({ _id: id }, { $addToSet: { list: deepSkipArr(10000) } }),
+      ValidationError,
+    );
+  } finally {
+    await database.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Security traversal rejects non-plain objects instead of skipping them
+// ---------------------------------------------------------------------------
+
+void test('skipPayloadValidation: insert rejects a self-referential class instance', async () => {
+  const database = new Database({ skipPayloadValidation: true });
+  const col = database.collection<FrostpillarDocument>('skip-nonplain-cycle');
+
+  try {
+    class Node {
+      public self: Node | null = null;
+    }
+    const node = new Node();
+    node.self = node;
+
+    // Before the fix the traversal declined to descend into `node`, so the
+    // cycle was never seen and the deep clone in the write path overflowed.
+    await assert.rejects(
+      () =>
+        col.insert({ name: 'test', node } as unknown as FrostpillarDocument),
+      ValidationError,
+    );
+    assert.equal(await col.count(), 0);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('skipPayloadValidation: insert rejects a nested non-plain object value', async () => {
+  const database = new Database({ skipPayloadValidation: true });
+  const col = database.collection<FrostpillarDocument>('skip-nonplain');
+
+  try {
+    await assert.rejects(
+      () =>
+        col.insert({
+          name: 'test',
+          meta: { when: new Date() },
+        } as unknown as FrostpillarDocument),
+      ValidationError,
+    );
+    await assert.rejects(
+      () =>
+        col.insert({
+          name: 'test',
+          list: [new Map()],
+        } as unknown as FrostpillarDocument),
       ValidationError,
     );
   } finally {

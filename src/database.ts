@@ -1,4 +1,5 @@
 import { Datastore } from '@frostpillar/frostpillar-storage-engine';
+import type { DatastoreDriver } from '@frostpillar/frostpillar-storage-engine';
 
 import { Collection } from './collection.js';
 import { ClosedDatabaseError, ConfigurationError } from './errors.js';
@@ -47,10 +48,16 @@ export class Database {
   private readonly maxMatchedDocuments: number;
 
   public constructor(config?: DatabaseConfig) {
-    if (config?.payloadLimits !== undefined) {
-      validatePayloadLimits(config.payloadLimits);
+    // Materialize the top-level configuration once. Callers may provide
+    // accessors or mutate the object after construction; every downstream
+    // consumer must observe the same values that were validated here.
+    const baseConfig: DatabaseConfig =
+      config === undefined ? {} : { ...config };
+    const payloadLimits = baseConfig.payloadLimits;
+    if (payloadLimits !== undefined) {
+      validatePayloadLimits(payloadLimits);
     }
-    const rawMax = config?.maxErrorListeners;
+    const rawMax = baseConfig.maxErrorListeners;
     if (rawMax !== undefined) {
       if (rawMax !== 'unlimited') {
         if (!Number.isSafeInteger(rawMax) || rawMax <= 0) {
@@ -65,7 +72,7 @@ export class Database {
         ? Infinity
         : (rawMax ?? DEFAULT_MAX_ERROR_LISTENERS);
     this.errorListenerWarnEmitted = false;
-    const rawMaxMatched = config?.maxMatchedDocuments;
+    const rawMaxMatched = baseConfig.maxMatchedDocuments;
     if (rawMaxMatched !== undefined) {
       if (!Number.isSafeInteger(rawMaxMatched) || rawMaxMatched <= 0) {
         throw new ConfigurationError(
@@ -74,7 +81,7 @@ export class Database {
       }
     }
     this.maxMatchedDocuments = rawMaxMatched ?? DEFAULT_MAX_MATCHED_DOCUMENTS;
-    this.baseConfig = config ?? {};
+    this.baseConfig = baseConfig;
     this.caches = createDatabaseCaches();
     this.datastores = new Map<string, Datastore>();
     this.collections = new Map<string, Collection<FrostpillarDocument>>();
@@ -87,15 +94,45 @@ export class Database {
     this.closed = false;
   }
 
+  // Resolves the driver for a new collection's datastore. A factory yields an
+  // isolated physical namespace per collection; a plain DatastoreDriver is
+  // bound to a single namespace, so sharing it across collections would
+  // target the same lock/file (DatabaseLockedError) or silently overwrite
+  // snapshots (last-writer-wins data loss). See ADR-024.
+  private resolveDriver(name: string): DatastoreDriver | undefined {
+    const driver = this.baseConfig.driver;
+    if (driver === undefined) {
+      return undefined;
+    }
+    if (typeof driver === 'function') {
+      return driver(name);
+    }
+    if (this.datastores.size > 0) {
+      throw new ConfigurationError(
+        `Cannot create collection "${name}": a plain DatastoreDriver instance targets a single physical namespace and cannot back more than one collection. ` +
+          'Pass a driver factory ((collectionName) => DatastoreDriver) that derives a per-collection namespace instead.',
+      );
+    }
+    return driver;
+  }
+
   private createDatastore(
+    driver: DatastoreDriver | undefined,
     duplicateKeys: CollectionDuplicateKeyPolicy,
     capacity?: CapacityConfig,
     autoCommit?: AutoCommitConfig,
     index?: IndexConfig,
     key?: DatastoreKeyDefinition<unknown, unknown>,
   ): Datastore {
+    const {
+      driver: _driver,
+      maxErrorListeners: _maxErrorListeners,
+      maxMatchedDocuments: _maxMatchedDocuments,
+      ...datastoreBaseConfig
+    } = this.baseConfig;
     return new Datastore({
-      ...this.baseConfig,
+      ...datastoreBaseConfig,
+      ...(driver !== undefined ? { driver } : {}),
       skipPayloadValidation: true,
       duplicateKeys,
       ...(capacity !== undefined ? { capacity } : {}),
@@ -122,6 +159,15 @@ export class Database {
       {
         assertOpen: () => this.assertOpen(),
         datastore,
+        // A database-level `key` is inherited by every datastore (it is part of
+        // the spread base config in `createDatastore`), so its `normalize` maps
+        // distinct `_id`s onto one storage key for collections that declared no
+        // `key` of their own. Reading only the collection option left those
+        // collections on the key-index fast paths, where `_id: "01"` resolved to
+        // the record stored under `"1"` (ADR-027).
+        hasCustomKey:
+          resolvedOptions.key !== undefined ||
+          this.baseConfig.key !== undefined,
         skipInsertValidation: this.baseConfig.skipPayloadValidation === true,
         payloadLimits: this.baseConfig.payloadLimits,
         caches: this.caches,
@@ -150,9 +196,9 @@ export class Database {
     const resolvedOptions = resolveCollectionOptions(options);
     const existing = this.collections.get(name);
     if (existing !== undefined) {
-      // Invariant: whenever a collection exists in `this.collections`, its resolved
-      // options are also stored in `this.collectionOptions` (both set together in
-      // the create path below). Non-null assertion is safe; drop the dead guard.
+      // Invariant: whenever a collection exists in `this.collections`, its
+      // resolved options are also stored in `this.collectionOptions` (both are
+      // set together in the create path below).
       const existingOptions = this.collectionOptions.get(name);
       if (
         existingOptions === undefined ||
@@ -165,8 +211,10 @@ export class Database {
       return existing as Collection<TDocument>;
     }
 
+    const driver = this.resolveDriver(name);
     this.collectionOptions.set(name, resolvedOptions);
     const datastore = this.createDatastore(
+      driver,
       resolvedOptions.duplicateKeys,
       resolvedOptions.capacity,
       resolvedOptions.autoCommit,
@@ -234,6 +282,13 @@ export class Database {
     }
   }
 
+  /**
+   * Best-effort: the database is marked closed before the pass begins, so a
+   * datastore skipped by an early abort would be unreachable *and* unclosed —
+   * holding its file lock with no way to release it. Every datastore is closed
+   * and every registry cleared; failures are collected and re-thrown afterwards
+   * (one as-is, several as an `AggregateError` in collection order).
+   */
   public async close(): Promise<void> {
     this.assertOpen();
     this.closed = true;
@@ -244,8 +299,13 @@ export class Database {
       }
     }
 
+    const failures: unknown[] = [];
     for (const datastore of this.datastores.values()) {
-      await datastore.close();
+      try {
+        await datastore.close();
+      } catch (error) {
+        failures.push(error);
+      }
     }
 
     this.errorListeners.length = 0;
@@ -255,6 +315,16 @@ export class Database {
     this.collectionOptions.clear();
     this.caches.pathCache.clear();
     this.caches.regexStringCache.clear();
+
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `Failed to close ${failures.length.toString()} datastores.`,
+      );
+    }
   }
 
   public on(event: 'error', listener: DatabaseErrorListener): () => void {

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; cross-call identity reuse is partially superseded by [ADR-030](./030-read-once-input-snapshots.md).
 
 ## Context
 
@@ -12,11 +12,12 @@ A review raised concern that in high-throughput server workloads building a dist
 
 ## Decision
 
-Retain the WeakMap. The design is intentional and correct:
+Retain the WeakMap for reuse within an owned filter snapshot:
 
-- **Per-request filters** (fresh array created per call, dropped after): the WeakMap entry becomes unreachable when the caller drops the filter. GC reclaims both.
-- **Long-held filters** (module-level or session-scope arrays): the entry persists for the array's lifetime, which is the intended optimisation — no repeated `Set` construction.
-- **No manual eviction needed** because WeakMap entries cannot be leaked by this cache alone; reachability is fully controlled by the caller.
+- Each public query call snapshots operand arrays before evaluation. The cache key is that internal array, not the caller's array.
+- Every candidate document in one scan sees the same snapshot array, so the inclusion `Set` and primitive check are each computed once per scan.
+- When the query snapshot becomes unreachable, its WeakMap entries are eligible for collection; no manual eviction is needed.
+- Reusing a long-held caller filter across separate calls intentionally does **not** reuse its identity-keyed entries. Correct call-boundary snapshots take precedence over cross-call identity hits (ADR-030).
 
 ## Evidence
 
@@ -27,18 +28,16 @@ Benchmark (`scripts/benchmarks/scenarios/filter-in-cache.bench.ts`, run with `--
 | 10,000       | 5.83 MB     | 122.72 MB        | 5.99 MB       | +0.15 MB         |
 | 100,000      | 5.92 MB     | 64.24 MB         | 5.94 MB       | +0.01 MB         |
 
-Throughput: ~6,500 `$in` filter evaluations/sec on a 200-document collection.
+The historical pre-snapshot run measured ~6,500 `$in` filter evaluations/sec on a 200-document collection. It documents the original decision, not a current cross-call throughput guarantee.
 
 Delta after forced GC is negligible (< 0.2 MB) and does not scale with N. The WeakMap holds no entries after GC because no filter array reference is retained between iterations.
 
 ## Consequences
 
-- No code change to the cache implementation.
+- The cache remains useful within each scan, but no public contract promises cross-call reuse.
 - `inclusionSetCache` carries an inline comment summarising the above.
 - If a future workload pattern holds large numbers of filter arrays in memory simultaneously, revisit with a bounded LRU (Map-keyed by array identity, MAX_ENTRIES ≈ 1024).
 
 ## Mutation safety
 
-Each cached entry now stores the operand length alongside the cached value: `{ set: Set<unknown>; length: number }` for `inclusionSetCache` and `{ value: boolean; length: number }` for `operandAllPrimitiveCache`. On each lookup, if `operand.length` differs from the stored length, the cache entry is rebuilt. This is O(1) and fixes the common foot-gun where a caller pushes or pops elements from a reused operand array between queries.
-
-Operands should still be treated as effectively immutable. A same-length in-place element replacement on a reused array (e.g. `ops[0] = 'z'`) is not detected and yields undefined results. Pass a fresh array when the contents change.
+Cached entries still record operand length as an internal consistency check. Public callers may mutate or reuse their original arrays between calls: the next call snapshots their then-current contents and receives a new cache identity. Mutating the original array while a call is pending cannot change that call's snapshot.

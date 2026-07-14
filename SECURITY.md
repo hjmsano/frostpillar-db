@@ -2,14 +2,14 @@
 
 ## Supported Versions
 
-Frostpillar DB is pre-1.0. Security fixes are released only against the latest
-published version. Pin your dependency and review the
+Frostpillar DB is in the 1.x release line. Security fixes are released only
+against the latest published version. Pin your dependency and review the
 [Releases](https://github.com/hjmsano/frostpillar-db/releases) page before
 upgrading.
 
 | Version        | Supported |
 | -------------- | --------- |
-| Latest `0.x`   | ✅        |
+| Latest `1.x`   | ✅        |
 | Older releases | ❌        |
 
 ## Reporting a Vulnerability

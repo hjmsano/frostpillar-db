@@ -321,3 +321,83 @@ void test('insert accepts array fields when skipPayloadValidation is false', asy
     await database.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Generated _id / _createdAt count toward the limits on insert
+// ---------------------------------------------------------------------------
+
+const objectWithKeys = (count: number): Record<string, unknown> => {
+  const doc: Record<string, unknown> = {};
+  for (let i = 0; i < count; i += 1) {
+    doc[`k${String(i)}`] = i;
+  }
+  return doc;
+};
+
+void test('insert counts the generated _id toward maxKeysPerObject', async () => {
+  const database = new Database({ payloadLimits: { maxKeysPerObject: 4 } });
+  const col = database.collection('gen-id-keys');
+
+  try {
+    // 4 caller keys + the generated _id = 5 keys in the stored document.
+    await assert.rejects(
+      () => col.insert(objectWithKeys(4) as FrostpillarDocument),
+      ValidationError,
+    );
+
+    // 3 caller keys + the generated _id = exactly the limit.
+    const id = await col.insert(objectWithKeys(3) as FrostpillarDocument);
+    // The stored document must stay updatable under the same limit: update
+    // validates the stored document, generated _id included.
+    const result = await col.update({ _id: id }, { $set: { k0: 99 } });
+    assert.equal(result.modifiedCount, 1);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('insert counts the generated _createdAt of a TTL collection toward maxKeysPerObject', async () => {
+  const database = new Database({ payloadLimits: { maxKeysPerObject: 4 } });
+  const col = database.collection('gen-ttl-keys', { ttl: 3600 });
+
+  try {
+    // 3 caller keys + generated _id + generated _createdAt = 5 keys.
+    await assert.rejects(
+      () => col.insert(objectWithKeys(3) as FrostpillarDocument),
+      ValidationError,
+    );
+
+    const id = await col.insert(objectWithKeys(2) as FrostpillarDocument);
+    const result = await col.update({ _id: id }, { $set: { k0: 99 } });
+    assert.equal(result.modifiedCount, 1);
+  } finally {
+    await database.close();
+  }
+});
+
+void test('insert counts a caller-supplied _id only once', async () => {
+  const database = new Database({ payloadLimits: { maxKeysPerObject: 4 } });
+  const col = database.collection('supplied-id-keys');
+
+  try {
+    const doc = { ...objectWithKeys(3), _id: 'u1' } as FrostpillarDocument;
+    assert.equal(await col.insert(doc), 'u1');
+  } finally {
+    await database.close();
+  }
+});
+
+void test('insert counts the generated _id toward maxTotalKeys', async () => {
+  const database = new Database({ payloadLimits: { maxTotalKeys: 3 } });
+  const col = database.collection('gen-id-total-keys');
+
+  try {
+    await assert.rejects(
+      () => col.insert(objectWithKeys(3) as FrostpillarDocument),
+      ValidationError,
+    );
+    await col.insert(objectWithKeys(2) as FrostpillarDocument);
+  } finally {
+    await database.close();
+  }
+});

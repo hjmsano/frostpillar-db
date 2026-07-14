@@ -170,3 +170,45 @@ void test('remove({ _id: { $in } }) on duplicateKeys: allow emits one remove eve
     await database.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// ids() is duplicate-consistent under duplicateKeys: 'allow'
+// ---------------------------------------------------------------------------
+
+void test("ids() returns one entry per document under duplicateKeys: 'allow'", async () => {
+  const database = new Database({});
+  const sessions = database.collection<SessionDocument>('sessions-dup-ids', {
+    duplicateKeys: 'allow',
+  });
+
+  try {
+    await sessions.insert({ _id: 's1', token: 'a' });
+    await sessions.insert({ _id: 's1', token: 'b' });
+    await sessions.insert({ _id: 's2', token: 'c' });
+
+    const ids = await sessions.ids();
+    assert.equal(ids.length, await sessions.count());
+    assert.deepEqual([...ids].sort(), ['s1', 's1', 's2']);
+  } finally {
+    await database.close();
+  }
+});
+
+void test("ids() matches count() with and without TTL under duplicateKeys: 'allow'", async () => {
+  const database = new Database({});
+  const withTtl = database.collection<SessionDocument>('sessions-dup-ttl', {
+    duplicateKeys: 'allow',
+    ttl: 3600,
+  });
+
+  try {
+    await withTtl.insert({ _id: 's1', token: 'a' });
+    await withTtl.insert({ _id: 's1', token: 'b' });
+
+    const ids = await withTtl.ids();
+    assert.equal(ids.length, 2);
+    assert.deepEqual(ids, ['s1', 's1']);
+  } finally {
+    await database.close();
+  }
+});

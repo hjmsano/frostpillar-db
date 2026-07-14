@@ -4,9 +4,15 @@ import {
   PATH_NOT_FOUND,
   validateFieldPath,
 } from './documentPath.js';
-import { cloneAccumulatorValue, hasOwn, isObjectRecord } from './objectUtils.js';
+import {
+  cloneAccumulatorValue,
+  hasOwn,
+  isObjectRecord,
+  isReservedKey,
+} from './objectUtils.js';
 import {
   MAX_DISTINCT_COUNT,
+  MAX_GROUP_ACCUMULATORS,
   MAX_GROUP_COUNT,
   MAX_GROUP_DOCUMENTS,
 } from './limits.js';
@@ -17,6 +23,9 @@ import type {
   GroupAccumulators,
   GroupResultEntry,
 } from '../types.js';
+
+/** Property of every `GroupResultEntry` that carries the group key. */
+const GROUP_KEY_FIELD = '_key';
 
 export const validateAggregationField = (field: string): string => {
   if (typeof field !== 'string' || field.length === 0) {
@@ -174,6 +183,14 @@ const scanDistinctValues = <TDocument extends FrostpillarDocument>(
   return count;
 };
 
+/**
+ * Object/array values are defensively cloned via `cloneAccumulatorValue`
+ * before entering the result array (ADR-026), since the scanned documents are
+ * references to stored documents; primitives and `null` pass through
+ * unchanged. Dedup happens inside `scanDistinctValues` on the original value,
+ * so equality semantics are unaffected and at most one clone is taken per
+ * distinct value.
+ */
 export const computeDistinct = <TDocument extends FrostpillarDocument>(
   documents: FrostpillarStoredDocument<TDocument>[],
   field: string,
@@ -182,9 +199,15 @@ export const computeDistinct = <TDocument extends FrostpillarDocument>(
   validateFieldPath(field);
 
   const result: unknown[] = [];
-  scanDistinctValues(documents, field, pathCache, 'distinct() result', (value) => {
-    result.push(value);
-  });
+  scanDistinctValues(
+    documents,
+    field,
+    pathCache,
+    'distinct() result',
+    (value) => {
+      result.push(cloneAccumulatorValue(value));
+    },
+  );
 
   return result;
 };
@@ -255,11 +278,26 @@ export const computePercentile = (
   values: number[],
   p: number,
 ): number | null => {
-  if (values.length === 0) {
+  return computePercentileOfSorted(sortNumbersAscending(values), p);
+};
+
+/** Ascending numeric sort into a fresh array; the input is never mutated. */
+const sortNumbersAscending = (values: number[]): number[] =>
+  [...values].sort((a, b) => a - b);
+
+/**
+ * The percentile core, over values that are already sorted ascending. Split out
+ * of `computePercentile` so a group whose `$median` and `$percentile`
+ * accumulators read the same field path sorts that field's values once rather
+ * than once per accumulator.
+ */
+const computePercentileOfSorted = (
+  sorted: number[],
+  p: number,
+): number | null => {
+  if (sorted.length === 0) {
     return null;
   }
-
-  const sorted = [...values].sort((a, b) => a - b);
   if (sorted.length === 1) {
     return sorted[0];
   }
@@ -395,11 +433,7 @@ const validatePercentileOperand = (
   }
 
   const keys = Object.keys(operand);
-  if (
-    keys.length !== 2 ||
-    !hasOwn(operand, 'field') ||
-    !hasOwn(operand, 'p')
-  ) {
+  if (keys.length !== 2 || !hasOwn(operand, 'field') || !hasOwn(operand, 'p')) {
     throw new ValidationError(
       `groupBy accumulator "${outputField}" operand for "$percentile" must contain exactly the keys "field" and "p".`,
     );
@@ -416,13 +450,44 @@ const validatePercentileOperand = (
   validateScalarPercentile(operand.p);
 };
 
+/**
+ * Validates an accumulator's output-field name. The name becomes a property of
+ * every `GroupResultEntry`, so it may neither shadow the group key nor be a
+ * reserved key: an accumulator map parsed from JSON with a `__proto__` output
+ * name would otherwise change the prototype of the returned entry object, and a
+ * `_key` output name would overwrite the group key with the accumulator result.
+ */
+const validateOutputField = (outputField: string): void => {
+  if (outputField.trim().length === 0) {
+    throw new ValidationError(
+      'groupBy accumulator output names must be non-empty strings.',
+    );
+  }
+  if (outputField === GROUP_KEY_FIELD) {
+    throw new ValidationError(
+      `groupBy accumulator output name "${GROUP_KEY_FIELD}" is reserved for the group key.`,
+    );
+  }
+  if (isReservedKey(outputField)) {
+    throw new ValidationError(
+      `groupBy accumulator output name "${outputField}" is reserved and not allowed.`,
+    );
+  }
+};
+
 const validateAccumulators = (accumulators: GroupAccumulators): void => {
   const entries = Object.entries(accumulators);
   if (entries.length === 0) {
     throw new ValidationError('groupBy accumulators must not be empty.');
   }
+  if (entries.length > MAX_GROUP_ACCUMULATORS) {
+    throw new ValidationError(
+      `groupBy exceeds maximum of ${String(MAX_GROUP_ACCUMULATORS)} accumulators.`,
+    );
+  }
 
   for (const [outputField, accumulator] of entries) {
+    validateOutputField(outputField);
     const keys = Object.keys(accumulator);
     if (keys.length !== 1) {
       throw new ValidationError(
@@ -438,6 +503,14 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
     }
 
     if (key === '$count') {
+      // `GroupAccumulator` types the operand as `true`, but accumulators built
+      // at runtime (e.g. parsed from JSON) bypass that: `{ $count: false }`
+      // used to be read as a plain document count.
+      if (accumulator.$count !== true) {
+        throw new ValidationError(
+          `groupBy accumulator "${outputField}" operand for "$count" must be true.`,
+        );
+      }
       continue;
     }
 
@@ -464,6 +537,7 @@ const validateAccumulators = (accumulators: GroupAccumulators): void => {
 const computeNumericAccumulator = (
   key: keyof GroupAccumulator,
   numericValues: number[],
+  getSortedValues: () => number[],
 ): unknown => {
   switch (key) {
     case '$sum':
@@ -491,7 +565,7 @@ const computeNumericAccumulator = (
         value > currentMax ? value : currentMax,
       );
     case '$median':
-      return computePercentile(numericValues, 0.5);
+      return computePercentileOfSorted(getSortedValues(), 0.5);
     case '$stdDevPop':
       return computeStdDev(numericValues, false);
     case '$stdDevSamp':
@@ -606,10 +680,58 @@ const computeAddToSet = <TDocument extends FrostpillarDocument>(
   return result;
 };
 
+/**
+ * Per-group memo of the numeric values of a field path, and of their
+ * ascending-sorted copy. Every accumulator rescans the group's documents, so
+ * without this an accumulator map like `{ p50: { $percentile: { field:
+ * 'score', p: 0.5 } }, p95: { $percentile: { field: 'score', p: 0.95 } }, avg:
+ * { $avg: 'score' } }` walked `score` three times and sorted it twice, per
+ * group. The memo is scoped to one group and discarded with it, so results are
+ * identical to computing each accumulator independently.
+ */
+interface GroupFieldMemo {
+  readonly numeric: Map<string, number[]>;
+  readonly sorted: Map<string, number[]>;
+}
+
+const createGroupFieldMemo = (): GroupFieldMemo => ({
+  numeric: new Map<string, number[]>(),
+  sorted: new Map<string, number[]>(),
+});
+
+const memoNumericValues = <TDocument extends FrostpillarDocument>(
+  memo: GroupFieldMemo,
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): number[] => {
+  const cached = memo.numeric.get(fieldPath);
+  if (cached !== undefined) return cached;
+  const values = extractNumericValues(groupDocs, fieldPath, pathCache);
+  memo.numeric.set(fieldPath, values);
+  return values;
+};
+
+const memoSortedNumericValues = <TDocument extends FrostpillarDocument>(
+  memo: GroupFieldMemo,
+  groupDocs: FrostpillarStoredDocument<TDocument>[],
+  fieldPath: string,
+  pathCache: Map<string, string[]>,
+): number[] => {
+  const cached = memo.sorted.get(fieldPath);
+  if (cached !== undefined) return cached;
+  const sorted = sortNumbersAscending(
+    memoNumericValues(memo, groupDocs, fieldPath, pathCache),
+  );
+  memo.sorted.set(fieldPath, sorted);
+  return sorted;
+};
+
 const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
   groupDocs: FrostpillarStoredDocument<TDocument>[],
   accumulator: GroupAccumulator,
   pathCache: Map<string, string[]>,
+  memo: GroupFieldMemo,
 ): unknown => {
   const key = Object.keys(accumulator)[0] as keyof GroupAccumulator;
 
@@ -619,12 +741,10 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
 
   if (key === '$percentile') {
     const operand = accumulator.$percentile!;
-    const numericValues = extractNumericValues(
-      groupDocs,
-      operand.field,
-      pathCache,
+    return computePercentileOfSorted(
+      memoSortedNumericValues(memo, groupDocs, operand.field, pathCache),
+      operand.p,
     );
-    return computePercentile(numericValues, operand.p);
   }
 
   if (key === '$first' || key === '$last') {
@@ -656,8 +776,11 @@ const computeAccumulatorValue = <TDocument extends FrostpillarDocument>(
   }
 
   const fieldPath = accumulator[key]!;
-  const numericValues = extractNumericValues(groupDocs, fieldPath, pathCache);
-  return computeNumericAccumulator(key, numericValues);
+  return computeNumericAccumulator(
+    key,
+    memoNumericValues(memo, groupDocs, fieldPath, pathCache),
+    () => memoSortedNumericValues(memo, groupDocs, fieldPath, pathCache),
+  );
 };
 
 const serializeGroupKey = (key: unknown): string => {
@@ -679,6 +802,7 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
   const results: GroupResultEntry[] = [];
   for (const [, { key: groupKey, docs: groupDocs }] of groups) {
     const entry: GroupResultEntry = { _key: groupKey };
+    const memo = createGroupFieldMemo();
     for (const outputField in accumulators) {
       if (!hasOwn(accumulators, outputField)) continue;
       const accumulator = accumulators[outputField];
@@ -686,6 +810,7 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
         groupDocs,
         accumulator,
         pathCache,
+        memo,
       );
     }
     results.push(entry);
@@ -698,6 +823,12 @@ const buildGroupResults = <TDocument extends FrostpillarDocument>(
  * one property per requested field path, keyed by the literal path string
  * (not re-parsed into a nested structure), in the caller's array order.
  * Only invoked once per newly-created group, never per document.
+ *
+ * Each dimension's value is defensively cloned via `cloneAccumulatorValue`
+ * (ADR-026): the resolved values are references into the stored documents, so
+ * an object/array dimension would otherwise let a caller mutate stored data
+ * through `_key`. The key is already serialized by the time this runs, so the
+ * clone cannot affect grouping.
  */
 const buildCompositeGroupKey = (
   fieldPaths: readonly string[],
@@ -705,7 +836,7 @@ const buildCompositeGroupKey = (
 ): Record<string, unknown> => {
   const key: Record<string, unknown> = {};
   for (let index = 0; index < fieldPaths.length; index += 1) {
-    key[fieldPaths[index]] = values[index];
+    key[fieldPaths[index]] = cloneAccumulatorValue(values[index]);
   }
   return key;
 };
@@ -805,7 +936,14 @@ export const computeGroupBy = <TDocument extends FrostpillarDocument>(
       const serialized = serializeGroupKey(groupKey);
 
       if (addDocumentToGroups(groups, serialized, document)) {
-        groups.set(serialized, { key: groupKey, docs: [document] });
+        // An object/array group key is a reference into the stored document,
+        // so it is cloned before it becomes the result's `_key` (ADR-026).
+        // Serialization above ran on the original, so grouping is unaffected,
+        // and the clone is taken once per group, never per document.
+        groups.set(serialized, {
+          key: cloneAccumulatorValue(groupKey),
+          docs: [document],
+        });
       }
     }
   }

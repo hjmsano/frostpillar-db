@@ -220,6 +220,8 @@ import { Database } from '@frostpillar/frostpillar-db';
 const db = new Database({});
 ```
 
+`Database` shallow-snapshots the config's top-level own enumerable fields during construction. Each accessor-backed field is read once; later top-level mutations of the caller's config object do not affect the database. Nested config objects and callback functions remain shared references.
+
 **Browser:**
 
 ```js
@@ -236,7 +238,9 @@ await db.commit(); // Explicit flush to durable storage
 await db.close(); // Release resources and locks
 ```
 
-> **Sequential processing:** `commit()` and `close()` iterate collections sequentially. If any individual collection's operation throws, the error propagates immediately and remaining collections are skipped. Callers who need best-effort semantics should wrap the call in a try/catch per collection.
+> **Sequential processing:** `commit()` and `close()` iterate collections sequentially. If an individual `commit()` throws, the error propagates immediately and remaining collections are skipped; callers who need best-effort commit semantics should wrap the call in a try/catch per collection.
+>
+> `close()` is best-effort by itself: a failing collection does not abort the pass. Every remaining datastore is still closed and all internal state is still released before the failure is re-thrown (a single failure as-is, several as an `AggregateError`). Otherwise a skipped datastore would be unreachable — the database is already closed — while still holding its file lock.
 
 #### Error Monitoring
 
@@ -370,6 +374,8 @@ const numericKey: DatastoreKeyDefinition<number> = {
 const items = db.collection('items', { key: numericKey });
 ```
 
+The key definition controls storage layout and ordering only: `_id` remains the string stored on the document, and queries match it by exact string equality. Keep `normalize` injective over the `_id` strings you store — `normalize: Number` maps `"01"` and `"1"` onto one storage key, so they cannot coexist. A `key` set on the `Database` config applies to every collection that does not override it, with exactly the same semantics.
+
 Per-collection options take precedence over database-level configuration. Re-accessing a collection with a different value for any of these fields throws `ConfigurationError`. See [Spec 01](docs/specs/01-database-and-collection.md) §2.8–§2.11 for full details.
 
 #### Collection Introspection
@@ -406,7 +412,9 @@ const ids = await users.insertMany([
 
 > **Note:** A custom `_id` must be a non-empty string of at most 1,024 characters with no control characters; otherwise `insert` throws `ValidationError`. The same constraint applies to `_id` values used in filters.
 
-> **Note:** `insertMany` is not transactional. If an error occurs mid-batch (e.g., a duplicate `_id` on a `'reject'` collection), documents already inserted are not rolled back. The caller receives the thrown error, not a partial result.
+> **Note:** `insertMany` is not transactional. If an error occurs mid-batch (e.g. a storage quota is exhausted), documents already inserted are not rolled back. The caller receives the thrown error, not a partial result.
+>
+> A duplicate `_id` is the exception: on a `'reject'` collection the whole batch is checked for duplicates — within the batch and against stored documents — **before anything is written**, so `DuplicateIdError` leaves the collection untouched. When a batch does fail partway for another reason, an `'insert'` event is still emitted for each record that reached storage, so `watch()` never misses a stored document (on `'reject'` collections; see [Spec 02 §1](docs/specs/02-crud-and-query.md)).
 
 #### Find
 
@@ -469,6 +477,35 @@ const active = await users.count({ status: 'active' });
 
 > **Note:** On collections with `duplicateKeys: 'allow'`, `count()` returns the **total record count** including duplicates — not the number of unique `_id` values.
 
+#### Document Ownership on Writes
+
+Documents passed to `insert()` / `insertMany()` and values written by `$set` / `$push` / `$addToSet` are **deep-copied** into storage. Once the write resolves, mutating your original object never changes the stored record:
+
+```ts
+const input = { name: 'Alice', tags: ['a'] };
+const id = await users.insert(input);
+
+input.tags.push('b'); // does not touch the stored document
+const stored = await users.findOne({ _id: id }); // tags: ['a']
+```
+
+Reads are copied as well: the documents **returned** by `find()`, `findOne()`, and `watch()` events are deep copies, not references to the stored records, so mutating a result never touches stored data. (A `watch()` event's document is one copy shared by that event's listeners, so listeners of the same event still see each other's mutations.)
+
+Insert payloads, filters, and update operations/options are snapshotted at their public entry points. Covered properties are read once, so a getter or `Proxy` cannot show validation one value and later evaluation another. `update()` captures `options.upsert` and one normalized operation set before its first `await`; every matched document and any upsert use that same set, including a detached `$pull` comparison value.
+
+Filter arrays are copied recursively. Object comparison values — including class instances and other objects — are detached by their own enumerable shape, `Date` by timestamp, and `RegExp` by one captured `source`/`flags` pair plus its recursively copied enumerable own properties. The filter root must materialize as a plain record. Object identity and prototypes are not query semantics.
+
+```ts
+// The getter is read once, by the snapshot; the stored value is the validated one.
+await users.insert({
+  get score() {
+    return callCount++ === 0 ? 1 : 10n; // the 10n is never reachable
+  },
+});
+```
+
+See [ADR-030](docs/adr/030-read-once-input-snapshots.md).
+
 ### Identity Queries
 
 When you only need to check existence or enumerate document IDs, use the lightweight `exists()` and `ids()` helpers instead of `find()` / `findOne()`:
@@ -483,8 +520,8 @@ if (await users.exists('user-001')) {
 const allIds = await users.ids();
 ```
 
-- `exists(id)` uses `Datastore.has(key)` as a fast path and returns `false` for expired documents on TTL collections.
-- `ids()` uses `Datastore.keys()` as a fast path; on TTL collections it filters out expired documents so its output stays consistent with `find()` and `count()`.
+- `exists(id)` uses `Datastore.has(key)` as a fast path only on default-key, non-TTL collections. With a custom `key`, it loads normalized-key candidates and returns `true` only for an exact stored `_id` match; TTL collections also exclude expired matches.
+- `ids()` uses `Datastore.keys()` only on default-key, non-TTL collections whose duplicate policy is not `'allow'`. With TTL, a custom `key`, or `duplicateKeys: 'allow'`, it loads documents, filters expired records when needed, and returns each stored `_id`, so `ids().length === count()` holds even when several documents share a storage key.
 
 ### Query Filters
 
@@ -513,7 +550,7 @@ Filters use `$`-prefixed operators:
 { role: { $nin: ['guest'] } }
 ```
 
-> **Deep equality note:** `$in`, `$nin`, `$eq`, `$ne`, `$all`, `$pull`, and `$addToSet` use an internal deep equality implementation that supports primitives, `Date`, plain arrays, and plain objects. `Map`, `Set`, `RegExp`, and typed arrays (e.g. `Uint8Array`) are not supported as filter or operand values.
+> **Deep equality note:** `$in`, `$nin`, `$eq`, `$ne`, `$all`, `$pull`, and `$addToSet` compare primitives directly, `Date` by timestamp, arrays recursively, and other objects by own enumerable shape. Prototypes and internal slots such as `Map`/`Set` entries or a `RegExp` pattern are not compared, but enumerable own properties added to those objects are. Use `$regex` for pattern matching.
 
 #### Logical
 
@@ -567,10 +604,10 @@ Multiple top-level keys are implicitly `$and`:
 
 ### Performance Notes
 
-- **`_id` equality fast path** — `findOne({ _id })` and internal `_id` lookups call `Datastore.getFirst(key)` directly, skipping the full scan pipeline.
-- **`_id` range scan** — When a filter uses `$gt`/`$gte` together with `$lt`/`$lte` on `_id` (both bounds present, matching types), the query engine delegates to a B+Tree leaf-level range scan via `Datastore.getRange(start, end)`. Additional non-`_id` conditions are evaluated in-memory on the narrowed range. Mixed-type bounds (e.g. `string` lower + `number` upper) throw `ValidationError`.
-- **`$in` on `_id` fast path** — `find({ _id: { $in: [...] } })`, `update`, and `remove` with an `_id` `$in` filter use `Datastore.getMany(keys)` for a batch lookup, avoiding a full scan. The same optimization applies to the `remove` delete path via `Datastore.deleteMany(keys)`.
-- **`exists()` / `ids()` fast paths** — These bypass payload loading on non-TTL collections (see [Identity Queries](#identity-queries)).
+- **`_id` equality fast path** — Under the default key definition, `findOne({ _id })` can treat `Datastore.getFirst(key)` as the complete result. With a custom `key`, equality lookup still narrows candidates through the index, but the stored `_id` is checked exactly before a match is accepted.
+- **`_id` range scan** — Under the default key definition, a filter using `$gt`/`$gte` together with `$lt`/`$lte` on `_id` (both bounds present, matching types) delegates to `Datastore.getRange(start, end)`. A custom key may order normalized keys differently from `_id` strings, so custom-key ranges use a full scan. Mixed-type bounds throw `ValidationError`.
+- **`$in` on `_id` fast path** — `find` and `update` use `Datastore.getMany(keys)` for batch candidate lookup, followed by exact filter evaluation. `remove` uses `deleteMany(keys)` only on eligible default-key, non-TTL collections; custom-key removal confirms each stored `_id` and deletes by record ID.
+- **`exists()` / `ids()` fast paths** — These bypass payload loading only when storage keys are guaranteed to be document IDs; custom-key collections use payload-backed identity checks (see [Identity Queries](#identity-queries)).
 
 ### ResultChain
 
@@ -628,8 +665,12 @@ Non-numeric values are skipped. `avg`/`min`/`max` return `null` when no numeric 
 #### Percentile and Median
 
 ```ts
-const p95 = await requests.find({ route: '/api' }).percentile('latencyMs', 0.95);
-const medianLatency = await requests.find({ route: '/api' }).median('latencyMs');
+const p95 = await requests
+  .find({ route: '/api' })
+  .percentile('latencyMs', 0.95);
+const medianLatency = await requests
+  .find({ route: '/api' })
+  .median('latencyMs');
 ```
 
 `p` is a fraction in `[0, 1]` (`0.95` = 95th percentile), not the 0–100 percent scale. Percentiles are computed with linear interpolation between closest ranks (`PERCENTILE_CONT` — the same definition used by SQL, numpy, and pandas): `percentile(f, 0)` equals `min(f)`, `percentile(f, 1)` equals `max(f)`, and the median of an even-count set is the average of the two middle values.
@@ -640,12 +681,16 @@ const medianLatency = await requests.find({ route: '/api' }).median('latencyMs')
 
 ```ts
 const jitterPop = await requests.find({ route: '/api' }).stdDevPop('latencyMs');
-const jitterSamp = await requests.find({ route: '/api' }).stdDevSamp('latencyMs');
+const jitterSamp = await requests
+  .find({ route: '/api' })
+  .stdDevSamp('latencyMs');
 const varPop = await requests.find({ route: '/api' }).variancePop('latencyMs');
-const varSamp = await requests.find({ route: '/api' }).varianceSamp('latencyMs');
+const varSamp = await requests
+  .find({ route: '/api' })
+  .varianceSamp('latencyMs');
 ```
 
-`stdDevPop`/`variancePop` divide by `n` (use when the matched set *is* the whole population); `stdDevSamp`/`varianceSamp` divide by `n - 1` (Bessel's correction — the unbiased estimator of a larger population's variance from a sample). Both are computed in one pass with Welford's algorithm, which stays numerically stable even for large-magnitude, low-variance data (unlike the naive `Σx² − (Σx)²/n` formula).
+`stdDevPop`/`variancePop` divide by `n` (use when the matched set _is_ the whole population); `stdDevSamp`/`varianceSamp` divide by `n - 1` (Bessel's correction — the unbiased estimator of a larger population's variance from a sample). Both are computed in one pass with Welford's algorithm, which stays numerically stable even for large-magnitude, low-variance data (unlike the naive `Σx² − (Σx)²/n` formula).
 
 All four skip non-numeric values and return `null` when no numeric values exist. **`n = 1` nuance:** with exactly one numeric value, `stdDevPop`/`variancePop` return `0` (no dispersion from a single point), while `stdDevSamp`/`varianceSamp` return `null` (the `n - 1 = 0` divisor is undefined).
 
@@ -658,10 +703,14 @@ const departments = await users.find().distinct('dept');
 
 Returned values follow first occurrence in aggregation input order (ADR-020): storage order, or `.sort()` order when a `.sort()` precedes `distinct()` on the chain.
 
+Object/array values are defensively cloned ([ADR-026](docs/adr/026-aggregation-result-isolation.md)), so mutating a returned value never touches stored data. The same holds for `groupBy()`'s `_key`.
+
 #### Count Distinct
 
 ```ts
-const uniqueCities = await users.find({ status: 'active' }).countDistinct('address.city');
+const uniqueCities = await users
+  .find({ status: 'active' })
+  .countDistinct('address.city');
 // 2
 ```
 
@@ -722,9 +771,12 @@ const result = await requests.find({}).groupBy('route', {
 `$first: 'fieldPath'` / `$last: 'fieldPath'` ([ADR-021](docs/adr/021-first-last-accumulators.md)) return the value of `fieldPath` on the first (resp. last) document of the group, in aggregation input order (ADR-020) — the chain's `.sort()` order when present, otherwise storage order. This is **positional-then-read**: the first/last document is selected first, and only then is the field read from it — not "the first/last document that has the field". If the selected document lacks the field, the result is `null`. Unlike the other accumulators, `$first`/`$last` return a value of **any type** (string, number, boolean, `null`, object, array); object/array values are defensively cloned before being returned. The canonical use case is "latest value per group":
 
 ```ts
-const result = await events.find({}).sort({ updatedAt: -1 }).groupBy('userId', {
-  latestStatus: { $first: 'status' },
-});
+const result = await events
+  .find({})
+  .sort({ updatedAt: -1 })
+  .groupBy('userId', {
+    latestStatus: { $first: 'status' },
+  });
 // [{ _key: 'u1', latestStatus: 'shipped' }, ...]
 ```
 
@@ -746,8 +798,8 @@ Both return `[]` for a group with no present values.
 
 ```ts
 const result = await posts.find().groupBy('author', {
-  allTags: { $push: 'tag' },       // every tag, in order, with duplicates
-  cities: { $addToSet: 'city' },   // the set of distinct cities
+  allTags: { $push: 'tag' }, // every tag, in order, with duplicates
+  cities: { $addToSet: 'city' }, // the set of distinct cities
 });
 // [{ _key: 'alice', allTags: ['ts', 'db', 'ts'], cities: ['Tokyo', 'Osaka'] }]
 ```
@@ -832,6 +884,13 @@ Because `_createdAt` exists purely as TTL bookkeeping, **any collection with a `
 
 > **Note:** `update()` does not reset `_createdAt`, and — on a TTL collection — `_createdAt` cannot be changed at all: any operator that targets it (`$set`, `$unset`, `$inc`, `$push`, `$pull`, `$addToSet`, `$rename`) throws `ValidationError`. TTL expiration is based on creation time only and cannot be extended in place; remove and re-insert the document to reset it.
 
+An expired record is treated as absent when a TTL write reuses its storage key:
+`insert()` and an upsert remove the expired collision before checking duplicate
+keys. `insertMany()` applies the same reclamation when its stored conflicts are
+all expired. This is targeted cleanup for the conflicting key, not a
+collection-wide purge. A non-expired collision still throws `DuplicateIdError`
+on a `'reject'` collection.
+
 #### `immutableCreatedAt` option
 
 TTL collections protect `_createdAt` automatically (see above), so `immutableCreatedAt` is not needed to secure them. Set `immutableCreatedAt: true` to get the update-time part of that protection on a collection that does **not** use `ttl`:
@@ -874,14 +933,23 @@ for await (const user of users
 
 frostpillar-db delegates all persistence to frostpillar-storage-engine. Pass a driver to the `Database` constructor.
 
+Each collection is backed by its own datastore, so each durable collection needs its own physical namespace (file path, key prefix, IndexedDB database, etc.). Pass a **driver factory** — a function that receives the collection name and returns a driver — so every collection gets an isolated namespace. Derive the namespace fragment with **`collectionNamespace(name)`**, never from the raw name (see the warning below):
+
 **Node.js / TypeScript:**
 
 ```ts
-import { Database } from '@frostpillar/frostpillar-db';
+import { Database, collectionNamespace } from '@frostpillar/frostpillar-db';
 import { fileDriver } from '@frostpillar/frostpillar-db/drivers/file';
 
 const db = new Database({
-  driver: fileDriver({ filePath: './data/myapp.fpdb' }),
+  driver: (name) =>
+    fileDriver({
+      target: {
+        kind: 'directory',
+        directory: './data',
+        fileName: collectionNamespace(name),
+      },
+    }),
   autoCommit: { frequency: '5s', maxPendingBytes: 1024 * 1024 },
 });
 ```
@@ -889,17 +957,26 @@ const db = new Database({
 **Browser:**
 
 ```js
-const { Database, indexedDBDriver } = window.FrostpillarDB;
+const { Database, collectionNamespace, indexedDBDriver } = window.FrostpillarDB;
 
 const db = new Database({
-  driver: indexedDBDriver({
-    databaseName: 'my-app',
-    objectStoreName: 'records',
-    version: 1,
-  }),
+  driver: (name) =>
+    indexedDBDriver({
+      // The snapshot lives per *database*, so each collection needs its own
+      // databaseName — an object store does not isolate it.
+      databaseName: `my-app-${collectionNamespace(name)}`,
+      objectStoreName: 'records',
+      version: 1,
+    }),
   autoCommit: { frequency: '5s' },
 });
 ```
+
+> **Warning — derive namespace fragments with `collectionNamespace()` ([ADR-029](docs/adr/029-driver-namespace-derivation.md)).** A collection name may contain `.`, which is also the delimiter the drivers use to build their key spaces. The file backend writes `<fileName>.fpdb.g.<generation>` and, on open, deletes every file starting with `<fileName>.fpdb.g.` that is not its own active generation — so with raw names the collections `foo` and `foo.fpdb.g.0` (both legal) collide: opening `foo` **deletes** the other collection's data file, and it reopens empty. `collectionNamespace()` percent-escapes the dots (`orders.2026` → `orders%2E2026`), producing a fragment that no other collection's fragment can prefix. Use it for every fragment a factory derives: `fileName`, `databaseKey`, `databaseName`, `directoryName`, `keyPrefix`.
+
+> **Warning — IndexedDB isolates by `databaseName`, not by object store.** frostpillar-storage-engine keeps a datastore's snapshot in a fixed slot (`_meta` object store, key `config`) that is per _database_; `objectStoreName` is ignored when the snapshot is loaded and committed. A factory that varies only `objectStoreName` inside one `databaseName` gives every collection the same snapshot slot, and each commit overwrites the previous collection's data. Always vary `databaseName` per collection, as above.
+
+A plain driver instance (e.g. `driver: fileDriver({ filePath: './data/myapp.fpdb' })`) is still supported for databases with a **single** collection. Because one driver instance is bound to one physical namespace, creating a second collection with a plain driver throws `ConfigurationError` — switch to the factory form instead.
 
 See the [frostpillar-storage-engine documentation](https://github.com/hjmsano/frostpillar-storage-engine) for all available drivers and configuration options.
 
@@ -938,6 +1015,8 @@ Payload limits apply to all collections in the database and are enforced on `ins
 
 > **Note:** For `update`, payload limits are checked against the **resulting document** after all operators have been applied. If the result exceeds any limit, the update is rejected with `ValidationError` and the original document remains unchanged.
 
+> **Note:** For `insert` / `insertMany`, limits are checked against the document **as it will be stored** — including the fields frostpillar-db generates: `_id` when you omit it, and `_createdAt` on a TTL collection. A document with 256 keys therefore does not fit `maxKeysPerObject: 256` unless it supplies its own `_id`. This keeps an inserted document updatable: `update` validates the stored document, generated fields included.
+
 > **Rejected types:** `bigint`, class instances, functions, `undefined`, `Symbol`, and circular references are not JSON-compatible and are rejected with `ValidationError` on insert.
 
 #### `skipPayloadValidation`
@@ -950,7 +1029,9 @@ const db = new Database({
 });
 ```
 
-Only use this option when you fully control the data being inserted — skipping validation lets malformed, circular, or oversized documents reach storage.
+Only use this option when you fully control the data being inserted — skipping validation lets oversized documents reach storage.
+
+A lightweight validation pass still runs on every write, even in skip mode. It rejects reserved keys, circular references, documents nested deeper than `maxDepth`, non-plain object values (class instances, `Date`, `Map`, `Set`, `Object.create(proto)`), and the non-storable leaf types `bigint`, `function`, `symbol`, and `undefined` with `ValidationError`. Functions cannot be detached as document values; symbols are primitives but are also unsupported document values. What skip mode turns off is the size accounting — byte counts, key counts, and string/key length limits.
 
 #### `maxMatchedDocuments`
 
@@ -967,33 +1048,39 @@ const db = new Database({ maxMatchedDocuments: 10_000 });
 
 > **Tip:** If you only need the first _n_ results, add `.limit(n)` to your query — this short-circuits the scan (when no `sort` is applied) and avoids hitting the cap.
 
+> **Known limitation — the cap bounds the matched set, not the scan ([ADR-028](docs/adr/028-candidate-set-materialization.md)):** a scan first asks the storage engine for candidate records, and its read API returns arrays. The candidate array is therefore fully allocated before a filter is evaluated or a `.limit(n)` takes effect, so `.limit(10)` on a 10-million-document collection still materializes ten million records and keeps ten. An `_id` equality or `$in` filter is narrowed by the index before any array is built; a bounded `_id` range is narrowed only under the default key definition. A filter with no applicable `_id` candidate path does not avoid this cost. Lifting it needs a streaming read API in frostpillar-storage-engine, which the current version does not expose.
+
 ### Operational Limits
 
 In addition to per-document payload limits, frostpillar-db enforces fixed operational limits on filters, update operators, and aggregation outputs. These are not configurable — they protect against pathological inputs and runaway resource use.
 
-| Limit                           | Value   | Scope                                                             |
-| ------------------------------- | ------- | ----------------------------------------------------------------- |
-| Max field path depth            | 32      | Dot-notation segments per field path (e.g. `a.b.c` = 3)           |
-| Max field path length           | 512     | Character length of a dot-notation field path                     |
-| Max filter nesting depth        | 32      | Nesting levels for `$and` / `$or` and nested `$not` expressions   |
-| Max logical operand count       | 1,000   | Elements in a single `$and` / `$or` operand array                 |
-| Max operand array size          | 10,000  | Elements in a `$in` / `$nin` / `$all` operand array               |
-| Max `$regex` pattern length     | 1,024   | Characters in a `$regex` string pattern                           |
-| Max `$regex` quantifiers        | 20      | Quantifier tokens (`*`, `+`, `?`, `{n,m}`) in a `$regex` pattern  |
-| Max `$regex` alternation groups | 4       | Parenthesized alternation groups (`(a\|b)`) in a `$regex` pattern |
-| Max `$regex` test length        | 8,192   | Characters in a field value tested against a `$regex`             |
-| Max document array length       | 100,000 | Per-document array size after `$push` / `$addToSet`               |
-| Max `groupBy` group count       | 100,000 | Distinct group keys produced by a single `groupBy()`              |
-| Max `groupBy` docs per group    | 100,000 | Documents collected into a single `groupBy()` group               |
-| Max `distinct` value count      | 100,000 | Distinct values returned by a single `distinct()`                 |
-| Max `countDistinct` value count | 100,000 | Unique values counted by a single `countDistinct()`, or by a single `$countDistinct` group |
-| Max `$addToSet` value count     | 100,000 | Distinct values collected by a single `$addToSet` group (same cap as `$countDistinct`)     |
+| Limit                             | Value   | Scope                                                                                      |
+| --------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| Max field path depth              | 32      | Dot-notation segments per field path (e.g. `a.b.c` = 3)                                    |
+| Max field path length             | 512     | Character length of a dot-notation field path                                              |
+| Max filter nesting depth          | 32      | Nesting levels for `$and` / `$or` and nested `$not` expressions                            |
+| Max logical operand count         | 1,000   | Elements in a single `$and` / `$or` operand array                                          |
+| Max operand array size            | 10,000  | Elements in a `$in` / `$nin` / `$all` operand array                                        |
+| Max `$regex` pattern length       | 1,024   | Characters in a `$regex` string pattern                                                    |
+| Max `$regex` quantifiers          | 20      | Base quantifiers (`*`, `+`, `?`, `{n,m}`); a lazy suffix does not add another token        |
+| Max `$regex` variable quantifiers | 8       | Variable-width quantifier tokens (`?`, `*`, `+`, `{n,}`, `{n,m}` with `m > n`) in a `$regex` pattern |
+| Max `$regex` alternation groups   | 4       | Parenthesized alternation groups (`(a\|b)`) in a `$regex` pattern                          |
+| Max `$regex` test length          | 8,192   | Characters in a field value tested against a `$regex`                                      |
+| Max document array length         | 100,000 | Per-document array size after `$push` / `$addToSet`                                        |
+| Max `groupBy` accumulators        | 32      | Accumulators in a single `groupBy()` call                                                  |
+| Max `groupBy` group count         | 100,000 | Distinct group keys produced by a single `groupBy()`                                       |
+| Max `groupBy` docs per group      | 100,000 | Documents collected into a single `groupBy()` group                                        |
+| Max `distinct` value count        | 100,000 | Distinct values returned by a single `distinct()`                                          |
+| Max `countDistinct` value count   | 100,000 | Unique values counted by a single `countDistinct()`, or by a single `$countDistinct` group |
+| Max `$addToSet` value count       | 100,000 | Distinct values collected by a single `$addToSet` group (same cap as `$countDistinct`)     |
 
 `$regex` patterns are additionally screened for catastrophic-backtracking shapes and rejected with `ValidationError` before compilation. Exceeding any of the limits above throws `ValidationError` at operation time. Three mechanisms cover this:
 
 - A general, structural nested-quantifier check: any parenthesized group that is _repeated_ (`+`, `*`, or a `{n,m}` whose maximum is 2 or more / unbounded) whose own content contains another quantifier — at any nesting depth, in any combination of quantifier syntax on either side — is rejected (e.g. `(a+)+`, `([a-z]+)+`, `(a{1,2})+`, and combinations like `(a{1,10}){1,10}` that an enumerated pattern list would otherwise have to special-case one shape at a time). A group quantified by `?` or a max-≤1 bound (e.g. `(\d+)?`, `(a+){0,1}`) matches at most once and so cannot backtrack exponentially, so such patterns are accepted.
 - A structural quantified-alternation-group check: a _repeating_ quantifier — `+`, `*`, unbounded `{n,}`, or a `{n}`/`{n,m}` whose maximum is 2 or more — applied to a group that contains an unescaped `|` **at any nesting depth** is rejected (e.g. `(a|a)+`, `(a|ab)*`, `(aa|a){2,}`, `(?:aa|a){2,50}`, and wrapped forms such as `((a|aa))+` and `(?:(?:a|ab))+` where a redundant group would otherwise hide the alternation from the outer repeat). The screen is conservative and does no ambiguity analysis, so a repeated group carrying a pipe anywhere within it (e.g. `(x(a|b)y)+`) is also rejected. A non-repeating quantifier (`?`, `{0,1}`, `{1}`) or a bare alternation group with no quantifier is accepted.
 - Hand-written detectors for other catastrophic shapes: overlapping wildcards, adjacent quantifiers, and backreferences with quantifiers.
+
+Both quantifier caps count base quantifiers: a lazy suffix (`*?`, `+?`, `??`, `{n,m}?`) changes greediness and is not counted a second time. The variable-width cap is a backstop against a chain of atoms whose width the engine gets to choose (e.g. `^.?.?….?aaa…a$`). It counts `?`, `*`, `+`, `{n,}`, and `{n,m}` where `m > n`; fixed `{n}`/`{n,n}` bounds are free. Quantifier-looking characters inside character classes do not count, including nested Unicode-set class contents under the `v` flag. Counting `+` is an intentional compatibility tightening: patterns with more than eight base variable-width quantifiers are rejected even if an earlier release accepted them.
 
 The alternation-group cap is a backstop against manually-unrolled ambiguous alternation (e.g. repeating `(a|aa)` several times with no quantifier character at all), which carries no quantifier token and so would otherwise evade the quantifier-based checks above. As with the other pattern heuristics, all of the above are defense-in-depth screens against known catastrophic-backtracking shapes, not a formal proof that every `$regex` pattern executes in linear time — they narrow the risk significantly but do not eliminate the category.
 
@@ -1092,6 +1179,12 @@ try {
 | `close()`                    | `Promise<void>`     | Release resources                    |
 | `on('error', listener)`      | `() => void`        | Monitor async errors                 |
 
+### Helpers
+
+| Function                    | Returns  | Description                                                                                                                                |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collectionNamespace(name)` | `string` | Encode a collection name into a collision-proof driver-factory namespace fragment ([ADR-029](docs/adr/029-driver-namespace-derivation.md)) |
+
 ### Collection
 
 | Method                          | Returns                     | Description                                              |
@@ -1110,28 +1203,28 @@ try {
 
 ### ResultChain
 
-| Method                          | Returns                       | Description                                                   |
-| ------------------------------- | ----------------------------- | ------------------------------------------------------------- |
-| `.sort(spec)`                   | `ResultChain`                 | Set sort order (`SortSpec` object or `SortSpecEntries` array) |
-| `.limit(n)`                     | `ResultChain`                 | Limit results                                                 |
-| `.skip(n)`                      | `ResultChain`                 | Skip results                                                  |
-| `.project(spec)`                | `ResultChain`                 | Field selection                                               |
-| `.toArray()`                    | `Promise<Document[]>`         | Execute and return documents                                  |
-| `.cursor()`                     | `AsyncGenerator<Document>`    | Async iterator over the result set                            |
-| `.count()`                      | `Promise<number>`             | Count matching documents                                      |
-| `.sum(field)`                   | `Promise<number>`             | Sum of numeric field                                          |
-| `.avg(field)`                   | `Promise<number \| null>`     | Average of numeric field                                      |
-| `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                         |
-| `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                         |
-| `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                 |
-| `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                            |
-| `.stdDevPop(field)`             | `Promise<number \| null>`     | Population standard deviation (`n=0`→`null`, `n=1`→`0`)        |
-| `.stdDevSamp(field)`            | `Promise<number \| null>`     | Sample standard deviation (`n<2`→`null`)                       |
-| `.variancePop(field)`           | `Promise<number \| null>`     | Population variance (`n=0`→`null`, `n=1`→`0`)                  |
-| `.varianceSamp(field)`          | `Promise<number \| null>`     | Sample variance (`n<2`→`null`)                                 |
-| `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                     |
+| Method                          | Returns                       | Description                                                                     |
+| ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
+| `.sort(spec)`                   | `ResultChain`                 | Set sort order (`SortSpec` object or `SortSpecEntries` array)                   |
+| `.limit(n)`                     | `ResultChain`                 | Limit results                                                                   |
+| `.skip(n)`                      | `ResultChain`                 | Skip results                                                                    |
+| `.project(spec)`                | `ResultChain`                 | Field selection                                                                 |
+| `.toArray()`                    | `Promise<Document[]>`         | Execute and return documents                                                    |
+| `.cursor()`                     | `AsyncGenerator<Document>`    | Async iterator over the result set                                              |
+| `.count()`                      | `Promise<number>`             | Count matching documents                                                        |
+| `.sum(field)`                   | `Promise<number>`             | Sum of numeric field                                                            |
+| `.avg(field)`                   | `Promise<number \| null>`     | Average of numeric field                                                        |
+| `.min(field)`                   | `Promise<number \| null>`     | Minimum numeric value                                                           |
+| `.max(field)`                   | `Promise<number \| null>`     | Maximum numeric value                                                           |
+| `.percentile(field, p)`         | `Promise<number \| null>`     | `p`-th percentile (`p` a fraction in `[0, 1]`)                                  |
+| `.median(field)`                | `Promise<number \| null>`     | Median (≡ `percentile(field, 0.5)`)                                             |
+| `.stdDevPop(field)`             | `Promise<number \| null>`     | Population standard deviation (`n=0`→`null`, `n=1`→`0`)                         |
+| `.stdDevSamp(field)`            | `Promise<number \| null>`     | Sample standard deviation (`n<2`→`null`)                                        |
+| `.variancePop(field)`           | `Promise<number \| null>`     | Population variance (`n=0`→`null`, `n=1`→`0`)                                   |
+| `.varianceSamp(field)`          | `Promise<number \| null>`     | Sample variance (`n<2`→`null`)                                                  |
+| `.distinct(field)`              | `Promise<unknown[]>`          | Unique values for a field                                                       |
 | `.countDistinct(field)`         | `Promise<number>`             | Count of unique values for a field (`=== distinct(field).length`; `0` on empty) |
-| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key` |
+| `.groupBy(field, accumulators)` | `Promise<GroupResultEntry[]>` | Group by field(s) (`string \| string[]`); array form yields a composite `_key`  |
 
 ---
 

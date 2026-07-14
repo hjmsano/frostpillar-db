@@ -4,6 +4,7 @@ import type {
   CapacityPolicy,
   Datastore,
   DatastoreConfig,
+  DatastoreDriver,
   DatastoreErrorEvent,
   DatastoreErrorListener,
   DatastoreKeyDefinition,
@@ -19,6 +20,12 @@ export type CollectionDuplicateKeyPolicy = 'allow' | 'replace' | 'reject';
 export interface CollectionContext {
   readonly assertOpen: () => void;
   readonly datastore: Datastore;
+  /**
+   * True when the collection was created with a custom `key` definition. Its
+   * `normalize` may map distinct `_id` strings onto one storage key, so the
+   * key-index fast paths cannot stand in for `_id` identity (ADR-027).
+   */
+  readonly hasCustomKey: boolean;
   readonly skipInsertValidation: boolean;
   readonly payloadLimits?: PayloadLimitsConfig;
   readonly caches: DatabaseCaches;
@@ -50,13 +57,25 @@ export type {
   AutoCommitConfig,
   CapacityConfig,
   CapacityPolicy,
+  DatastoreDriver,
   DeleteRebalancePolicy,
   DatastoreKeyDefinition,
   IndexConfig,
   PayloadLimitsConfig,
 };
 
-export type DatabaseConfig = Omit<DatastoreConfig, 'duplicateKeys'> & {
+/**
+ * Creates a DatastoreDriver bound to a per-collection physical namespace.
+ * Invoked once per collection when its Datastore is created lazily by
+ * `Database.collection()`. See ADR-024.
+ */
+export type DatabaseDriverFactory = (collectionName: string) => DatastoreDriver;
+
+export type DatabaseConfig = Omit<
+  DatastoreConfig,
+  'duplicateKeys' | 'driver'
+> & {
+  driver?: DatastoreDriver | DatabaseDriverFactory;
   maxErrorListeners?: number | 'unlimited';
   maxMatchedDocuments?: number;
 };
